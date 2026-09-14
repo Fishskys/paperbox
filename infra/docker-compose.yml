@@ -1,0 +1,109 @@
+# paperbox 依赖的基础设施 (PostgreSQL / OpenSearch / MinIO / Embedding Server)
+# 说明: paperbox 应用本身不在这里运行, 本文件只负责它依赖的四个服务。
+# 启动: cd <repo>/infra && docker compose up -d --build
+#
+# 数据持久化: 默认落到本目录下的 ./data/<service>（相对本 compose 文件）。
+#   迁移到服务器时给下面四个变量设绝对路径即可，例如：
+#     POSTGRES_DATA_DIR=/srv/paperbox/data/postgres
+#     OPENSEARCH_DATA_DIR=/srv/paperbox/data/opensearch
+#     MINIO_DATA_DIR=/srv/paperbox/data/minio
+#     EMBEDDING_MODELS_DIR=/srv/paperbox/data/embedding-models
+#   （写在同目录的 .env 里；./data 已在 .gitignore/.dockerignore 中）
+# 端口绑定: 默认 0.0.0.0（随 PAPERBOX_BIND_IP 可改）。服务器上若只想让本机应用访问依赖，
+#   在 infra/.env 设 PAPERBOX_BIND_IP=127.0.0.1 即可（API 仍由应用自身的端口对外）。
+name: paperbox
+services:
+  postgres:
+    image: postgres:15.2-alpine
+    container_name: paperbox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: paperbox
+    ports:
+      - "${PAPERBOX_BIND_IP:-0.0.0.0}:5432:5432"
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paperbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0
+    container_name: paperbox-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=false
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - plugins.security.disabled=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      # 安全插件关闭时该密码不参与校验；仍做成变量以免敏感值进仓库。
+      # 若将来启用 plugins.security，务必在 .env 里设一个强口令覆盖它。
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:-ChangeMe-Initial-Admin-2026!}
+      - DISABLE_TELEMETRY=true
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    ports:
+      - "${PAPERBOX_BIND_IP:-0.0.0.0}:9200:9200"
+    volumes:
+      - ${OPENSEARCH_DATA_DIR:-./data/opensearch}:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
+    container_name: paperbox-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${PAPERBOX_BIND_IP:-0.0.0.0}:9000:9000"
+      - "${PAPERBOX_BIND_IP:-0.0.0.0}:9001:9001"
+    volumes:
+      - ${MINIO_DATA_DIR:-./data/minio}:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  embedding:
+    build: ./embedding
+    image: paperbox/embedding-server:0.1
+    container_name: paperbox-embedding
+    restart: unless-stopped
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      RERANK_MODEL: ${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
+      HF_ENDPOINT: "https://hf-mirror.com"
+      HF_HUB_DISABLE_XET: "1"
+      FASTEMBED_CACHE_PATH: /models
+      # 精排单独限批：激活内存随 (token × batch) 增长——多语言 jina-reranker-v2
+      # (1.1GB) 本机需要 4（实测 16 条候选峰值 5.1GB vs 4 条 2.4GB）；embedding
+      # 仍走 MAX_BATCH，两者共用一个旋钮会把精排撑爆或让正常导入吃 422。
+      RERANK_MAX_BATCH: ${RERANK_MAX_BATCH:-16}
+      # 本机 WSL 已提到 9GB（.wslconfig memory=9GB，2026-09-13）：8 线程 + 大 batch
+      # 仍会触发全局 OOM（曾实测 uvicorn 被 oom-killer 杀掉，RSS 5.7GB）。
+      # 4 线程 + embed batch 16 是安全点；精排用 RERANK_MAX_BATCH=4。
+      ORT_THREADS: ${ORT_THREADS:-4}
+      MAX_BATCH: ${MAX_BATCH:-16}
+      PORT: 8090
+    ports:
+      - "${PAPERBOX_BIND_IP:-0.0.0.0}:8090:8090"
+    volumes:
+      - ${EMBEDDING_MODELS_DIR:-./data/embedding-models}:/models
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8090/health', timeout=5).status==200 else sys.exit(1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 30

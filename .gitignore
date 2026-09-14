@@ -1,0 +1,32 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.hermes/
+# 文档：仓库只跟踪 README.md。以下都是**本地工作副本**，不进版本库（2026-09-14 主人要求）：
+#   plan.md（权威需求）· progress.md（进度与实测数字）· MVP-SPEC.md（接口摘要）
+#   AGENTS.md（环境契约与执行纪律）· docs/ · evals/README.md · evals/report-*.md
+AGENTS.md
+MVP-SPEC.md
+plan.md
+progress.md
+docs/
+evals/README.md
+evals/report-*.md
+# 评测/导入产物：体积大（3.2MB）且含本机绝对路径，可由 scripts/eval.py 复现。
+# 只跟踪**输入集**：evals/queries-spec.json · queries*.jsonl · labels.jsonl · arxiv_ids*.txt
+evals/report-*.json
+evals/ingest-report*.json
+codex_*.log
+# 运行日志统一放 logs/（codex/app/eval），根目录不要再出现 *.log —— 见 progress.md §6
+logs/
+# compose 的默认数据目录（./data/<service>：pg / opensearch / minio / embedding-models）
+data/
+embed-warmup.json
+*.tmp
+envpatch.txt
+t2.txt
+tmp_probe.txt
+*.log

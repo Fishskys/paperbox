@@ -1,0 +1,33 @@
+[project]
+name = "paperbox"
+version = "0.1.0"
+description = "Paper knowledge service: ingest, parse, chunk, embed, index and search papers over REST"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "sqlalchemy==2.0.52",
+    "alembic==1.19.2",
+    "psycopg[binary]==3.3.5",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "httpx==0.28.1",
+    "opensearch-py==3.2.0",
+    "python-multipart==0.0.32",
+    "pypdf==6.18.0",
+    "minio==7.2.20",
+    "fonttools>=4.60",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
+
+[tool.uv]
+# The repository is an application, not a library: nothing to build or publish.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,39 @@
+# Docker 构建上下文瘦身。
+# Dockerfile 只需要：pyproject.toml / uv.lock / alembic.ini / migrations/ / app/ / scripts/
+# 其余一律不进构建上下文（镜像更小、构建更快，也不会把密钥和测试数据带进层缓存）。
+.git
+.gitignore
+.dockerignore
+
+# Python 环境与缓存
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# 运行期数据与日志（默认数据目录 ./data/*，见 compose）
+data
+logs
+
+# 开发/评测/文档（部署不必要）
+tests
+evals
+docs
+infra
+.hermes
+plan.md
+*.md
+*.pdf
+*.tmp
+*.log
+codex_*.log
+
+# 密钥：只通过 compose 的 env_file 注入，绝不进镜像
+.env
+.env.*
+!.env.example

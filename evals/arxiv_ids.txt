@@ -1,0 +1,62 @@
+# arXiv id	主题	标题（由 scripts/build_arxiv_ids.py 生成，2026-09-12）
+# 实际导入使用第一列；脚本 scripts/bulk_ingest.py 按行读取，忽略 # 与空行
+2404.05260	low-power-sram	SRAM-PG: Power Delivery Network Benchmarks from SRAM Circuits
+1502.03057	low-power-sram	Circuit Level Modeling of Extra Combinational Delays in SRAM FPGAs Due to Transient Ionizi
+2606.09129	low-power-sram	OpenOpt: An Open-Source SRAM Optimizer Based on Equivalent Circuit Model
+1807.11311	low-power-sram	Delay Monitor Circuit for Sensitive Nodes in SRAM-Based FPGA
+1404.0615	low-power-sram	Nanowire Volatile RAM as an Alternative to SRAM
+2411.11022	low-power-sram	ASiM: Modeling and Analyzing Inference Accuracy of SRAM-Based Analog CiM Circuits
+0901.2980	low-power-sram	Nonvolatile SRAM architecture using MOSFET-based spin-transistors
+2508.09419	low-power-sram	Design and Simulation of 6T SRAM Array
+1203.1971	low-power-sram	Design and modelling of different SRAM's based on CNTFET 32nm technology
+2411.09546	low-power-sram	Architectural Exploration of Application-Specific Resonant SRAM Compute-in-Memory (rCiM)
+2507.06549	low-power-sram	Deep-Learning-Based Pre-Layout Parasitic Capacitance Prediction on SRAM Designs
+2309.03204	low-power-sram	A 9 Transistor SRAM Featuring Array-level XOR Parallelism with Secure Data Toggling Operat
+1604.04454	finfet-circuits	Enhanced Circuit Densities in Epitaxially Defined FinFETs (EDFinFETs) over FinFETs
+2108.00778	finfet-circuits	Analysing digital in-memory computing for advanced finFET node
+2007.14448	finfet-circuits	Negative Capacitance Enables FinFET Scaling Beyond 3nm Node
+2402.10858	finfet-circuits	Comparative study of the self-heating effect in the accumulation and inversion mode FinFET
+2402.15176	finfet-circuits	The Influence of Fin Shape on the Amplitude of Random Telegraph Noise in the Subthreshold 
+2009.04600	finfet-circuits	Development of a Predictive Process Design kit for15-nm FinFETs: FreePDK15
+2104.07891	finfet-circuits	Circuit-aware Device Modeling of Energy-efficient Monolayer WS$_2$ Trench-FinFETs
+1706.03315	finfet-circuits	Neutron-induced strike: Study of multiple node charge collection in 14nm FinFETs
+2202.13769	finfet-circuits	FinFET and Nanowire SRAM Radiation Hardness Studies using Ab initio-TCAD Simulation Framew
+1910.00098	finfet-circuits	Analysis and Design of a 32nm FinFET Dynamic Latch Comparator
+2402.00886	finfet-circuits	Time-Dependent Dielectric Breakdown on Subnanometer EOT nMOS FinFETs
+2306.03213	finfet-circuits	A Generalizable TCAD Framework for Silicon FinFET Spin Qubit Devices with Electrical Contr
+2503.10022	data-converters	A New Interpretation of the Time-Interleaved ADC Mismatch Problem: A Tracking-Based Hybrid
+2406.17798	data-converters	High-Resolution, Multi-Channel FPGA-Based Time-to-Digital Converter
+2508.08725	data-converters	Architecture and FPGA Implementation of Digital Time-to-Digital Converter for Sensing Appl
+1702.06713	data-converters	The ARAGORN front-end - An FPGA based implementation of a Time-to-Digital Converter
+1708.03692	data-converters	Development of a time-to-digital converter ASIC for the upgrade of the ATLAS Monitored Dri
+1207.2448	data-converters	Counting photons at low temperature with a streaming time-to-digital converter
+1204.0844	data-converters	Mitigating Timing Errors in Time-Interleaved ADCs: a signal conditioning approach
+1303.6840	data-converters	A 26 ps RMS time-to-digital converter core for Spartan-6 FPGAs
+2209.00466	data-converters	High-resolution time-to-digital converters (TDCs) with a bidirectional encoder
+2412.18642	data-converters	A 64-Channel Precision Time-to-Digital Converter with Average 4.77 ps RMS Implemented in a
+physics/0502062	data-converters	A 96-Channel FPGA-based Time-to-Digital Converter
+2107.10162	data-converters	A massively scalable Time-to-Digital Converter with a PLL-free calibration system in a com
+2604.21816	efficient-attention	Tool Attention Is All You Need: Dynamic Tool Gating and Lazy Schema Loading for Eliminatin
+1706.03762	efficient-attention	Attention Is All You Need
+2104.04692	efficient-attention	Not All Attention Is All You Need
+2501.05730	efficient-attention	Element-wise Attention Is All You Need
+2510.19861	efficient-attention	Some Attention is All You Need for Retrieval
+2501.06425	efficient-attention	Tensor Product Attention Is All You Need
+2010.13154	efficient-attention	Attention is All You Need in Speech Separation
+2502.07864	efficient-attention	TransMLA: Multi-Head Latent Attention Is All You Need
+2509.03683	efficient-attention	Attention is all you need to solve chiral superconductivity
+1910.14537	efficient-attention	Attention Is All You Need for Chinese Word Segmentation
+2501.09166	efficient-attention	Attention is All You Need Until You Need Retention
+2606.02332	efficient-attention	Forget Attention: Importance-Aware Attention Is All You Need
+2411.18583	rag-retrieval	Automated Literature Review Using NLP Techniques and LLM-Based Retrieval-Augmented Generat
+2502.00306	rag-retrieval	Riddle Me This! Stealthy Membership Inference for Retrieval-Augmented Generation
+2510.22344	rag-retrieval	FAIR-RAG: Faithful Adaptive Iterative Refinement for Retrieval-Augmented Generation
+2601.05264	rag-retrieval	Engineering the RAG Stack: A Comprehensive Review of the Architecture and Trust Frameworks
+2402.11035	rag-retrieval	Dense Passage Retrieval: Is it Retrieving?
+2503.16581	rag-retrieval	Investigating Retrieval-Augmented Generation in Quranic Studies: A Study of 13 Open-Source
+2108.06027	rag-retrieval	PAIR: Leveraging Passage-Centric Similarity Relation for Improving Dense Passage Retrieval
+2205.00970	rag-retrieval	LIDER: An Efficient High-dimensional Learned Index for Large-scale Dense Passage Retrieval
+2508.09534	rag-retrieval	Improving Dense Passage Retrieval with Multiple Positive Passages
+2507.01049	rag-retrieval	Cohort Retrieval using Dense Passage Retrieval
+2405.13008	rag-retrieval	Control Token with Dense Passage Retrieval
+2502.01113	rag-retrieval	GFM-RAG: Graph Foundation Model for Retrieval Augmented Generation

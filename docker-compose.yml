@@ -1,0 +1,40 @@
+# paperbox 应用自身的 compose（依赖服务不在这里，见 infra/docker-compose.yml）
+#
+# 两种接法，按部署环境选：
+#   A) 依赖跑在**同一台宿主**上（本机/dev 默认）：依赖用 127.0.0.1:PORT，
+#      容器内需要把 host.docker.internal 指回宿主 —— Linux 上 Docker 引擎不自带这个名字，
+#      所以下面显式写了 extra_hosts（Docker Desktop 上重复声明无副作用）。
+#   B) 依赖与应用在**同一个 docker 网络**里：把 .env 里的 *_URL 换成服务名即可
+#      （postgres:5432 / opensearch:9200 / minio:9000 / embedding:8090），
+#      此时 extra_hosts 用不上，把两侧 compose 加入同一 external 网络即可。
+#
+# 首次启动前先应用迁移（在仓库根执行一次，二选一）：
+#   Linux/macOS:  .venv/bin/python -m alembic upgrade head && .venv/bin/python scripts/create_index.py
+#   Windows dev:  .venv\Scripts\python.exe -m alembic upgrade head
+name: paperbox-app
+
+services:
+  api:
+    build: .
+    image: paperbox/api:0.1.0
+    container_name: paperbox-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Linux 必需（host-gateway 需要 Docker 20.10+）；Docker Desktop 自带该名字，声明了也无妨
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PAPER_API_HOST: 0.0.0.0
+      PAPER_API_PORT: "8077"
+    ports:
+      - "8077:8077"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0) if urllib.request.urlopen('http://localhost:8077/health', timeout=5).status==200 else sys.exit(1)"
+      interval: 20s
+      timeout: 10s
+      retries: 10
