@@ -135,7 +135,10 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
 - 同时最多跑 `INGEST_CONCURRENCY` 条流水线（**默认 2**）；多出来的上传停在 `stage=QUEUED` 等空位，
   先进先出。短时间连续上传 N 个文件 = 2 个在处理、N-2 个排队，不会一起压垮 embedding 服务。
 - `GET /api/jobs/queue` 看队列深度：`{"started":true,"concurrency":2,"running":2,"queued":2,
-  "running_job_ids":[...],"queued_job_ids":[...]}`。
+  "queued_high":0,"queued_low":2,"running_job_ids":[...],"queued_job_ids":[...]}`。
+  `queued_high`/`queued_low` 是等待中作业按优先级分类的计数（见 §3.3）。
+- **优先级**：1 个文件的上传是**交互**优先级（有人等着答案），多文件上传是**批**优先级；
+  交互作业插队到等待中的批作业之前，同类保持 FIFO。
 - 上传/URL/重试/重建索引四条路径共用这一条队列，所以重试和 reindex 也受同一个上限约束。
 - **进程重启不丢单**：启动时 `recover()` 把 `RECEIVED`/`QUEUED` 的作业重新入队；重启时正跑在中途的
   作业被标为 `FAILED` + `error_code=INTERRUPTED`（可 `POST /api/jobs/{id}/retry` 重跑），不会永远挂在那。
@@ -143,6 +146,68 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
   400 token 的 chunk）。并发 2 时两条流水线抢同一批 ORT 线程，聚合吞吐反而略低于单条
   （实测 320 chunks / 401s ≈ 0.8 chunk/s）。`INGEST_CONCURRENCY` 主要买的是"上传即返回 + 不让 CPU 空转"，
   不是线性加速；本机建议保持 2，内存紧张时降到 1。
+
+### 3.3 批量上传：三个入口（2026-09-19）
+
+要导入一个**文件夹**或一个**压缩包**时用下面三个入口；三者共用同一套状态机（`ingestion_jobs`）与同一条队列，
+**不新增表 / 迁移 / 阶段 / 错误码**。服务端是唯一的并发决策者，客户端**没有并发参数**。
+
+| 入口 | 适用场景 | 传输量 | 说明 |
+|------|----------|--------|------|
+| `POST /api/papers/ingest/files` | 文件在**客户端** | 全量上传 | multipart 字段 `files` 可重复（1..`INGEST_MAX_FILES_PER_REQUEST`）；逐 part 流式写 staging，**边写边算 sha256** |
+| `POST /api/papers/ingest/dir` | PDF 与 app **同机 / 同挂载卷** | **零传输** | 服务端自己遍历目录 + 预哈希判重，1000 文件≈秒级 |
+| `POST /api/papers/ingest/compressed` | 已打成**一个 zip** | 压缩包大小 | 服务端安全解包后逐个入库；**只支持 zip** |
+
+**判重**：内容命中库内已有论文 → 该文件记为 `duplicate`，**不产生新论文、不写 staging**
+（`/files` 已写入的立即删除）。`/files` 无法在传输前判重（重复字节仍会被传一遍后丢弃），
+同机场景请直接用 `/ingest/dir`（**有**传输前预哈希）。
+
+**限流与错误码语义**（客户端义务：收到 `429` 按 `Retry-After` 退避重试）：
+
+| 码 | 含义 | 触发条件 |
+|----|------|----------|
+| `429 + Retry-After: 2` | 服务端忙 | 在途 `/ingest/files` 请求 > `INGEST_UPLOAD_CONCURRENCY`；或**多文件**请求遇到处理积压 ≥ `INGEST_QUEUE_HIGH_WATERMARK`（单文件请求豁免——一个人等一个答案是 1 个作业的代价） |
+| `422` | 请求/文件不合法 | 文件数 > `INGEST_MAX_FILES_PER_REQUEST`；压缩包超条目数/解压总量/压缩比；单文件端点收到非 PDF 或超 `INGEST_MAX_FILE_MB` |
+| `413` | 请求体过大 | 单请求总字节 > `INGEST_MAX_REQUEST_MB`（此时**尚未**写 staging） |
+| `415` | 格式不支持 | 压缩包不是 zip（7z/rar/tar 明确不做，请重新打包为 .zip） |
+| `403` | 目录不在白名单 | `/ingest/dir` 的 root 在 realpath 归一化后落在 `INGEST_LOCAL_ROOTS` 之外（含 `..` 与符号链接/junction 逃逸） |
+| `404` | 目录端点未启用 | `INGEST_LOCAL_ROOTS` 为空（**默认关闭**） |
+
+**逐文件结果**：`/files` 与 `/compressed` 都返回逐文件/逐条目的结果数组
+（`accepted` / `duplicate` / `rejected` + `error_code`），**一个坏文件不会让整个请求失败**。
+
+**`/ingest/dir` 的安全边界**（本仓库唯一新增的文件系统访问面）：白名单 realpath 收敛、只读、
+**不跟随符号链接与 Windows 目录 junction**（`os.walk(followlinks=False)` 仍会进入 junction，已显式剪除）、
+跳过隐藏/临时文件；`dry_run=true` 只回清单与统计、不建作业。
+
+**`/ingest/compressed` 的安全边界**：zip-slip（绝对路径 / 盘符路径 / `..` / 符号链接 / 设备文件逐条拒收，
+且解出的目标必须落在解包目录内）、zip bomb 三重上限（条目数 / 解压总量 / 压缩比，均在建条目**之前**
+从中央目录判定）、嵌套压缩包不递归解（计入 `entries_ignored`）、`.pdf` 扩展名 + `%PDF` 魔数双校验。
+
+**配置**（仓库根 `.env`，全部应用侧；示例见 `.env.example`）：
+
+| 键 | 默认 | 含义 |
+|----|------|------|
+| `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途 `/ingest/files` 请求上限（超出 429） |
+| `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 队列深度阈值；达到后拒**多文件**请求（0 = 关闭该限制） |
+| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数上限 |
+| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节上限 |
+| `INGEST_LOCAL_ROOTS` | 空 | 目录导入白名单根（`;`/`,` 分隔；**空 = 端点关闭**） |
+| `INGEST_ARCHIVE_MAX_MB` | 500 | 压缩包本体上限 |
+| `INGEST_ARCHIVE_MAX_FILES` | 2000 | 解包条目数上限 |
+| `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限 |
+| `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（zip bomb） |
+| `INGEST_ARCHIVE_TMP_DIR` | 空 | 临时解包目录（空 = 系统 temp） |
+| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 临时解包目录保留上限 |
+| `INGEST_GC_INTERVAL_S` | 300 | 清理任务间隔（启动必跑一次） |
+
+**临时副本与清理**：staging 对象在 `STORED` 检查点删除（判重命中立即删除）；压缩包解出的本地文件
+（`cleanup_after`）在 `STORED` 后删除并剪掉空目录；`app/workers/housekeeping.py` 在启动时跑一次、
+之后每 `INGEST_GC_INTERVAL_S` 清理孤儿/终态作业的 staging、过期解包目录与残留压缩包——
+**只删文件、不改作业状态、幂等**。
+
+**客户端脚本**：`scripts/bulk_ingest_dir.py`（同机默认走 `/ingest/dir`；远端用 `--via-http` 走 `/ingest/files`，
+默认每请求 1 个文件 + 429 退避；`--resume` 读上次报告跳过已完成）。
 
 ## 4. 使用示例
 
@@ -180,6 +245,35 @@ curl -X POST http://127.0.0.1:8077/api/jobs/<job_id>/retry \
 # 上传本地 PDF
 curl -X POST http://127.0.0.1:8077/api/papers/ingest/file \
   -H "Authorization: Bearer $API_KEY" -F file=@paper.pdf
+
+# 批量上传多个文件（同一请求内 1..20 个，字段名可重复；1 个=交互优先级，≥2=批优先级）
+curl -X POST http://127.0.0.1:8077/api/papers/ingest/files \
+  -H "Authorization: Bearer $API_KEY" \
+  -F files=@a.pdf -F files=@b.pdf -F files=@c.pdf
+# -> 202 {"request_id":"...","accepted":3,"duplicate":0,"rejected":0,
+#         "results":[{"filename":"a.pdf","status":"accepted","job_id":"...","size_bytes":...}, ...]}
+# 429 -> {"detail":"server busy: upload concurrency: 2 request(s) already in flight; retry after 2s"}
+#        （读 Retry-After 头退避重试；多文件请求还会因积压被拒，单文件不会）
+
+# 服务端目录导入（PDF 与 app 同机/同挂载卷时用；零传输）
+# 需先设 INGEST_LOCAL_ROOTS=<白名单根>（分号分隔），否则端点返回 404；root 不在白名单 -> 403
+curl -X POST http://127.0.0.1:8077/api/papers/ingest/dir \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"root":"D:/papers","glob":"**/*.pdf","recursive":true,"limit":2000,"dry_run":true}'
+# -> 202 {"root":"...","matched":1024,"accepted":1000,"duplicate":20,"rejected":4,"skipped":0,"jobs":[...]}
+# dry_run=true 只回清单与统计、不建任何作业；去掉它即为真实导入
+
+# 压缩包导入（仅 zip；7z/rar/tar -> 415）
+curl -X POST http://127.0.0.1:8077/api/papers/ingest/compressed \
+  -H "Authorization: Bearer $API_KEY" -F file=@papers.zip
+# -> 202 {"request_id":"...","entries_total":8,"entries_ignored":2,"entries_rejected":2,
+#         "accepted":4,"duplicate":0,"rejected":0,"results":[...]}
+# entries_ignored = 非 PDF / 嵌套压缩包；entries_rejected = zip-slip 或超限条目
+
+# 客户端脚本（遍历文件夹 + 预筛 + 轮询 + JSON 报告 + --resume）
+uv run python scripts/bulk_ingest_dir.py --root D:/papers --dry-run
+uv run python scripts/bulk_ingest_dir.py --root D:/papers --limit 50
+uv run python scripts/bulk_ingest_dir.py --root ./local --via-http --resume
 
 # 混合检索（BM25 + 向量 + RRF 融合 + 论文级聚合）
 curl -X POST http://127.0.0.1:8077/api/search \
@@ -225,6 +319,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | `scripts/healthcheck.py` | 四个依赖 + 应用健康检查与文档数统计 |
 | `scripts/acceptance.py` | 端到端验收：跑 plan §38 的 8 条 MVP 标准（真实导入/检索/鉴权） |
 | `scripts/bulk_ingest.py` | 批量导入语料（`evals/arxiv_ids.txt`，逐条串行 + 轮询作业；`--resume` 跳过已入库，`--dry-run` 只清单） |
+| `scripts/bulk_ingest_dir.py` | 导入**一个文件夹**：默认走 `/ingest/dir`（同机零传输），`--via-http` 改走 `/ingest/files`（每请求 1 个文件 + 429 退避）；`--glob/--limit/--no-recursive` 筛文件，`--resume` 读上次报告跳过已完成，`--dry-run` 只清单 |
 | `scripts/eval.py` | 检索评测：对运行中的服务跑 `evals/queries.jsonl` + `labels.jsonl`，出 Hit Rate / Recall / MRR / NDCG 报告（JSON + Markdown） |
 | `scripts/eval.py` | 检索评测：对**运行中**的服务跑 Hit Rate@K / Recall@K / MRR / NDCG@K，按 mode × rerank 分组，产出 JSON + Markdown 报告（`--out` / `--markdown`） |
 
@@ -240,7 +335,7 @@ uv run python scripts\acceptance.py
 uv run pytest            # 或 uv run pytest tests -q
 ```
 
-当前测试（`uv run pytest` 共 **78** 个用例）：
+当前测试（`uv run pytest` 共 **495** 个用例，1 skipped：文件符号链接需开发者模式；以实际输出为准）：
 
 | 文件 | 覆盖 |
 |------|------|
@@ -254,6 +349,18 @@ uv run pytest            # 或 uv run pytest tests -q
 | `tests/test_job_retry.py` | 手动重试：原子 FAILED→RECEIVED 认领（防重复触发）、按 paper_id 路由 reindex/整体重跑、成功清错误字段、再失败落新归因 |
 | `tests/test_search_log.py` | 检索日志：结果压缩/截断、写入降级、行序列化 |
 | `tests/test_failure_classification.py` | 失败归因：11 个 error_code + 无文本层 PDF |
+| `tests/test_ingest_queue.py` | 队列并发上限、FIFO、重启恢复（`mark_queued`/`recover_jobs`） |
+| `tests/test_queue_priority.py` | 优先级：交互式插队、同类 FIFO、`queued_high/low`、`depth()` |
+| `tests/test_upload_admission.py` | 上传准入：在途上限（含多线程竞争）、水位谓词、快照 |
+| `tests/test_upload_stream.py` | 流式上传：边传边算 sha256、不整块读内存、失败包装 |
+| `tests/test_local_source.py` | `local_path` 源：直传 papers 键、缺文件/超限/非 PDF 归因、`cleanup_after` 删文件+剪目录、payload 校验 |
+| `tests/test_ingest_files.py` | `/ingest/files`：单/多文件、逐 part 失败隔离、判重不产新论文、422/413、429+Retry-After、水位放行单文件 |
+| `tests/test_ingest_file.py` | 旧 `/ingest/file` 契约回归（响应形状、422、429、判重、staging 键） |
+| `tests/test_ingest_dir.py` | `/ingest/dir`：白名单 403/404、`..` 与符号链接/junction 逃逸、dry_run、glob/limit、隐藏与临时文件跳过 |
+| `tests/test_ingest_compressed.py` | 压缩包：zip-slip（`..`/绝对/盘符/符号链接/设备条目）、zip bomb 三重上限、嵌套不递归、非 zip 415、临时目录清理 |
+| `tests/test_stored_cleanup.py` | STORED 后删 staging 与解包文件；STORED 之前失败保留 staging（可重试） |
+| `tests/test_upload_gc.py` | housekeeping：孤儿/终态 staging、过期解包目录、残留压缩包、幂等、不改作业行、周期任务生命周期 |
+| `tests/test_bulk_ingest_dir.py` | 客户端脚本纯函数：预筛、清单、glob、429 退避、`--resume`、报告计数 |
 
 **指纹与去重**：`papers.fingerprint` 按 `DOI > arXiv > 归一化标题+首作者+年 > sha256` 生成（`app/services/paper_service.py`）。导入时先以 `sha256` 占位，解析出元数据后**重算并落库**；若与另一篇存活论文撞指纹，则清理本次 chunks/索引/对象、软删本论文，作业以 `completed` + `duplicate=true` 指向既有论文结束（`app/workers/tasks.py`）。
 
@@ -272,19 +379,24 @@ app/
   db/         SQLAlchemy 2.x models（9 张表）+ session
   schemas/    Pydantic 请求/响应
   services/   paper / ingestion / embedding / metadata / object_storage / search
+              upload_admission（上传准入）· local_scan（目录导入）· archive_service（zip 解包与清理）
   parsing/    pdf 抽取、section 识别、分块
   search/     mappings / opensearch / ranking(RRF) / hybrid
-  workers/    BackgroundTasks 流水线与 reindex
+  workers/    tasks.py（流水线 + reindex）· queue.py（优先级队列）· housekeeping.py（GC）
 migrations/   Alembic
 infra/        依赖服务 docker-compose（PG/OpenSearch/MinIO/Embedding）
-scripts/      create_index / reindex / purge_deleted / healthcheck / acceptance / bulk_ingest / eval
+scripts/      create_index / reindex / purge_deleted / healthcheck / acceptance / bulk_ingest /
+              bulk_ingest_dir / eval
 tests/        单元测试
 ```
 
 ## 9. 边界（明确不做）
 
 前端（另仓库）、用户系统、多租户、内置 Agent、本地 LLM、OCR、多模态检索、Citation Graph、
-Redis/Celery。这些属于 plan 的 P1/P2，接口已为其预留（`rerank`、`paper_chunks_v2` 别名切换、
+Redis/Celery；**压缩包只支持 zip**（7z/rar/tar 不做：7z 无本机二进制、rar 需外部工具，
+上传即 415）；presign 直传（客户端直传 MinIO）不做，上传一律走 proxy；
+`/ingest/dir` 只在 PDF 与 app 同机/同挂载卷时可用（容器化部署需挂卷 + 配白名单）。
+这些属于 plan 的 P1/P2，接口已为其预留（`rerank`、`paper_chunks_v2` 别名切换、
 `ingestion_jobs` 状态机）。**注意**：两阶段精排、评测闭环、查询改写、作业重试、失败归因已在
 P1 落地（见 §5 与 `progress.md`），不在"不做"之列。
 
