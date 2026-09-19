@@ -14,8 +14,10 @@ The API never exposes MinIO URLs to Hermes: clients go through
 
 from __future__ import annotations
 
+import hashlib
 import io
 import mimetypes
+import re
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,6 +35,8 @@ logger = get_logger(__name__)
 
 ORIGINAL_FILENAME = "original.pdf"
 ORIGINAL_PREFIX = "papers"
+#: Prefix of the staging area used by ``POST /api/papers/ingest/files``.
+UPLOAD_PREFIX = "uploads"
 DEFAULT_PDF_CONTENT_TYPE = "application/pdf"
 
 _client_holder: list[Minio] = []
@@ -55,10 +59,50 @@ class StoredObject:
     size_bytes: int
     content_type: str
     etag: str | None = None
+    #: SHA256 of the uploaded bytes, when the caller streamed them through
+    #: :func:`upload_stream_hashed` (``None`` for the in-memory helpers).
+    sha256: str | None = None
 
     @property
     def path(self) -> str:
         return f"{self.bucket}/{self.object_key}"
+
+
+class _HashingReader:
+    """Binary stream wrapper that hashes every byte it hands out.
+
+    MinIO pulls the payload out of this object, so the digest is ready by the
+    time ``put_object`` returns -- no second pass, no full copy in memory. Only
+    ``read``/``readinto`` are intercepted; everything else (``seekable``,
+    ``tell``, ``close``, ...) is delegated to the wrapped stream.
+    """
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream = stream
+        self._digest = hashlib.sha256()
+        self.bytes_read = 0
+
+    def read(self, size: int | None = -1) -> bytes:
+        chunk = self._stream.read(-1 if size is None else size)
+        if chunk:
+            self._digest.update(chunk)
+            self.bytes_read += len(chunk)
+        return chunk
+
+    def readinto(self, buffer) -> int:
+        read = self._stream.readinto(buffer)
+        if read:
+            self._digest.update(memoryview(buffer)[:read])
+            self.bytes_read += read
+        return read
+
+    @property
+    def hexdigest(self) -> str:
+        """SHA256 of everything read so far (final once the stream is drained)."""
+        return self._digest.hexdigest()
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
 
 
 def build_object_key(paper_id: str, filename: str = ORIGINAL_FILENAME) -> str:
@@ -197,6 +241,90 @@ def upload_original_pdf(paper_id: str, data: bytes) -> StoredObject:
     )
 
 
+def safe_filename(filename: str | None, default: str = ORIGINAL_FILENAME) -> str:
+    """Reduce a client-supplied name to something safe inside an object key.
+
+    Only the basename survives (no ``/``, no ``\\``, no ``..``), control
+    characters and the characters that confuse shells or URLs are replaced by
+    ``_``, and the result is truncated. The extension is *not* forced here: the
+    caller decides the suffix it wants in the key.
+    """
+    raw = str(filename or "").strip().replace("\\", "/")
+    base = raw.rsplit("/", 1)[-1].strip()
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).lstrip(".")
+    cleaned = cleaned.replace("..", "_")
+    if not cleaned:
+        return default
+    return cleaned[:120]
+
+
+def build_staging_key(request_id: str, index: int, filename: str | None) -> str:
+    """Staging object key for one part of an upload request.
+
+    ``uploads/<request_id>/<index>-<safe-filename>.pdf`` -- the request id makes
+    the group traceable, the index keeps the parts ordered and distinct even
+    when the client repeats a filename.
+    """
+    stem = safe_filename(filename)
+    if not stem.lower().endswith(".pdf"):
+        stem = f"{stem}.pdf"
+    safe_request = re.sub(r"[^A-Za-z0-9_-]+", "_", str(request_id))[:64] or "request"
+    return f"{UPLOAD_PREFIX}/{safe_request}/{int(index)}-{stem}"
+
+
+def upload_stream_hashed(
+    object_key: str,
+    fileobj: BinaryIO,
+    *,
+    length: int,
+    content_type: str = DEFAULT_PDF_CONTENT_TYPE,
+    bucket: str | None = None,
+    metadata: dict[str, str] | None = None,
+) -> StoredObject:
+    """Upload from a stream and return the SHA256 of what was uploaded.
+
+    The payload is never held in memory: MinIO pulls it out of a
+    :class:`_HashingReader`, so the digest of a 100 MB PDF costs nothing extra.
+    Used by the staging path of ``POST /api/papers/ingest/files``, which must
+    dedupe by content but cannot read the body twice.
+    """
+    name = ensure_bucket(bucket)
+    reader = _HashingReader(fileobj)
+    try:
+        result = get_client().put_object(
+            name,
+            object_key,
+            reader,
+            length=length,
+            content_type=content_type,
+            metadata=metadata,
+        )
+    except S3Error as exc:  # pragma: no cover - depends on live MinIO
+        raise ObjectStorageError(
+            f"put_object failed for {name}/{object_key}: {exc.code}"
+        ) from exc
+    digest = reader.hexdigest
+    logger.info(
+        "uploaded hashed stream",
+        extra={
+            "extra_fields": {
+                "bucket": name,
+                "key": object_key,
+                "bytes": reader.bytes_read,
+                "sha256": digest[:16],
+            }
+        },
+    )
+    return StoredObject(
+        bucket=name,
+        object_key=object_key,
+        size_bytes=reader.bytes_read if reader.bytes_read else length,
+        content_type=content_type,
+        etag=getattr(result, "etag", None),
+        sha256=digest,
+    )
+
+
 def download_bytes(object_key: str, bucket: str | None = None) -> bytes:
     """Download an object fully into memory."""
     name = bucket or settings.minio_bucket
@@ -304,12 +432,14 @@ def parse_last_modified(value: datetime | None) -> datetime | None:
 __all__ = [
     "DEFAULT_PDF_CONTENT_TYPE",
     "ORIGINAL_FILENAME",
+    "UPLOAD_PREFIX",
     "ObjectNotFound",
     "ObjectStorageError",
     "StoredObject",
     "build_extracted_key",
     "build_figure_key",
     "build_object_key",
+    "build_staging_key",
     "delete_object",
     "delete_prefix",
     "download_bytes",
@@ -320,8 +450,10 @@ __all__ = [
     "object_exists",
     "open_stream",
     "presigned_get_url",
+    "safe_filename",
     "stat_object",
     "upload_bytes",
     "upload_file",
     "upload_original_pdf",
+    "upload_stream_hashed",
 ]
