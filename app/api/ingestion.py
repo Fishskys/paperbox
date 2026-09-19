@@ -36,6 +36,7 @@ from app.schemas.ingestion import (
     STATUS_DUPLICATE,
     STATUS_REJECTED,
     IngestAccepted,
+    IngestCompressedAccepted,
     IngestDirAccepted,
     IngestDirJob,
     IngestDirRequest,
@@ -44,7 +45,13 @@ from app.schemas.ingestion import (
     IngestRequest,
 )
 from app.services import ingestion_service as ingest
-from app.services import local_scan, object_storage, paper_service, upload_admission
+from app.services import (
+    archive_service,
+    local_scan,
+    object_storage,
+    paper_service,
+    upload_admission,
+)
 from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
@@ -554,6 +561,189 @@ async def ingest_file(
                 f"({settings.ingest_max_file_mb} MB limit)"
             ),
         )
+    )
+
+
+@router.post(
+    "/ingest/compressed",
+    response_model=IngestCompressedAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def ingest_compressed(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db),
+) -> IngestCompressedAccepted:
+    """Import every PDF inside an uploaded ZIP (2026-09-19, plan section 3.3).
+
+    The archive is streamed to a temporary file, unpacked into
+    ``<tmp>/paperbox-<request_id>/`` under the zip-slip and zip-bomb guards, and
+    each PDF becomes a ``local_path`` job with ``cleanup_after=true`` -- the
+    extracted file disappears once its bytes are in object storage, and the
+    directory with it. The uploaded archive itself is deleted before the response
+    is sent.
+
+    Only zip is accepted: the magic is checked first (``415`` for anything else,
+    7z included), then the archive ceilings (``422``). A failed request leaves no
+    temporary file behind.
+    """
+    admission = upload_admission.get_admission()
+    if admission.should_throttle_batch():
+        raise _busy("ingestion backlog", upload_admission.RETRY_AFTER_SECONDS)
+
+    head = await file.read(8)
+    await file.seek(0)
+    if not archive_service.looks_like_zip(head):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                "only zip archives are supported; 7z/rar/tar are not "
+                "(repack the folder as a .zip)"
+            ),
+        )
+
+    request_id = uuid.uuid4().hex[:16]
+    tmp_dir = settings.ingest_archive_tmp_dir or None
+    archive_file = archive_service.archive_path(request_id, tmp_dir)
+    dest = archive_service.extraction_root(request_id, tmp_dir)
+    limits = archive_service.ArchiveLimits.from_settings(settings)
+    archive_limit = settings.ingest_archive_max_mb * 1024 * 1024
+
+    try:
+        with admission.slot():
+            size = await run_in_threadpool(
+                archive_service.save_stream, file.file, archive_file, limit=archive_limit
+            )
+            try:
+                extracted = await run_in_threadpool(
+                    archive_service.extract_archive,
+                    archive_file,
+                    dest,
+                    limits=limits,
+                )
+            finally:
+                # The archive has served its purpose either way.
+                await run_in_threadpool(archive_service.remove_file, archive_file)
+    except upload_admission.AdmissionRejected as exc:
+        archive_service.cleanup_dir(dest)
+        raise _busy(exc.reason, exc.retry_after) from exc
+    except archive_service.ArchiveError as exc:
+        archive_service.cleanup_dir(dest)
+        archive_service.remove_file(archive_file)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - never leave temp files behind
+        archive_service.cleanup_dir(dest)
+        archive_service.remove_file(archive_file)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"could not unpack the archive: {exc}",
+        ) from exc
+
+    results: list[IngestFileResult] = []
+    accepted_ids: list[str] = []
+    for entry in extracted.entries:
+        outcome = await _register_extracted(
+            session, entry, request_id=request_id
+        )
+        results.append(outcome)
+        if outcome.status == STATUS_ACCEPTED and outcome.job_id:
+            accepted_ids.append(outcome.job_id)
+
+    # Every entry was refused, ignored or a duplicate: drop the empty skeleton
+    # instead of leaving it for the GC (a no-op while jobs still hold files).
+    archive_service.prune_tree(dest)
+
+    if accepted_ids:
+        for job_id in accepted_ids:
+            job_queue.submit(
+                session, job_id, job_queue.KIND_INGEST, job_queue.PRIORITY_BATCH
+            )
+
+    logger.info(
+        "ingest/compressed request finished",
+        extra={
+            "extra_fields": {
+                "request_id": request_id,
+                "bytes": size,
+                "accepted": len(accepted_ids),
+                "ignored": extracted.ignored,
+                "rejected_entries": extracted.rejected,
+            }
+        },
+    )
+    return IngestCompressedAccepted(
+        request_id=request_id,
+        archive=file.filename,
+        entries_total=extracted.total_entries,
+        entries_ignored=extracted.ignored,
+        entries_rejected=extracted.rejected,
+        accepted=sum(1 for item in results if item.status == STATUS_ACCEPTED),
+        duplicate=sum(1 for item in results if item.status == STATUS_DUPLICATE),
+        rejected=sum(1 for item in results if item.status == STATUS_REJECTED),
+        results=results,
+        message=(
+            f"{len(accepted_ids)} PDF(s) queued; extraction dir {dest.name} is "
+            "cleaned as the jobs finish"
+        ),
+    )
+
+
+async def _register_extracted(
+    session: Session, entry, *, request_id: str
+) -> IngestFileResult:
+    """Dedupe one unpacked PDF and turn it into a job (or drop it again)."""
+    filename = entry.path.name
+    if not archive_service.has_pdf_magic(entry.path):
+        archive_service.remove_file(entry.path)
+        archive_service.prune_tree(entry.path.parent)
+        return IngestFileResult(
+            filename=filename,
+            entry=entry.name,
+            status=STATUS_REJECTED,
+            error_code="UNSUPPORTED_TYPE",
+            error_message="entry is not a PDF (no %PDF header)",
+            size_bytes=entry.size_bytes,
+        )
+    try:
+        digest = await run_in_threadpool(
+            paper_service.compute_sha256_file, entry.path
+        )
+        existing = ingest.find_existing_paper(session, digest)
+        if existing is not None:
+            # Same content is already in the library: the extracted copy is
+            # deleted right away, and the extraction dir with it when it empties.
+            archive_service.remove_file(entry.path)
+            archive_service.prune_tree(entry.path.parent)
+            return IngestFileResult(
+                filename=filename,
+                entry=entry.name,
+                status=STATUS_DUPLICATE,
+                paper_id=existing.id,
+                size_bytes=entry.size_bytes,
+            )
+        job = ingest.create_job(
+            session,
+            source_type=ingest.SOURCE_TYPE_LOCAL,
+            filename=filename,
+            content_type=ingest.PDF_CONTENT_TYPE,
+            size_bytes=entry.size_bytes,
+            payload={"local_path": str(entry.path), "cleanup_after": True},
+        )
+        session.commit()
+    except Exception as exc:  # noqa: BLE001 - one entry must not fail the batch
+        session.rollback()
+        archive_service.remove_file(entry.path)
+        archive_service.prune_tree(entry.path.parent)
+        return _rejected(filename, exc, size_bytes=entry.size_bytes).model_copy(
+            update={"entry": entry.name}
+        )
+    return IngestFileResult(
+        filename=filename,
+        entry=entry.name,
+        status=STATUS_ACCEPTED,
+        job_id=job.id,
+        size_bytes=entry.size_bytes,
     )
 
 

@@ -56,12 +56,14 @@ class IngestFileResult(BaseModel):
 
     ``status`` is ``accepted`` (job created and queued), ``duplicate`` (the
     content is already in the library -- no new paper) or ``rejected`` (the file
-    never became a job; ``error_code`` says why).
+    never became a job; ``error_code`` says why). For an archive entry,
+    ``entry`` carries the name it had inside the archive.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     filename: str
+    entry: str | None = None
     status: str
     job_id: str | None = None
     paper_id: str | None = None
@@ -153,8 +155,33 @@ class IngestDirAccepted(BaseModel):
     message: str | None = None
 
 
+class IngestCompressedAccepted(BaseModel):
+    """Response body of ``POST /api/papers/ingest/compressed`` (2026-09-19).
+
+    ``entries_total`` counts every file in the archive; ``entries_ignored`` the
+    ones that were never candidates (non-PDF, nested archive) and
+    ``entries_rejected`` the ones refused for safety or size (zip-slip, symlink,
+    device file, oversized entry). ``accepted``/``duplicate``/``rejected`` count
+    the PDFs that were actually unpacked.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: str
+    archive: str | None = None
+    entries_total: int = 0
+    entries_ignored: int = 0
+    entries_rejected: int = 0
+    accepted: int = 0
+    duplicate: int = 0
+    rejected: int = 0
+    results: list[IngestFileResult] = Field(default_factory=list)
+    message: str | None = None
+
+
 __all__ = [
     "IngestAccepted",
+    "IngestCompressedAccepted",
     "IngestDirAccepted",
     "IngestDirJob",
     "IngestDirRequest",
