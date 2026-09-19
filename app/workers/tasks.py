@@ -231,9 +231,11 @@ def _process_job(session: Session, job) -> PayloadOutcome:
     if existing is not None:
         ingest.resolve_duplicate(session, existing, job)
         session.commit()
-        # An extracted archive file has served its purpose even when the content
-        # turned out to be a duplicate; leaving it behind would fill the disk.
-        _cleanup_source(source, payload)
+        # Both temporary copies have served their purpose even when the content
+        # turned out to be a duplicate: the staged upload and the extracted
+        # archive file. Leaving them behind would fill the disk with files no
+        # job will ever read.
+        _cleanup_source(source, payload, payload.get("object_key"))
         return PayloadOutcome(paper_id=existing.id, duplicate=True)
 
     paper_id = new_uuid()
