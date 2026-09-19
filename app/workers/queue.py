@@ -10,10 +10,12 @@ pending.
 This module keeps the "no Redis, no Celery" design (plan section 30) but adds:
 
 * **a concurrency ceiling** -- ``INGEST_CONCURRENCY`` (default 2) pipelines run
-  at once, everything else waits in an in-process FIFO queue in stage
-  ``QUEUED``;
+  at once, everything else waits in an in-process queue in stage ``QUEUED``;
+* **priority classes** -- one file is interactive, a folder dump is batch, and
+  an interactive job is picked up before any waiting batch job;
 * **visibility** -- :func:`stats` (exposed as ``GET /api/jobs/queue``) reports
-  the ceiling, the in-flight jobs and the waiting ones.
+  the ceiling, the in-flight jobs, the waiting ones and the split between the
+  two priority classes.
 
 The queue is deliberately in-process: the pipeline lives in the web process
 (``--workers 1``, see ``AGENTS.md`` section 1), so the queue is the single owner
@@ -50,6 +52,12 @@ KIND_INGEST = "ingest"
 KIND_REINDEX = "reindex"
 KIND_RETRY = "retry"
 
+#: Priority classes. A single-file upload is a human waiting on the answer; a
+#: multi-file upload is a folder dump that can afford to wait. Lower wins.
+PRIORITY_INTERACTIVE = 0
+PRIORITY_BATCH = 1
+DEFAULT_PRIORITY = PRIORITY_INTERACTIVE
+
 Runner = Callable[[str], None]
 
 DEFAULT_RUNNERS: dict[str, Runner] = {
@@ -68,6 +76,7 @@ class _Item:
 
     job_id: str
     kind: str
+    priority: int = DEFAULT_PRIORITY
 
 
 def kind_for_payload(payload: Mapping[str, object] | None) -> str:
@@ -77,7 +86,7 @@ def kind_for_payload(payload: Mapping[str, object] | None) -> str:
 
 
 class IngestQueue:
-    """FIFO job queue driven by ``concurrency`` worker coroutines."""
+    """Priority job queue driven by ``concurrency`` worker coroutines."""
 
     def __init__(
         self,
@@ -89,12 +98,14 @@ class IngestQueue:
         self._runners: dict[str, Runner] = dict(runners or DEFAULT_RUNNERS)
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._queue: asyncio.Queue[_Item] | None = None
+        self._queue: asyncio.PriorityQueue[tuple[int, int, _Item]] | None = None
         self._workers: list[asyncio.Task[None]] = []
-        #: job_id -> kind, waiting for a worker (insertion ordered).
-        self._pending: dict[str, str] = {}
+        #: job_id -> (kind, priority), waiting for a worker (insertion ordered).
+        self._pending: dict[str, tuple[str, int]] = {}
         #: job_id -> kind, currently being run by a worker.
         self._running: dict[str, str] = {}
+        #: Monotonic tie-breaker: ``(priority, seq)`` keeps FIFO inside a class.
+        self._seq = 0
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -112,9 +123,10 @@ class IngestQueue:
         loop = asyncio.get_running_loop()
         with self._lock:
             self._loop = loop
-            self._queue = asyncio.Queue()
+            self._queue = asyncio.PriorityQueue()
             self._pending.clear()
             self._running.clear()
+            self._seq = 0
             self._workers = [
                 loop.create_task(self._worker(index), name=f"paperbox-ingest-{index}")
                 for index in range(1, self.concurrency + 1)
@@ -150,8 +162,17 @@ class IngestQueue:
     # ------------------------------------------------------------------ #
     # admission
     # ------------------------------------------------------------------ #
-    def enqueue(self, job_id: str, kind: str = KIND_INGEST) -> bool:
+    def enqueue(
+        self,
+        job_id: str,
+        kind: str = KIND_INGEST,
+        priority: int = DEFAULT_PRIORITY,
+    ) -> bool:
         """Hand one job to the workers.
+
+        ``priority`` is :data:`PRIORITY_INTERACTIVE` (default) or
+        :data:`PRIORITY_BATCH`; lower values are picked up first, and jobs of the
+        same class keep FIFO order.
 
         Returns ``True`` when the job was queued. When the queue was never
         started (one-off scripts, unit tests) the pipeline runs inline instead
@@ -168,20 +189,22 @@ class IngestQueue:
             loop, queue = self._loop, self._queue
             live = bool(self._workers) and loop is not None and queue is not None
             if live:
-                self._pending[job_id] = kind
+                self._seq += 1
+                seq = self._seq
+                self._pending[job_id] = (kind, int(priority))
         if not live:
             logger.warning(
                 "ingest queue is not running; executing job %s inline", job_id
             )
             self._run_inline(job_id, kind)
             return False
-        item = _Item(job_id, kind)
+        entry = (int(priority), seq, _Item(job_id, kind, int(priority)))
         if self._on_loop(loop):
             # Callers inside the event loop (async endpoints, tests) hand the
             # item over synchronously, so ``join()`` cannot miss it.
-            self._hand_off(item)
+            self._hand_off(entry)
         else:
-            loop.call_soon_threadsafe(self._hand_off, item)
+            loop.call_soon_threadsafe(self._hand_off, entry)
         return True
 
     @staticmethod
@@ -197,6 +220,7 @@ class IngestQueue:
         session: Session,
         job_id: str,
         kind: str = KIND_INGEST,
+        priority: int = DEFAULT_PRIORITY,
     ):
         """Mark the job ``QUEUED`` (committed) and hand it to the workers.
 
@@ -207,7 +231,7 @@ class IngestQueue:
         if job is None:
             logger.warning("job %s is not queueable; stage already moved on", job_id)
             return None
-        self.enqueue(job_id, kind)
+        self.enqueue(job_id, kind, priority)
         return job
 
     # ------------------------------------------------------------------ #
@@ -237,17 +261,31 @@ class IngestQueue:
     # ------------------------------------------------------------------ #
     # introspection
     # ------------------------------------------------------------------ #
+    def depth(self) -> int:
+        """Number of jobs waiting for a free pipeline slot (safe from any thread).
+
+        This is the queue depth the upload admission uses as its high watermark;
+        running jobs are *not* counted, so the value is exactly the backlog the
+        server has not started on yet.
+        """
+        with self._lock:
+            return len(self._pending)
+
     def stats(self) -> dict[str, object]:
         """Queue depth snapshot (safe from any thread)."""
         with self._lock:
             pending = list(self._pending)
             running = list(self._running)
             started = bool(self._workers)
+            high = sum(1 for _, (_, priority) in self._pending.items() if priority <= 0)
+            low = sum(1 for _, (_, priority) in self._pending.items() if priority > 0)
         return {
             "started": started,
             "concurrency": self.concurrency,
             "running": len(running),
             "queued": len(pending),
+            "queued_high": high,
+            "queued_low": low,
             "running_job_ids": running,
             "queued_job_ids": pending,
         }
@@ -261,7 +299,7 @@ class IngestQueue:
         if queue is None:  # pragma: no cover - start() always creates it
             return
         while True:
-            item = await queue.get()
+            _, _, item = await queue.get()
             with self._lock:
                 self._pending.pop(item.job_id, None)
                 self._running[item.job_id] = item.kind
@@ -271,10 +309,11 @@ class IngestQueue:
                     logger.error("unknown job kind %s for %s", item.kind, item.job_id)
                 else:
                     logger.info(
-                        "queue worker %d picked up %s job %s",
+                        "queue worker %d picked up %s job %s (priority=%d)",
                         index,
                         item.kind,
                         item.job_id,
+                        item.priority,
                     )
                     await asyncio.to_thread(runner, item.job_id)
             except asyncio.CancelledError:
@@ -288,15 +327,15 @@ class IngestQueue:
                     self._running.pop(item.job_id, None)
                 queue.task_done()
 
-    def _hand_off(self, item: _Item) -> None:
+    def _hand_off(self, entry: tuple[int, int, _Item]) -> None:
         """Put an item on the loop-owned queue (runs on the event loop)."""
         queue = self._queue
         if queue is None:
             # stop() raced with the hand-off: leave the job QUEUED so the next
             # start() recovers it instead of running it outside the ceiling.
-            logger.warning("queue stopped before %s was handed off", item.job_id)
+            logger.warning("queue stopped before %s was handed off", entry[2].job_id)
             return
-        queue.put_nowait(item)
+        queue.put_nowait(entry)
 
     def _run_inline(self, job_id: str, kind: str) -> None:
         """Run a job on the calling thread (queue not started)."""
@@ -333,14 +372,26 @@ def recover() -> dict[str, int]:
     return get_queue().recover()
 
 
-def enqueue(job_id: str, kind: str = KIND_INGEST) -> bool:
+def enqueue(
+    job_id: str, kind: str = KIND_INGEST, priority: int = DEFAULT_PRIORITY
+) -> bool:
     """Queue one job id."""
-    return get_queue().enqueue(job_id, kind)
+    return get_queue().enqueue(job_id, kind, priority)
 
 
-def submit(session: Session, job_id: str, kind: str = KIND_INGEST):
+def submit(
+    session: Session,
+    job_id: str,
+    kind: str = KIND_INGEST,
+    priority: int = DEFAULT_PRIORITY,
+):
     """Mark a job ``QUEUED`` and queue it."""
-    return get_queue().submit(session, job_id, kind)
+    return get_queue().submit(session, job_id, kind, priority)
+
+
+def depth() -> int:
+    """Number of jobs waiting for a pipeline slot."""
+    return get_queue().depth()
 
 
 def stats() -> dict[str, object]:
@@ -354,12 +405,16 @@ async def join() -> None:
 
 
 __all__ = [
+    "DEFAULT_PRIORITY",
     "DEFAULT_RUNNERS",
     "IngestQueue",
     "KIND_INGEST",
     "KIND_REINDEX",
     "KIND_RETRY",
+    "PRIORITY_BATCH",
+    "PRIORITY_INTERACTIVE",
     "SOURCE_TYPE_REINDEX",
+    "depth",
     "enqueue",
     "get_queue",
     "join",

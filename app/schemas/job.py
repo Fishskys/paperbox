@@ -46,8 +46,12 @@ class QueueOut(BaseModel):
     concurrency: int = 1
     #: Pipelines executing right now.
     running: int = 0
-    #: Jobs waiting for a free slot, in FIFO order.
+    #: Jobs waiting for a free slot, in insertion order.
     queued: int = 0
+    #: Of ``queued``, how many are interactive (single-file uploads).
+    queued_high: int = 0
+    #: Of ``queued``, how many are batch (multi-file / folder uploads).
+    queued_low: int = 0
     running_job_ids: list[str] = Field(default_factory=list)
     queued_job_ids: list[str] = Field(default_factory=list)
 
