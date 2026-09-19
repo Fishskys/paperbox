@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -201,31 +202,27 @@ def _advance_stage(
 
 
 def _process_job(session: Session, job) -> PayloadOutcome:
-    """Store the original PDF, then parse/chunk/embed/index it."""
+    """Store the original PDF, then parse/chunk/embed/index it.
+
+    Three source types reach this function (``payload["source_type"]``):
+
+    * ``file`` -- bytes already staged in object storage by ``/ingest/files``;
+    * ``local_path`` -- the server reads a file off its own disk (``/ingest/dir``,
+      ``/ingest/compressed``); nothing is staged;
+    * ``url`` -- the worker downloads it.
+
+    Whatever the source, the payload is deduped by SHA256 *before* a paper row is
+    created, so a duplicate never produces a paper, a chunk or an index document.
+    """
     payload = job.payload or {}
-    source_type = str(payload.get("source_type", "url")).lower()
     source_url = payload.get("source")
 
     _advance_stage(
         session, job, ingest.STAGE_DOWNLOADING, ingest.PROGRESS_DOWNLOADING
     )
 
-    if source_type == "file":
-        object_key = payload.get("object_key")
-        if not object_key:
-            raise ingest.IngestionError("uploaded file payload is missing")
-        data = object_storage.download_bytes(object_key)
-        filename = payload.get("filename") or object_storage.ORIGINAL_FILENAME
-        content_type = payload.get("content_type") or ingest.PDF_CONTENT_TYPE
-    else:
-        url = ingest.ensure_valid_url(str(source_url or ""))
-        download = ingest.download_pdf(url)
-        data = download.data
-        filename = download.filename
-        content_type = download.content_type or ingest.PDF_CONTENT_TYPE
-
-    ingest.validate_pdf_payload(data, filename, content_type)
-    digest = paper_service.compute_sha256(data)
+    source = _load_source(payload)
+    digest = source.sha256
 
     existing = paper_service.find_by_sha256(session, digest)
     if existing is None:
@@ -234,10 +231,13 @@ def _process_job(session: Session, job) -> PayloadOutcome:
     if existing is not None:
         ingest.resolve_duplicate(session, existing, job)
         session.commit()
+        # An extracted archive file has served its purpose even when the content
+        # turned out to be a duplicate; leaving it behind would fill the disk.
+        _cleanup_source(source, payload)
         return PayloadOutcome(paper_id=existing.id, duplicate=True)
 
     paper_id = new_uuid()
-    title = ingest.title_for_ingest(filename, source_url)
+    title = ingest.title_for_ingest(source.filename, source_url)
     fingerprint = paper_service.build_fingerprint(sha256=digest)
     paper = paper_service.create_paper(
         session,
@@ -248,12 +248,7 @@ def _process_job(session: Session, job) -> PayloadOutcome:
         status=paper_service.STATUS_PENDING,
     )
 
-    stored = object_storage.upload_bytes(
-        object_storage.build_object_key(paper_id),
-        data,
-        content_type=ingest.PDF_CONTENT_TYPE,
-        metadata={"paper_id": paper_id, "kind": "original"},
-    )
+    stored = _store_source(paper_id, source)
     paper_service.register_original_file(
         session,
         paper,
@@ -262,7 +257,7 @@ def _process_job(session: Session, job) -> PayloadOutcome:
         url=source_url,
         sha256=digest,
         size_bytes=stored.size_bytes,
-        filename=filename,
+        filename=source.filename,
         content_type=ingest.PDF_CONTENT_TYPE,
     )
 
@@ -275,12 +270,165 @@ def _process_job(session: Session, job) -> PayloadOutcome:
     # later cannot lose the MinIO object + DB row.
     session.commit()
 
+    # The bytes are in object storage now: drop the staging object / the extracted
+    # local file so neither accumulates (plan section 5).
+    _cleanup_source(source, payload, payload.get("object_key"))
+
     try:
         _run_pipeline(session, job, paper, stored.object_key)
     except Exception:
         session.rollback()
         raise
     return PayloadOutcome(paper_id=paper_id)
+
+
+@dataclass(frozen=True)
+class _Source:
+    """Where the PDF bytes come from, plus the digest the dedupe needs.
+
+    Either ``data`` (bytes already in memory) or ``local_path`` (read straight
+    into object storage, never buffered) is set.
+    """
+
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    data: bytes | None = None
+    local_path: Path | None = None
+
+
+def _load_source(payload) -> _Source:
+    """Acquire the PDF for a job and hash it, without buffering local files."""
+    source_type = str(payload.get("source_type", "url")).lower()
+
+    if source_type == ingest.SOURCE_TYPE_LOCAL:
+        return _load_local_source(payload)
+
+    if source_type == "file":
+        object_key = payload.get("object_key")
+        if not object_key:
+            raise ingest.IngestionError("uploaded file payload is missing")
+        data = object_storage.download_bytes(object_key)
+        filename = payload.get("filename") or object_storage.ORIGINAL_FILENAME
+        content_type = payload.get("content_type") or ingest.PDF_CONTENT_TYPE
+        ingest.validate_pdf_payload(data, filename, content_type)
+        return _Source(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(data),
+            sha256=paper_service.compute_sha256(data),
+            data=data,
+        )
+
+    url = ingest.ensure_valid_url(str(payload.get("source") or ""))
+    download = ingest.download_pdf(url)
+    content_type = download.content_type or ingest.PDF_CONTENT_TYPE
+    ingest.validate_pdf_payload(download.data, download.filename, content_type)
+    return _Source(
+        filename=download.filename,
+        content_type=content_type,
+        size_bytes=len(download.data),
+        sha256=paper_service.compute_sha256(download.data),
+        data=download.data,
+    )
+
+
+def _load_local_source(payload) -> _Source:
+    """Validate a server-side path and hash it in one streaming pass."""
+    raw = str(payload.get("local_path") or "").strip()
+    if not raw:
+        raise ingest.LocalSourceUnavailable("job payload has no local_path")
+    path = Path(raw)
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        raise ingest.LocalSourceUnavailable(f"local file is gone: {path}") from exc
+    if not path.is_file():
+        raise ingest.LocalSourceUnavailable(f"local path is not a file: {path}")
+    if stat.st_size == 0:
+        raise ingest.UnsupportedSource("local file is empty")
+    ingest.ensure_size(stat.st_size)
+
+    filename = str(payload.get("filename") or path.name)
+    content_type = str(payload.get("content_type") or ingest.PDF_CONTENT_TYPE)
+    if not ingest.is_pdf(filename, content_type):
+        raise ingest.UnsupportedSource("only PDF files are supported")
+    return _Source(
+        filename=filename,
+        content_type=content_type,
+        size_bytes=stat.st_size,
+        sha256=paper_service.compute_sha256_file(path),
+        local_path=path,
+    )
+
+
+def _store_source(paper_id: str, source: _Source):
+    """Upload the payload to ``papers/<paper_id>/original.pdf``.
+
+    A ``local_path`` source is streamed off disk; everything else is already in
+    memory (and already validated), so it goes up in one call.
+    """
+    key = object_storage.build_object_key(paper_id)
+    metadata = {"paper_id": paper_id, "kind": "original"}
+    if source.local_path is not None:
+        with source.local_path.open("rb") as handle:
+            return object_storage.upload_file(
+                key,
+                handle,
+                length=source.size_bytes,
+                content_type=ingest.PDF_CONTENT_TYPE,
+                metadata=metadata,
+            )
+    return object_storage.upload_bytes(
+        key,
+        source.data or b"",
+        content_type=ingest.PDF_CONTENT_TYPE,
+        metadata=metadata,
+    )
+
+
+def _cleanup_source(
+    source: _Source, payload, staging_key: object | None = None
+) -> None:
+    """Remove the temporary copies of a payload that has been stored for good.
+
+    Two things may be left over after the STORED checkpoint: the staging object
+    of a multipart upload (``payload["object_key"]``) and the local file of a
+    ``local_path`` source that asked to be cleaned up (``cleanup_after``, set for
+    files extracted from an archive). Both deletions are best effort: the paper
+    is already stored and must not fail because a leftover could not be removed.
+    """
+    if staging_key:
+        try:
+            object_storage.delete_object(str(staging_key))
+        except Exception:  # noqa: BLE001 - the GC retries, the paper is safe
+            logger.warning("could not delete staging object %s", staging_key)
+    if source.local_path is None or not payload.get("cleanup_after"):
+        return
+    remove_local_file(source.local_path)
+
+
+def remove_local_file(path) -> bool:
+    """Delete a server-side file and prune its directory when it emptied.
+
+    Returns whether the file is gone. Used for archive extraction directories
+    (``cleanup_after``): the extraction dir must disappear once its last PDF has
+    been stored, or a 1000-file archive would leave 1000 empty directories
+    behind. Never raises -- the caller is a worker that must not fail here.
+    """
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("could not delete local file %s", path)
+        return False
+    parent = Path(path).parent
+    try:
+        if parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError:
+        logger.debug("could not prune directory %s", parent)
+    return True
 
 
 def _run_pipeline(
@@ -686,6 +834,7 @@ __all__ = [
     "STAGE_PARSING",
     "STAGE_STORED",
     "reindex_paper",
+    "remove_local_file",
     "run_ingestion_job",
     "run_reindex_job",
     "run_retry_job",

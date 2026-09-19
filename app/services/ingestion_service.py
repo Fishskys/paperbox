@@ -13,6 +13,7 @@ the ``paper_id`` of the paper that already holds the same content.
 from __future__ import annotations
 
 import io
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -36,6 +37,10 @@ STAGE_DOWNLOADING = "DOWNLOADING"
 STAGE_STORED = "STORED"
 STAGE_COMPLETED = "COMPLETED"
 STAGE_FAILED = "FAILED"
+
+#: ``payload["source_type"]`` of a PDF that already sits on this machine: the
+#: server reads it directly (``/ingest/dir`` and ``/ingest/compressed``).
+SOURCE_TYPE_LOCAL = "local_path"
 
 #: Stages a worker sets *while* a pipeline is running. A job found in one of
 #: these at startup was interrupted by a process restart (the pipeline lives in
@@ -73,6 +78,16 @@ class IngestionError(RuntimeError):
 
 class UnsupportedSource(IngestionError):
     """The payload is not an accepted PDF source (maps to HTTP 422)."""
+
+
+class LocalSourceUnavailable(IngestionError):
+    """A ``local_path`` job points at a file the server cannot read any more.
+
+    The file existed when the request was accepted (``/ingest/dir`` scanned it,
+    or an archive was unpacked) but is gone or unreadable by the time a pipeline
+    slot frees up. Classified as ``DOWNLOAD_FAILED``: the payload could not be
+    obtained, exactly like a dead URL.
+    """
 
 
 @dataclass(frozen=True)
@@ -161,6 +176,24 @@ def title_for_ingest(filename: str | None, source: str | None) -> str:
 # --------------------------------------------------------------------------- #
 # job helpers
 # --------------------------------------------------------------------------- #
+def validate_source_payload(payload: dict) -> None:
+    """Reject a job payload the pipeline could never process.
+
+    Only ``local_path`` needs checking at creation time: the path is supplied by
+    the client (via ``/ingest/dir``) or by the archive service, and a relative or
+    empty path would only blow up much later, inside a worker, where the caller
+    can no longer be told. Raises :class:`UnsupportedSource` (HTTP 422).
+    """
+    source_type = str(payload.get("source_type") or "").lower()
+    if source_type != SOURCE_TYPE_LOCAL:
+        return
+    raw = str(payload.get("local_path") or "").strip()
+    if not raw:
+        raise UnsupportedSource("local_path is required for a local_path source")
+    if not os.path.isabs(raw):
+        raise UnsupportedSource(f"local_path must be an absolute path: {raw}")
+
+
 def create_job(
     session: Session,
     *,
@@ -169,24 +202,37 @@ def create_job(
     filename: str | None = None,
     content_type: str | None = None,
     size_bytes: int | None = None,
+    payload: dict | None = None,
 ) -> IngestionJob:
-    """Insert a ``RECEIVED`` ingestion job (caller commits)."""
-    payload: dict = {"source_type": source_type}
+    """Insert a ``RECEIVED`` ingestion job (caller commits).
+
+    ``payload`` carries the source-type specific fields (``object_key`` for a
+    staged upload, ``local_path``/``cleanup_after`` for a server-side file); the
+    named arguments are the ones every source type shares and win on collision.
+    The merged payload is validated before the row is created.
+    """
+    fields: dict = {"source_type": source_type}
+    for key, value in dict(payload or {}).items():
+        if key == "source_type":
+            continue
+        if value is not None:
+            fields[key] = value
     if source:
-        payload["source"] = source
+        fields["source"] = source
     if filename:
-        payload["filename"] = filename
+        fields["filename"] = filename
     if content_type:
-        payload["content_type"] = content_type
+        fields["content_type"] = content_type
     if size_bytes is not None:
-        payload["size_bytes"] = size_bytes
+        fields["size_bytes"] = size_bytes
+    validate_source_payload(fields)
 
     job = IngestionJob(
         id=new_uuid(),
         kind=KIND_INGEST,
         stage=STAGE_RECEIVED,
         progress=PROGRESS_RECEIVED,
-        payload=payload,
+        payload=fields,
         started_at=datetime.now(timezone.utc),
     )
     session.add(job)
@@ -452,6 +498,8 @@ def read_upload(data: bytes, filename: str, content_type: str | None) -> UploadR
 
 __all__ = [
     "DownloadResult",
+    "LocalSourceUnavailable",
+    "SOURCE_TYPE_LOCAL",
     "IN_FLIGHT_STAGES",
     "IngestionError",
     "STAGE_COMPLETED",
@@ -484,4 +532,5 @@ __all__ = [
     "serialize_job",
     "title_for_ingest",
     "validate_pdf_payload",
+    "validate_source_payload",
 ]

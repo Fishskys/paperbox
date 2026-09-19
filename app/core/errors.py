@@ -28,7 +28,11 @@ from sqlalchemy.exc import IntegrityError
 from app.parsing.pdf import PdfParseError
 from app.search.opensearch import SearchIndexError
 from app.services.embedding_service import EmbeddingError
-from app.services.ingestion_service import IngestionError, UnsupportedSource
+from app.services.ingestion_service import (
+    IngestionError,
+    LocalSourceUnavailable,
+    UnsupportedSource,
+)
 from app.services.object_storage import ObjectStorageError
 
 #: Every code the API may return; kept as a tuple so tests can assert coverage.
@@ -124,6 +128,12 @@ def classify_failure(exc: BaseException) -> Failure:
             "DUPLICATE_FINGERPRINT",
             f"DUPLICATE_FINGERPRINT: another live paper already claims this fingerprint ({detail})",
         )
+
+    if isinstance(exc, LocalSourceUnavailable):
+        # A server-side path (``/ingest/dir``, archive extraction) disappeared
+        # before a pipeline slot freed up: the payload could not be obtained,
+        # which is the same failure a dead URL produces.
+        return Failure("DOWNLOAD_FAILED", f"DOWNLOAD_FAILED: {detail}")
 
     if _is_oversized(exc):
         return Failure("OVERSIZED", f"OVERSIZED: {detail}")

@@ -82,6 +82,19 @@ def compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def compute_sha256_file(path, *, chunk_size: int = 1024 * 1024) -> str:
+    """SHA256 of a file on disk, read in bounded pieces.
+
+    Used by the ``local_path`` source (server-side directory import and archive
+    extraction): a 100 MB PDF must be hashed without ever being held in memory.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def build_fingerprint(
     *,
     doi: str | None = None,
@@ -409,6 +422,7 @@ __all__ = [
     "STATUS_PROCESSING",
     "build_fingerprint",
     "compute_sha256",
+    "compute_sha256_file",
     "create_paper",
     "find_by_fingerprint",
     "find_by_sha256",
