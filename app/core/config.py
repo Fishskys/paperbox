@@ -9,6 +9,8 @@ allowed in WSL's ufw (see ``AGENTS.md`` §3).
 
 from __future__ import annotations
 
+import os
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -121,6 +123,50 @@ class Settings(BaseSettings):
     #: threads and bulk-indexes into the same single-node OpenSearch.
     ingest_concurrency: int = Field(default=2, alias="INGEST_CONCURRENCY")
 
+    # --- upload admission (2026-09-19, plan section 4) ---
+    #: How many ``/ingest/files`` requests may be *in flight* at once. The excess
+    #: is answered with ``429 + Retry-After`` instead of being buffered: the
+    #: client has no concurrency knob, the server owns the decision.
+    ingest_upload_concurrency: int = Field(default=2, alias="INGEST_UPLOAD_CONCURRENCY")
+    #: Processing-backlog depth at which *multi-file* uploads are refused (429).
+    #: Single-file uploads are exempt -- one human waiting is one job. 0 disables
+    #: backlog throttling entirely.
+    ingest_queue_high_watermark: int = Field(
+        default=50, alias="INGEST_QUEUE_HIGH_WATERMARK"
+    )
+    #: Files per ``/ingest/files`` request (``422`` when exceeded).
+    ingest_max_files_per_request: int = Field(
+        default=20, alias="INGEST_MAX_FILES_PER_REQUEST"
+    )
+    #: Total bytes per ``/ingest/files`` request (``413`` when exceeded).
+    ingest_max_request_mb: int = Field(default=200, alias="INGEST_MAX_REQUEST_MB")
+
+    # --- server-side directory import (2026-09-19, plan section 3.2) ---
+    #: Whitelist of roots ``/ingest/dir`` may read, separated by ``;`` or ``,``.
+    #: **Empty means the endpoint is disabled** (404): reading the server's own
+    #: filesystem is a new attack surface, so it is opt-in per deployment.
+    ingest_local_roots: str = Field(default="", alias="INGEST_LOCAL_ROOTS")
+
+    # --- archive import (2026-09-19, plan section 3.3) ---
+    #: Size ceiling for the uploaded archive itself.
+    ingest_archive_max_mb: int = Field(default=500, alias="INGEST_ARCHIVE_MAX_MB")
+    #: Ceiling on extracted entries (zip bomb guard #1).
+    ingest_archive_max_files: int = Field(default=2000, alias="INGEST_ARCHIVE_MAX_FILES")
+    #: Ceiling on the total uncompressed size (zip bomb guard #2).
+    ingest_archive_max_uncompressed_mb: int = Field(
+        default=5000, alias="INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB"
+    )
+    #: Ceiling on the uncompressed/compressed ratio (zip bomb guard #3).
+    ingest_archive_max_ratio: int = Field(default=100, alias="INGEST_ARCHIVE_MAX_RATIO")
+    #: Where archives are extracted (empty = the system temp directory).
+    ingest_archive_tmp_dir: str = Field(default="", alias="INGEST_ARCHIVE_TMP_DIR")
+    #: How long an extraction directory may survive after its jobs finished.
+    ingest_archive_ttl_hours: int = Field(default=24, alias="INGEST_ARCHIVE_TTL_HOURS")
+
+    # --- housekeeping (2026-09-19, plan section 5) ---
+    #: Interval of the staging/extraction GC; it also runs once at startup.
+    ingest_gc_interval_s: int = Field(default=300, alias="INGEST_GC_INTERVAL_S")
+
     @field_validator("log_level")
     @classmethod
     def _normalize_log_level(cls, value: str) -> str:
@@ -179,6 +225,44 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """DSN used by SQLAlchemy / Alembic (psycopg 3 driver kept as-is)."""
         return self.postgres_dsn
+
+    @property
+    def local_roots(self) -> list[Path]:
+        """Whitelisted roots for ``/ingest/dir`` (empty list = endpoint off)."""
+        return parse_local_roots(self.ingest_local_roots)
+
+    @property
+    def archive_tmp_dir(self) -> Path:
+        """Directory the archive service extracts into (system temp by default)."""
+        raw = (self.ingest_archive_tmp_dir or "").strip()
+        return Path(raw) if raw else Path(tempfile.gettempdir())
+
+
+def parse_local_roots(value: str | None) -> list[Path]:
+    """Split ``INGEST_LOCAL_ROOTS`` into normalized absolute paths.
+
+    Accepts ``;``, ``,`` and ``os.pathsep`` as separators so the same value works
+    on Windows and Linux. Every entry is ``realpath``-ed (symlinks and ``..``
+    resolved) because the containment check in ``app.services.local_scan``
+    compares real paths -- a whitelist entry that is itself a symlink would
+    otherwise never match.
+    """
+    text = str(value or "")
+    for separator in (";", ",", os.pathsep):
+        text = text.replace(separator, "\n")
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        entry = line.strip().strip('"').strip("'")
+        if not entry:
+            continue
+        resolved = os.path.realpath(os.path.expanduser(entry))
+        key = os.path.normcase(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(Path(resolved))
+    return roots
 
 
 @lru_cache(maxsize=1)
