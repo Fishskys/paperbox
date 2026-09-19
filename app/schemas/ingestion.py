@@ -109,11 +109,18 @@ class IngestDirRequest(BaseModel):
 
 
 class IngestDirJob(BaseModel):
-    """One file the directory scan turned into a job (or would have)."""
+    """One file the directory scan turned into a job (or would have).
+
+    ``filename`` is the bare file name (same shape as the upload results),
+    ``relative`` its path inside the scanned root and ``path`` the absolute path
+    the job will read -- two files with the same name in different folders are
+    told apart by the latter two.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     filename: str
+    relative: str | None = None
     path: str | None = None
     status: str
     job_id: str | None = None

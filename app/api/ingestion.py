@@ -36,12 +36,15 @@ from app.schemas.ingestion import (
     STATUS_DUPLICATE,
     STATUS_REJECTED,
     IngestAccepted,
+    IngestDirAccepted,
+    IngestDirJob,
+    IngestDirRequest,
     IngestFileResult,
     IngestFilesAccepted,
     IngestRequest,
 )
 from app.services import ingestion_service as ingest
-from app.services import object_storage, paper_service, upload_admission
+from app.services import local_scan, object_storage, paper_service, upload_admission
 from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
@@ -339,6 +342,163 @@ async def ingest_files(
             f"{settings.ingest_max_files_per_request} files / "
             f"{settings.ingest_max_request_mb} MB per request, "
             f"{settings.ingest_max_file_mb} MB per file"
+        ),
+    )
+
+
+@router.post(
+    "/ingest/dir",
+    response_model=IngestDirAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def ingest_dir(
+    payload: IngestDirRequest,
+    session: Session = Depends(get_db),
+) -> IngestDirAccepted:
+    """Import every PDF under a server-side directory (2026-09-19, plan 3.2).
+
+    Nothing is transferred: the server walks ``root``, hashes each candidate and
+    queues the new ones as ``local_path`` jobs. The endpoint only exists when
+    ``INGEST_LOCAL_ROOTS`` is non-empty (``404`` otherwise) and refuses any root
+    that does not resolve inside the whitelist (``403``) -- including ``..``
+    escapes and symlinked directories.
+
+    ``dry_run=true`` answers the same report without creating a single job, so a
+    caller can see how much of a folder would be imported and how much skipped
+    before committing to it.
+    """
+    try:
+        root = local_scan.ensure_allowed(payload.root, settings.local_roots)
+    except local_scan.ScanUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except local_scan.RootNotAllowed as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except local_scan.RootMissing as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    result = local_scan.scan(
+        root,
+        glob=payload.glob,
+        recursive=payload.recursive,
+        limit=payload.limit,
+        max_bytes=ingest.max_file_bytes(),
+    )
+
+    entries: list[IngestDirJob] = []
+    accepted_ids: list[str] = []
+    for item in result.files:
+        if item.reason is not None:
+            entries.append(
+                IngestDirJob(
+                    filename=item.path.name,
+                    relative=item.relative,
+                    path=str(item.path),
+                    status=STATUS_REJECTED,
+                    error_code=item.error_code or "INTERNAL",
+                    error_message=item.reason,
+                    size_bytes=item.size_bytes,
+                )
+            )
+            continue
+
+        existing = ingest.find_existing_paper(session, item.sha256 or "")
+        if existing is not None:
+            entries.append(
+                IngestDirJob(
+                    filename=item.path.name,
+                    relative=item.relative,
+                    path=str(item.path),
+                    status=STATUS_DUPLICATE,
+                    paper_id=existing.id,
+                    size_bytes=item.size_bytes,
+                )
+            )
+            continue
+
+        if payload.dry_run:
+            entries.append(
+                IngestDirJob(
+                    filename=item.path.name,
+                    relative=item.relative,
+                    path=str(item.path),
+                    status=STATUS_ACCEPTED,
+                    size_bytes=item.size_bytes,
+                )
+            )
+            continue
+
+        try:
+            job = ingest.create_job(
+                session,
+                source_type=ingest.SOURCE_TYPE_LOCAL,
+                filename=item.path.name,
+                content_type=ingest.PDF_CONTENT_TYPE,
+                size_bytes=item.size_bytes,
+                payload={"local_path": str(item.path)},
+            )
+            session.commit()
+        except Exception as exc:  # noqa: BLE001 - one bad file must not stop the rest
+            session.rollback()
+            failure = classify_failure(exc)
+            entries.append(
+                IngestDirJob(
+                    filename=item.path.name,
+                    relative=item.relative,
+                    path=str(item.path),
+                    status=STATUS_REJECTED,
+                    error_code=failure.code,
+                    error_message=failure.message,
+                    size_bytes=item.size_bytes,
+                )
+            )
+            continue
+        accepted_ids.append(job.id)
+        entries.append(
+            IngestDirJob(
+                filename=item.path.name,
+                relative=item.relative,
+                path=str(item.path),
+                status=STATUS_ACCEPTED,
+                job_id=job.id,
+                size_bytes=item.size_bytes,
+            )
+        )
+
+    if accepted_ids and not payload.dry_run:
+        priority = (
+            job_queue.PRIORITY_BATCH
+            if len(accepted_ids) > 1
+            else job_queue.PRIORITY_INTERACTIVE
+        )
+        for job_id in accepted_ids:
+            job_queue.submit(session, job_id, job_queue.KIND_INGEST, priority)
+
+    logger.info(
+        "ingest/dir request finished",
+        extra={
+            "extra_fields": {
+                "root": str(root),
+                "matched": result.matched,
+                "accepted": len(accepted_ids),
+                "dry_run": payload.dry_run,
+            }
+        },
+    )
+    return IngestDirAccepted(
+        root=str(root),
+        glob=payload.glob,
+        recursive=payload.recursive,
+        dry_run=payload.dry_run,
+        matched=result.matched,
+        accepted=sum(1 for entry in entries if entry.status == STATUS_ACCEPTED),
+        duplicate=sum(1 for entry in entries if entry.status == STATUS_DUPLICATE),
+        rejected=sum(1 for entry in entries if entry.status == STATUS_REJECTED),
+        skipped=result.skipped,
+        jobs=entries,
+        message=(
+            "dry run: nothing was queued"
+            if payload.dry_run
+            else f"{len(accepted_ids)} file(s) queued for ingestion"
         ),
     )
 
