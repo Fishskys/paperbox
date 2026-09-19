@@ -30,6 +30,7 @@ from app.core.logging import (
     configure_logging,
     get_logger,
 )
+from app.workers import housekeeping
 from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
@@ -44,7 +45,11 @@ async def lifespan(_: FastAPI):
     # started, fail the ones that were mid-pipeline with INTERRUPTED).
     job_queue.start()
     job_queue.recover()
+    # Housekeeping runs once right after recovery (it cleans the debris of the
+    # process that died) and then on its own interval.
+    housekeeping.start()
     yield
+    await housekeeping.stop()
     await job_queue.stop()
     logger.info("paperbox stopping")
 
