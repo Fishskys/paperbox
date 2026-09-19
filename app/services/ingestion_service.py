@@ -194,6 +194,22 @@ def validate_source_payload(payload: dict) -> None:
         raise UnsupportedSource(f"local_path must be an absolute path: {raw}")
 
 
+def find_existing_paper(session: Session, sha256: str) -> Paper | None:
+    """A live paper whose content matches ``sha256``, if there is one.
+
+    Two lookups, in the order the pre-parse information allows: the file hash
+    recorded on ``paper_files`` (exact content match), then the ``sha256:``
+    fingerprint (what an ingest stores before parsing reveals a DOI or arXiv
+    id). Used by the upload endpoints to drop a duplicate *before* creating a
+    job, and by the pipeline as its final arbiter.
+    """
+    found = paper_service.find_by_sha256(session, sha256)
+    if found is not None:
+        return found
+    fingerprint = paper_service.build_fingerprint(sha256=sha256)
+    return paper_service.find_by_fingerprint(session, fingerprint)
+
+
 def create_job(
     session: Session,
     *,
