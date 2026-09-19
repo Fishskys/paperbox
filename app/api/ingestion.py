@@ -1,8 +1,15 @@
-"""Paper ingestion endpoints (MVP-SPEC section 2)."""
+"""Paper ingestion endpoints (MVP-SPEC section 2).
+
+Both endpoints create the job row, park it in ``QUEUED`` and hand it to the
+in-process ingestion queue (``app.workers.queue``): at most
+``INGEST_CONCURRENCY`` pipelines run at once, everything else waits in FIFO
+order. The caller polls ``GET /api/jobs/{job_id}`` (or watches
+``GET /api/jobs/queue``) for progress.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -12,7 +19,7 @@ from app.db.session import get_db
 from app.schemas.ingestion import IngestAccepted, IngestRequest
 from app.services import ingestion_service as ingest
 from app.services import object_storage
-from app.workers import tasks
+from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
 
@@ -28,10 +35,9 @@ UPLOAD_PREFIX = "uploads"
 @router.post("/ingest", response_model=IngestAccepted, status_code=status.HTTP_202_ACCEPTED)
 def ingest_url(
     payload: IngestRequest,
-    background: BackgroundTasks,
     session: Session = Depends(get_db),
 ) -> IngestAccepted:
-    """Queue a URL ingestion: create the job, then process it in the background."""
+    """Queue a URL ingestion (job starts as soon as a pipeline slot is free)."""
     try:
         source = ingest.ensure_valid_url(payload.source)
     except ingest.UnsupportedSource as exc:
@@ -41,8 +47,8 @@ def ingest_url(
 
     job = ingest.create_job(session, source_type="url", source=source)
     session.commit()
-    background.add_task(tasks.run_ingestion_job, job.id)
-    return IngestAccepted.model_validate(ingest.accepted_payload(job))
+    queued = job_queue.submit(session, job.id, job_queue.KIND_INGEST) or job
+    return IngestAccepted.model_validate(ingest.accepted_payload(queued))
 
 
 @router.post(
@@ -51,11 +57,15 @@ def ingest_url(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def ingest_file(
-    background: BackgroundTasks,
     file: UploadFile = File(...),
     session: Session = Depends(get_db),
 ) -> IngestAccepted:
-    """Queue a multipart PDF upload; the worker stores it and dedupes by SHA256."""
+    """Queue a multipart PDF upload; the worker stores it and dedupes by SHA256.
+
+    The bytes are staged into MinIO here (so the queue only holds a job id), then
+    the job waits for a pipeline slot -- uploads beyond ``INGEST_CONCURRENCY``
+    report stage ``QUEUED`` until one frees up.
+    """
     raw = await file.read()
     filename = file.filename or object_storage.ORIGINAL_FILENAME
     content_type = file.content_type
@@ -90,10 +100,10 @@ async def ingest_file(
     job.payload = payload
     session.commit()
 
-    background.add_task(tasks.run_ingestion_job, job.id)
+    queued = job_queue.submit(session, job.id, job_queue.KIND_INGEST) or job
     return IngestAccepted.model_validate(
         ingest.accepted_payload(
-            job,
+            queued,
             message=f"staged upload for ingestion ({settings.ingest_max_file_mb} MB limit)",
         )
     )

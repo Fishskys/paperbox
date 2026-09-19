@@ -30,6 +30,7 @@ from app.core.logging import (
     configure_logging,
     get_logger,
 )
+from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
 
@@ -38,7 +39,13 @@ logger = get_logger(__name__)
 async def lifespan(_: FastAPI):
     configure_logging(settings.log_level)
     logger.info("paperbox %s starting (env=%s)", __version__, settings.app_env)
+    # The ingestion queue owns every pipeline run: start the workers, then
+    # reconcile whatever a previous process left behind (re-queue jobs that never
+    # started, fail the ones that were mid-pipeline with INTERRUPTED).
+    job_queue.start()
+    job_queue.recover()
     yield
+    await job_queue.stop()
     logger.info("paperbox stopping")
 
 

@@ -23,6 +23,7 @@ PostgreSQL  OpenSearch     MinIO     Embedding Server
 | 依赖健康 | `GET /health` |
 | 论文列表（分页 / 按状态 / 标题搜索） | `GET /api/papers` |
 | 任务列表（最近 N 条） | `GET /api/jobs` |
+| 导入队列深度（并发上限 / 在跑 / 排队） | `GET /api/jobs/queue` |
 | 任务重试（手动触发，plan §22） | `POST /api/jobs/{job_id}/retry` |
 | URL 导入 / 文件上传导入 | `POST /api/papers/ingest`、`POST /api/papers/ingest/file` |
 | 任务状态 | `GET /api/jobs/{job_id}` |
@@ -121,10 +122,27 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
 `ORT_THREADS=4`、`MAX_BATCH=16`（/embed 限批）、`RERANK_MAX_BATCH=4`（多语言精排 jina 的激活内存
 随 `token × 候选数` 增长，16 条候选峰值 5.1GB）、`OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g`。
 
-**注意单 worker**：导入流水线走 FastAPI `BackgroundTasks`（进程内），因此应用要保持
-`--workers 1`；要横向扩 worker/多副本，得先把导入改成外部队列（当前不做）。
+**注意单 worker**：导入流水线跑在进程内（由 `app/workers/queue.py` 的队列调度），因此应用要保持
+`--workers 1`；要横向扩 worker/多副本，得先把导入改成外部队列（当前不做）。队列本身只控制**并发度**，
+不改变这一点。详见 §3.2。
 
 常用的 uv 命令：`uv sync`（对齐环境）、`uv add <pkg>`（加依赖）、`uv lock --upgrade`（升级并重锁）、`uv run <cmd>`（在项目环境里执行）。
+
+### 3.2 导入队列与并发（`INGEST_CONCURRENCY`）
+
+导入任务不直接开跑，而是先进**进程内 FIFO 队列**（`app/workers/queue.py`，无 Redis/Celery）：
+
+- 同时最多跑 `INGEST_CONCURRENCY` 条流水线（**默认 2**）；多出来的上传停在 `stage=QUEUED` 等空位，
+  先进先出。短时间连续上传 N 个文件 = 2 个在处理、N-2 个排队，不会一起压垮 embedding 服务。
+- `GET /api/jobs/queue` 看队列深度：`{"started":true,"concurrency":2,"running":2,"queued":2,
+  "running_job_ids":[...],"queued_job_ids":[...]}`。
+- 上传/URL/重试/重建索引四条路径共用这一条队列，所以重试和 reindex 也受同一个上限约束。
+- **进程重启不丢单**：启动时 `recover()` 把 `RECEIVED`/`QUEUED` 的作业重新入队；重启时正跑在中途的
+  作业被标为 `FAILED` + `error_code=INTERRUPTED`（可 `POST /api/jobs/{id}/retry` 重跑），不会永远挂在那。
+- **调大之前先想清楚**：本机实测 embedding 是瓶颈（e5-large、`ORT_THREADS=4`，约 **1 chunk/s**，
+  400 token 的 chunk）。并发 2 时两条流水线抢同一批 ORT 线程，聚合吞吐反而略低于单条
+  （实测 320 chunks / 401s ≈ 0.8 chunk/s）。`INGEST_CONCURRENCY` 主要买的是"上传即返回 + 不让 CPU 空转"，
+  不是线性加速；本机建议保持 2，内存紧张时降到 1。
 
 ## 4. 使用示例
 
@@ -135,14 +153,15 @@ API_KEY=$(grep PAPER_API_KEY .env | cut -d= -f2)
 curl -X POST http://127.0.0.1:8077/api/papers/ingest \
   -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
   -d '{"source_type":"url","source":"https://arxiv.org/pdf/1706.03762"}'
-# -> {"job_id":"...","status":"RECEIVED"}
+# -> {"job_id":"...","status":"RECEIVED","stage":"QUEUED"}
 
-# 轮询任务（RECEIVED -> DOWNLOADING -> STORED -> PARSING -> CHUNKING -> EMBEDDING -> INDEXING -> COMPLETED）
+# 轮询任务（QUEUED -> DOWNLOADING -> STORED -> PARSING -> CHUNKING -> EMBEDDING -> INDEXING -> COMPLETED）
 # 每个阶段转换都会 commit，因此轮询能看到真实中间态（不再只有 RECEIVED / COMPLETED）；
+# QUEUED = 在队列里等流水线空位（受 INGEST_CONCURRENCY 限制，见 §3.2）；
 # 失败时 stage/progress 保留在失败发生的那一步，error_code 给出结构化归因
 # （NO_TEXT_LAYER / ENCRYPTED_PDF / CORRUPT_PDF / DOWNLOAD_FAILED / OVERSIZED /
 #  UNSUPPORTED_TYPE / DUPLICATE_FINGERPRINT / EMBEDDING_FAILED / INDEX_FAILED /
-#  STORAGE_FAILED / INTERNAL）。
+#  STORAGE_FAILED / INTERRUPTED / INTERNAL）。
 curl http://127.0.0.1:8077/api/jobs/<job_id> -H "Authorization: Bearer $API_KEY"
 # -> {"job_id":"...","paper_id":"...","stage":"EMBEDDING","progress":80.0,"duplicate":false,
 #     "error_code":null,"error_message":null,"created_at":"...","updated_at":"...","finished_at":null}
@@ -156,7 +175,7 @@ curl http://127.0.0.1:8077/api/jobs/<job_id> -H "Authorization: Bearer $API_KEY"
 # - 非 FAILED 作业返回 409；确定性失败（如 NO_TEXT_LAYER）重试只会原样再失败
 curl -X POST http://127.0.0.1:8077/api/jobs/<job_id>/retry \
   -H "Authorization: Bearer $API_KEY"
-# -> 202，body 为重置后的作业（stage=RECEIVED），继续轮询 GET /api/jobs/<job_id> 即可
+# -> 202，body 为重置后的作业（stage=QUEUED），继续轮询 GET /api/jobs/<job_id> 即可
 
 # 上传本地 PDF
 curl -X POST http://127.0.0.1:8077/api/papers/ingest/file \

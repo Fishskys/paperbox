@@ -33,6 +33,9 @@ EXPECTED_CODES = {
     "EMBEDDING_FAILED",
     "INDEX_FAILED",
     "STORAGE_FAILED",
+    # Not produced by ``classify_failure``: the ingestion queue's startup
+    # recovery stamps it on jobs that were mid-pipeline when the process died.
+    "INTERRUPTED",
     "INTERNAL",
 }
 

@@ -35,4 +35,21 @@ class JobListOut(BaseModel):
     jobs: list[JobOut] = Field(default_factory=list)
 
 
-__all__ = ["JobListOut", "JobOut"]
+class QueueOut(BaseModel):
+    """Response body of ``GET /api/jobs/queue`` (in-process ingestion queue)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: Whether the worker coroutines are alive (the app lifespan starts them).
+    started: bool = False
+    #: Ceiling on parallel pipelines (``INGEST_CONCURRENCY``).
+    concurrency: int = 1
+    #: Pipelines executing right now.
+    running: int = 0
+    #: Jobs waiting for a free slot, in FIFO order.
+    queued: int = 0
+    running_job_ids: list[str] = Field(default_factory=list)
+    queued_job_ids: list[str] = Field(default_factory=list)
+
+
+__all__ = ["JobListOut", "JobOut", "QueueOut"]

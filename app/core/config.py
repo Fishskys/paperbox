@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     # --- ingestion limits (used from Phase 1 onwards) ---
     ingest_download_timeout: float = Field(default=120.0, alias="INGEST_DOWNLOAD_TIMEOUT")
     ingest_max_file_mb: int = Field(default=100, alias="INGEST_MAX_FILE_MB")
+    #: How many ingestion pipelines may run at the same time (2026-09-19).
+    #: Uploads beyond this limit wait in the in-process queue (stage ``QUEUED``)
+    #: instead of piling onto the embedding server and OpenSearch at once.
+    #: Keep it small: each pipeline streams a PDF, embeds ~40 chunks on 4 ORT
+    #: threads and bulk-indexes into the same single-node OpenSearch.
+    ingest_concurrency: int = Field(default=2, alias="INGEST_CONCURRENCY")
 
     @field_validator("log_level")
     @classmethod
@@ -133,6 +139,13 @@ class Settings(BaseSettings):
         # 0.0 disables a leg on purpose; negatives would invert the ranking.
         if value < 0:
             raise ValueError("RRF weights must be non-negative")
+        return value
+
+    @field_validator("ingest_concurrency")
+    @classmethod
+    def _check_ingest_concurrency(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("INGEST_CONCURRENCY must be positive")
         return value
 
     @field_validator("query_rewrite_max_chars")

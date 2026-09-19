@@ -10,7 +10,12 @@ must not change without a migration:
 
 ``NO_TEXT_LAYER`` / ``ENCRYPTED_PDF`` / ``CORRUPT_PDF`` / ``DOWNLOAD_FAILED`` /
 ``OVERSIZED`` / ``UNSUPPORTED_TYPE`` / ``DUPLICATE_FINGERPRINT`` /
-``EMBEDDING_FAILED`` / ``INDEX_FAILED`` / ``STORAGE_FAILED`` / ``INTERNAL``.
+``EMBEDDING_FAILED`` / ``INDEX_FAILED`` / ``STORAGE_FAILED`` / ``INTERRUPTED`` /
+``INTERNAL``.
+
+``INTERRUPTED`` is raised by the queue's startup recovery (2026-09-19): a job
+that was mid-pipeline when the process restarted is marked failed so the client
+sees it, and ``POST /api/jobs/{id}/retry`` re-drives it.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ FAILURE_CODES: tuple[str, ...] = (
     "EMBEDDING_FAILED",
     "INDEX_FAILED",
     "STORAGE_FAILED",
+    "INTERRUPTED",
     "INTERNAL",
 )
 

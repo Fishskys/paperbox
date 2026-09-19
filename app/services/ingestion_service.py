@@ -30,15 +30,30 @@ from app.services import paper_service
 logger = get_logger(__name__)
 
 STAGE_RECEIVED = "RECEIVED"
+#: Waiting in the ingestion queue for a free pipeline slot (2026-09-19).
+STAGE_QUEUED = "QUEUED"
 STAGE_DOWNLOADING = "DOWNLOADING"
 STAGE_STORED = "STORED"
 STAGE_COMPLETED = "COMPLETED"
 STAGE_FAILED = "FAILED"
 
+#: Stages a worker sets *while* a pipeline is running. A job found in one of
+#: these at startup was interrupted by a process restart (the pipeline lives in
+#: the web process), so ``recover_jobs`` fails it with ``INTERRUPTED``.
+IN_FLIGHT_STAGES: tuple[str, ...] = (
+    "DOWNLOADING",
+    "STORED",
+    "PARSING",
+    "CHUNKING",
+    "EMBEDDING",
+    "INDEXING",
+)
+
 STATUS_DUPLICATE = "DUPLICATE"
 STATUS_ACCEPTED = "RECEIVED"
 
 PROGRESS_RECEIVED = 0.0
+PROGRESS_QUEUED = 0.0
 PROGRESS_DOWNLOADING = 10.0
 PROGRESS_STORED = 30.0
 PROGRESS_COMPLETED = 100.0
@@ -323,6 +338,68 @@ def prepare_retry(session: Session, job_id: str) -> IngestionJob | None:
     return get_job(session, job_id)
 
 
+def mark_queued(session: Session, job_id: str) -> IngestionJob | None:
+    """Park a job in ``QUEUED`` while it waits for a pipeline slot (2026-09-19).
+
+    Guarded ``UPDATE ... WHERE stage IN ('RECEIVED', 'QUEUED')``: a job that has
+    already been picked up by a worker (or finished) is left alone, so the queue
+    can never rewind a running pipeline. Returns the refreshed row, or ``None``
+    when the job was not queueable.
+    """
+    claimed = session.execute(
+        update(IngestionJob)
+        .where(
+            IngestionJob.id == job_id,
+            IngestionJob.stage.in_((STAGE_RECEIVED, STAGE_QUEUED)),
+        )
+        .values(stage=STAGE_QUEUED, progress=PROGRESS_QUEUED)
+    )
+    if claimed.rowcount != 1:
+        session.rollback()
+        return None
+    session.commit()
+    return get_job(session, job_id)
+
+
+def recover_jobs(
+    session: Session,
+) -> tuple[list[tuple[str, dict]], list[str]]:
+    """Find jobs a previous process left behind (called once at startup).
+
+    Returns ``(requeue, interrupted)``:
+
+    * ``requeue`` -- ``(job_id, payload)`` for jobs that never started
+      (``RECEIVED``/``QUEUED`` and never finished): they are safe to run again.
+    * ``interrupted`` -- ids of jobs that were mid-pipeline when the process
+      died. They are marked ``FAILED`` with ``error_code='INTERRUPTED'`` so the
+      client sees them instead of a job that hangs forever, and
+      ``POST /api/jobs/{id}/retry`` can re-drive them.
+    """
+    rows = (
+        session.execute(
+            select(IngestionJob).where(IngestionJob.finished_at.is_(None))
+        )
+        .scalars()
+        .all()
+    )
+    requeue: list[tuple[str, dict]] = []
+    interrupted: list[str] = []
+    for job in rows:
+        if job.stage in (STAGE_RECEIVED, STAGE_QUEUED):
+            requeue.append((job.id, dict(job.payload or {})))
+        elif job.stage in IN_FLIGHT_STAGES:
+            mark_failed(
+                session,
+                job,
+                "interrupted by a process restart; retry the job to resume",
+                code="INTERRUPTED",
+            )
+            interrupted.append(job.id)
+    if interrupted:
+        session.commit()
+    return requeue, interrupted
+
+
 # --------------------------------------------------------------------------- #
 # payload acquisition
 # --------------------------------------------------------------------------- #
@@ -375,10 +452,12 @@ def read_upload(data: bytes, filename: str, content_type: str | None) -> UploadR
 
 __all__ = [
     "DownloadResult",
+    "IN_FLIGHT_STAGES",
     "IngestionError",
     "STAGE_COMPLETED",
     "STAGE_DOWNLOADING",
     "STAGE_FAILED",
+    "STAGE_QUEUED",
     "STAGE_RECEIVED",
     "STAGE_STORED",
     "STATUS_ACCEPTED",
@@ -396,9 +475,11 @@ __all__ = [
     "job_duplicate",
     "list_jobs",
     "mark_failed",
+    "mark_queued",
     "max_file_bytes",
     "prepare_retry",
     "read_upload",
+    "recover_jobs",
     "resolve_duplicate",
     "serialize_job",
     "title_for_ingest",

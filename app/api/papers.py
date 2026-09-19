@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     HTTPException,
     Query,
@@ -25,7 +24,7 @@ from app.search.opensearch import SearchIndexError
 from app.services import ingestion_service as ingest
 from app.services import object_storage
 from app.services import paper_service as papers
-from app.workers import tasks
+from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
 
@@ -208,7 +207,6 @@ def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
 @router.post("/{paper_id}/reindex", status_code=status.HTTP_202_ACCEPTED)
 def reindex_paper_endpoint(
     paper_id: str,
-    background: BackgroundTasks,
     session: Session = Depends(get_db),
 ) -> dict:
     """Re-parse, re-chunk, re-embed and re-index one paper (plan section 24).
@@ -231,7 +229,7 @@ def reindex_paper_endpoint(
     )
     job.paper_id = paper.id
     session.commit()
-    background.add_task(tasks.run_reindex_job, job.id)
+    job = job_queue.submit(session, job.id, job_queue.KIND_REINDEX) or job
     return {
         "job_id": job.id,
         "paper_id": paper.id,
