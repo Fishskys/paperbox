@@ -30,7 +30,14 @@ from app.db.models import (
     Paper,
     PaperAuthor,
     PaperChunk,
+    PaperFieldProvenance,
     PaperFile,
+    PaperIdentifier,
+    PaperSource,
+    PaperTag,
+    PapersTag,
+    Venue,
+    VenueEdition,
     new_uuid,
 )
 from app.parsing.chunking import Chunk
@@ -64,6 +71,15 @@ def factory():
         PaperChunk.__table__,
         PaperFile.__table__,
         IngestionJob.__table__,
+        # The metadata layer: the pipeline records a source row and a provenance
+        # row per field (title/abstract/year/venue/identifiers/tags).
+        PaperSource.__table__,
+        PaperIdentifier.__table__,
+        PaperFieldProvenance.__table__,
+        Venue.__table__,
+        VenueEdition.__table__,
+        PaperTag.__table__,
+        PapersTag.__table__,
     )
     for table in tables:
         columns = [c._copy() for c in table.columns]

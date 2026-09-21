@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter, OrderedDict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
-from app.parsing.pdf import PageText
+from app.parsing.pdf import EmbeddedMetadata, PageText
 
 _ARXIV_IN_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/([A-Za-z0-9.\-/]+)", re.IGNORECASE)
 _ARXIV_LINE = re.compile(
@@ -371,6 +371,78 @@ def extract_metadata(
     return dict(result)
 
 
+# --------------------------------------------------------------------------- #
+# claim values (what the metadata layer actually stores)
+# --------------------------------------------------------------------------- #
+def heuristic_claim_values(metadata: Mapping[str, object]) -> dict[str, object]:
+    """``extract_metadata`` output -> ``{provenance field: value}``.
+
+    This is the shape the merge engine consumes, so the heuristic path and the
+    import path go through exactly the same code.
+    """
+    values: dict[str, object] = {}
+    title = metadata.get("title")
+    if isinstance(title, str) and title.strip():
+        values["title"] = title.strip()
+    abstract = metadata.get("abstract")
+    if isinstance(abstract, str) and abstract.strip():
+        values["abstract"] = abstract.strip()
+    year = metadata.get("year")
+    if isinstance(year, int):
+        values["year"] = year
+    authors = metadata.get("authors") or []
+    if authors:
+        values["authors"] = [str(name) for name in authors]
+    doi = metadata.get("doi")
+    if isinstance(doi, str) and doi.strip():
+        values["identifier:doi"] = doi.strip()
+    arxiv_id = metadata.get("arxiv_id")
+    if isinstance(arxiv_id, str) and arxiv_id.strip():
+        values["identifier:arxiv"] = arxiv_id.strip()
+    return values
+
+
+def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:
+    """PDF Info/XMP metadata -> ``{provenance field: value}`` (discovery layer 1).
+
+    Everything here is *structured* as far as rule R2 is concerned: the publisher
+    wrote it, so it may correct what the first-page heuristics guessed.
+    """
+    values: dict[str, object] = {}
+    if embedded is None:
+        return values
+    if embedded.title:
+        values["title"] = embedded.title
+    if embedded.abstract:
+        values["abstract"] = embedded.abstract
+    if embedded.authors:
+        values["authors"] = list(embedded.authors)
+    if embedded.year:
+        values["year"] = int(embedded.year)
+    if embedded.doi:
+        values["identifier:doi"] = embedded.doi
+    if embedded.arxiv_id:
+        values["identifier:arxiv"] = embedded.arxiv_id
+    if embedded.venue:
+        venue: dict[str, object] = {"name": embedded.venue}
+        if embedded.year:
+            venue["year"] = int(embedded.year)
+        values["venue"] = venue
+    if embedded.volume:
+        values["volume"] = embedded.volume
+    if embedded.issue:
+        values["issue"] = embedded.issue
+    if embedded.pages:
+        values["pages"] = embedded.pages
+    if embedded.publication_date:
+        values["publication_date"] = embedded.publication_date
+    if embedded.language:
+        values["language"] = embedded.language
+    if embedded.keywords:
+        values["tag:author_terms"] = list(embedded.keywords)
+    return values
+
+
 __all__ = [
     "arxiv_id_from_text",
     "arxiv_id_from_url",
@@ -379,5 +451,7 @@ __all__ = [
     "detect_doi",
     "detect_title",
     "detect_year",
+    "embedded_claim_values",
     "extract_metadata",
+    "heuristic_claim_values",
 ]

@@ -29,15 +29,17 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import classify_failure
 from app.core.logging import get_logger
-from app.db.models import IngestionJob, Paper, PaperChunk, new_uuid
+from app.db.models import IngestionJob, Paper, PaperChunk, PaperFile, new_uuid
 from app.db.session import SessionLocal
 from app.parsing.chunking import chunk_document
-from app.parsing.pdf import extract_pages
+from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata, extract_pages
 from app.parsing.structure import detect_sections, merge_short_sections
 from app.search import opensearch
 from app.services import embedding_service
 from app.services import ingestion_service as ingest
-from app.services import metadata_service, object_storage, paper_service
+from app.services import metadata_identifiers, metadata_matcher, metadata_merge
+from app.services import metadata_service, metadata_shell, metadata_sources
+from app.services import object_storage, paper_service, provenance_service
 
 logger = get_logger(__name__)
 
@@ -68,6 +70,10 @@ class PayloadOutcome:
 
     paper_id: str
     duplicate: bool = False
+    #: ``False`` when the file was stored but not indexed (a non-primary version
+    #: arrived, section 7.1). The job still ends ``COMPLETED``.
+    indexed: bool = True
+    reason: str | None = None
 
 
 def reindex_paper(
@@ -251,7 +257,7 @@ def _process_job(session: Session, job) -> PayloadOutcome:
     )
 
     stored = _store_source(paper_id, source)
-    paper_service.register_original_file(
+    file_record = paper_service.register_original_file(
         session,
         paper,
         object_key=stored.object_key,
@@ -261,6 +267,7 @@ def _process_job(session: Session, job) -> PayloadOutcome:
         size_bytes=stored.size_bytes,
         filename=source.filename,
         content_type=ingest.PDF_CONTENT_TYPE,
+        kind=str(payload.get("file_kind") or paper_service.FILE_KIND_ORIGINAL),
     )
 
     job.paper_id = paper.id
@@ -277,7 +284,7 @@ def _process_job(session: Session, job) -> PayloadOutcome:
     _cleanup_source(source, payload, payload.get("object_key"))
 
     try:
-        _run_pipeline(session, job, paper, stored.object_key)
+        _run_pipeline(session, job, paper, stored.object_key, file_record=file_record)
     except Exception:
         session.rollback()
         raise
@@ -434,7 +441,13 @@ def remove_local_file(path) -> bool:
 
 
 def _run_pipeline(
-    session: Session, job, paper: Paper, object_key: str, *, dedupe: bool = True
+    session: Session,
+    job,
+    paper: Paper,
+    object_key: str,
+    *,
+    dedupe: bool = True,
+    file_record: PaperFile | None = None,
 ) -> None:
     """PARSING -> CHUNKING -> EMBEDDING -> INDEXING for one stored paper.
 
@@ -444,6 +457,13 @@ def _run_pipeline(
     it would purge the surviving paper's chunks and index documents. Reindex
     therefore calls with ``dedupe=False`` and keeps its original fingerprint when
     the upgraded one is taken by another live paper.
+
+    A fresh ingest additionally resolves *which paper* the PDF belongs to
+    (sections 7 and 7.1): a record imported before its file left a shell paper
+    behind, and a second version of an already indexed paper belongs to that paper
+    rather than to a new one. When the arriving version is not the primary one,
+    the job ends here as a completed no-op -- nothing is parsed and the index of
+    the surviving version is left untouched.
     """
     paper.status = paper_service.STATUS_PROCESSING
 
@@ -452,7 +472,22 @@ def _run_pipeline(
     data = object_storage.download_bytes(object_key)
     pages = extract_pages(data)
     sections = merge_short_sections(detect_sections(pages))
+
+    record = None
+    if dedupe and file_record is not None:
+        resolution = _resolve_target_paper(
+            session, job, paper, object_key, file_record, data, pages
+        )
+        paper = resolution.paper
+        object_key = resolution.object_key
+        record = resolution.record
+        if resolution.decision == paper_service.PRIMARY_ACTION_NON_PRIMARY:
+            _finish_non_primary(session, job, paper, resolution.previous_status)
+            return
+
+    _reset_placeholder_title(session, paper, job)
     _backfill_metadata(session, paper, pages, data)
+    _restore_placeholder_title(session, paper, job)
 
     # Parsing revealed DOI/arXiv/title, so the sha256 fingerprint can now be
     # upgraded to the real identity. A collision means this document is already
@@ -665,27 +700,235 @@ def _discard_duplicate_paper(
     )
 
 
+@dataclass(frozen=True)
+class _TargetResolution:
+    """Which paper an arriving PDF belongs to, and whether it is the primary one."""
+
+    paper: Paper
+    object_key: str
+    record: PaperFile | None
+    decision: str
+    previous_status: str
+
+
+def _resolve_target_paper(
+    session: Session,
+    job: IngestionJob,
+    paper: Paper,
+    object_key: str,
+    record: PaperFile,
+    data: bytes,
+    pages,
+) -> _TargetResolution:
+    """Reuse an existing paper for this PDF when the evidence says so.
+
+    Two situations reach this code (sections 7 and 7.1 of the plan):
+
+    * a **shell** exists because the record was imported before its file -- the
+      PDF must join it instead of creating a second paper;
+    * the paper is already indexed and this is **another version** of it (arXiv
+      preprint vs. published PDF) -- the file joins the paper and the
+      primary-version rule decides whether anything is re-indexed.
+
+    Evidence is the embedded PDF metadata first (layer 1: DOI/arXiv are exact),
+    then the first-page heuristics (title + first author + year, 0.8). The paper
+    row created by this ingest is excluded: it must never match itself.
+    """
+    previous_status = paper.status
+    match = _match_existing_paper(session, paper, record, data, pages)
+    if match is not None and match.matched and match.paper is not None:
+        # Remember the status of the paper we are joining *before* adoption (a
+        # shell turns PENDING there); a non-primary arrival has to leave it alone.
+        previous_status = match.paper.status
+        source_id = _first_source_id(session, match.paper)
+        paper = metadata_shell.adopt_paper(
+            session, paper, match.paper, source_id=source_id
+        )
+        payload = dict(job.payload or {})
+        payload["reused_paper_id"] = paper.id
+        payload["match_method"] = match.method
+        job.payload = payload
+        session.flush()
+
+    outcome = paper_service.apply_primary_selection(session, paper, incoming=record)
+    return _TargetResolution(
+        paper=paper,
+        object_key=record.object_key,
+        record=record,
+        decision=outcome.action,
+        previous_status=previous_status,
+    )
+
+
+def _match_existing_paper(
+    session: Session, paper: Paper, record: PaperFile | None, data: bytes, pages
+):
+    """Match the arriving PDF against the library, or ``None`` when nothing fits."""
+    filename = record.filename if record is not None else None
+    embedded = extract_embedded_metadata(data)
+    if not embedded.is_empty:
+        match_input = metadata_matcher.match_input_from_values(
+            metadata_service.embedded_claim_values(embedded), filename=filename
+        )
+        result = metadata_matcher.match_record(
+            session, match_input, exclude_paper_id=paper.id
+        )
+        if result.matched:
+            return result
+
+    heuristics = {}
+    try:
+        heuristics = metadata_service.extract_metadata(
+            pages, url=paper.url, pdf_bytes=None
+        )
+    except Exception as exc:  # noqa: BLE001 - matching is best effort
+        # The heuristics are only used here to *find* a paper to reuse; failing to
+        # compute them must never fail the ingest itself (the parse stage later
+        # runs the real extraction and reports its own errors).
+        logger.debug("cannot run heuristics for matching: %s", exc)
+    match_input = metadata_matcher.match_input_from_values(
+        metadata_service.heuristic_claim_values(heuristics), filename=filename
+    )
+    if not match_input.identifiers and not match_input.title:
+        return None
+    result = metadata_matcher.match_record(
+        session, match_input, exclude_paper_id=paper.id
+    )
+    return result if result.matched else None
+
+
+def _first_source_id(session: Session, paper: Paper) -> str | None:
+    """The source record a reused paper was built from (the file inherits it)."""
+    rows = metadata_sources.sources_for_paper(session, paper.id)
+    return rows[0].id if rows else None
+
+
+def _finish_non_primary(
+    session: Session, job: IngestionJob, paper: Paper, previous_status: str
+) -> None:
+    """Close a job whose file is only a stored, non-primary version.
+
+    Nothing is parsed, no chunk or index document is touched: the paper keeps the
+    version that is already indexed (section 7.1).
+    """
+    payload = dict(job.payload or {})
+    payload["indexed"] = False
+    payload["reason"] = "non_primary_version"
+    job.payload = payload
+    job.paper_id = paper.id
+    job.stage = ingest.STAGE_COMPLETED
+    job.progress = ingest.PROGRESS_COMPLETED
+    job.finished_at = datetime.now(timezone.utc)
+    if previous_status and previous_status != paper_service.STATUS_PROCESSING:
+        paper.status = previous_status
+    session.commit()
+    logger.info(
+        "non-primary version stored without indexing",
+        extra={
+            "extra_fields": {
+                "job_id": job.id,
+                "paper_id": paper.id,
+                "reason": "non_primary_version",
+            }
+        },
+    )
+
+
+def _placeholder_title(job: IngestionJob) -> str:
+    """The file-name derived title this ingest gave the paper (if any)."""
+    payload = job.payload or {}
+    return ingest.title_for_ingest(payload.get("filename"), payload.get("source"))
+
+
+def _reset_placeholder_title(session: Session, paper: Paper, job: IngestionJob) -> None:
+    """Drop the file-name title so the heuristics can state the real one.
+
+    A fresh ingest names the paper after its file, and that name was never a
+    claim. "Fill blanks only" would therefore keep ``low_power_sram.pdf`` as the
+    title forever; clearing it here is what makes the first-page heuristics (or a
+    structured source) able to state the actual title.
+    """
+    if provenance_service.current_claim(session, paper.id, "title") is not None:
+        return
+    placeholder = _placeholder_title(job)
+    if placeholder and (paper.title or "").strip() == placeholder.strip():
+        paper.title = ""
+        session.flush()
+
+
+def _restore_placeholder_title(
+    session: Session, paper: Paper, job: IngestionJob
+) -> None:
+    """Keep a usable title when nothing better was found (``title`` is NOT NULL)."""
+    if (paper.title or "").strip():
+        return
+    paper.title = _placeholder_title(job) or "untitled"
+    session.flush()
+
+
 def _backfill_metadata(session: Session, paper: Paper, pages, pdf_bytes: bytes | None = None) -> None:
-    """Fill title/abstract/year/authors/arxiv_id from the parsed first pages."""
-    metadata = metadata_service.extract_metadata(pages, url=paper.url, pdf_bytes=pdf_bytes)
-    title = metadata.get("title")
-    if isinstance(title, str) and title.strip():
-        paper.title = title.strip()
-    abstract = metadata.get("abstract")
-    if isinstance(abstract, str) and abstract.strip():
-        paper.abstract = abstract.strip()
-    year = metadata.get("year")
-    if isinstance(year, int) and paper.year is None:
-        paper.year = year
-    arxiv_id = metadata.get("arxiv_id")
-    if isinstance(arxiv_id, str) and arxiv_id.strip() and not paper.arxiv_id:
-        paper.arxiv_id = paper_service.normalize_arxiv_id(arxiv_id)
-    doi = metadata.get("doi")
-    if isinstance(doi, str) and doi.strip() and not paper.doi:
-        paper.doi = paper_service.normalize_doi(doi)
-    authors = metadata.get("authors") or []
-    if authors:
-        paper_service.set_paper_authors(session, paper, list(authors))
+    """Fill the paper's metadata from the PDF, layer 1 then layer 2.
+
+    Two sources are recorded, in this order:
+
+    1. ``pdf_embedded`` -- the Info dictionary / XMP packet (no network, no
+       guessing). Structured, so it may correct a heuristic value.
+    2. ``pdf_heuristic`` -- the first-page heuristics that have always run. They
+       only fill what is still blank (rule R2).
+
+    Every value goes through the merge engine and lands in
+    ``paper_field_provenance``, so ``GET /api/papers/{id}/metadata`` can say where
+    each field came from.
+    """
+    embedded = extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={})
+    embedded_values = metadata_service.embedded_claim_values(embedded)
+    if embedded_values:
+        source = metadata_sources.upsert_source(
+            session,
+            source_type=metadata_sources.SOURCE_TYPE_PDF_EMBEDDED,
+            source_ref=metadata_sources.paper_embedded_ref(paper.id),
+            raw=embedded.raw or {},
+            paper_id=paper.id,
+            match_status=metadata_sources.MATCH_STATUS_MATCHED,
+            match_method="embedded",
+            match_confidence=1.0,
+            importer="pipeline",
+        )
+        metadata_merge.merge_values(
+            session,
+            paper,
+            embedded_values,
+            source_type=metadata_sources.SOURCE_TYPE_PDF_EMBEDDED,
+            source_id=source.id,
+            confidence=1.0,
+        )
+
+    heuristics = metadata_service.extract_metadata(
+        pages, url=paper.url, pdf_bytes=pdf_bytes
+    )
+    values = metadata_service.heuristic_claim_values(heuristics)
+    if values:
+        source = metadata_sources.upsert_source(
+            session,
+            source_type=metadata_sources.SOURCE_TYPE_PDF_HEURISTIC,
+            source_ref=metadata_sources.paper_heuristic_ref(paper.id),
+            raw=dict(heuristics),
+            paper_id=paper.id,
+            match_status=metadata_sources.MATCH_STATUS_MATCHED,
+            match_method="heuristic",
+            match_confidence=0.5,
+            importer="pipeline",
+        )
+        metadata_merge.merge_values(
+            session,
+            paper,
+            values,
+            source_type=metadata_sources.SOURCE_TYPE_PDF_HEURISTIC,
+            source_id=source.id,
+            confidence=0.5,
+        )
+
+    metadata_identifiers.mirror_legacy_columns(session, paper)
     session.flush()
 
 

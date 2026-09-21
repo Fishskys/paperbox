@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import BinaryIO
 
 from minio import Minio
+from minio.commonconfig import CopySource
 from minio.datatypes import Object as MinioObject
 from minio.error import S3Error
 
@@ -385,6 +386,43 @@ def delete_object(object_key: str, bucket: str | None = None) -> None:
     )
 
 
+def move_object(
+    source_key: str, target_key: str, bucket: str | None = None
+) -> bool:
+    """Re-key one object; returns ``False`` when the move could not happen.
+
+    Used when a paper created by an ingest turns out to *be* a shell paper that
+    already exists (metadata-first import): the stored PDF has to end up under
+    ``papers/<shell_id>/`` or deleting the paper would leave the object behind.
+    Best effort on purpose -- if MinIO refuses, the caller keeps the old key (the
+    file is still readable, only the path stays unusual).
+    """
+    name = bucket or settings.minio_bucket
+    if source_key == target_key:
+        return True
+    try:
+        get_client().copy_object(
+            name, target_key, CopySource(name, source_key)
+        )
+        get_client().remove_object(name, source_key)
+    except S3Error as exc:
+        logger.warning(
+            "could not move object %s -> %s: %s", source_key, target_key, exc.code
+        )
+        return False
+    logger.info(
+        "moved object",
+        extra={
+            "extra_fields": {
+                "bucket": name,
+                "from": source_key,
+                "to": target_key,
+            }
+        },
+    )
+    return True
+
+
 def delete_prefix(paper_id: str, bucket: str | None = None) -> int:
     """Delete every object under ``papers/<paper_id>/``; returns the count."""
     name = bucket or settings.minio_bucket
@@ -447,6 +485,7 @@ __all__ = [
     "get_client",
     "guess_content_type",
     "list_objects",
+    "move_object",
     "object_exists",
     "open_stream",
     "presigned_get_url",

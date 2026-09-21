@@ -16,9 +16,10 @@ import hashlib
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import inspect as sqlalchemy_inspect, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
@@ -31,8 +32,36 @@ STATUS_PROCESSING = "PROCESSING"
 STATUS_INDEXED = "INDEXED"
 STATUS_FAILED = "FAILED"
 STATUS_DELETED = "DELETED"
+#: Metadata-first shell: the record is stored, the PDF has not arrived yet.
+STATUS_AWAITING_FILE = "AWAITING_FILE"
 
 FILE_KIND_ORIGINAL = "original"
+FILE_KIND_ARXIV_PDF = "arxiv_pdf"
+FILE_KIND_PUBLISHED_PDF = "published_pdf"
+FILE_KIND_SUPPLEMENT = "supplement"
+
+FILE_KINDS: tuple[str, ...] = (
+    FILE_KIND_ORIGINAL,
+    FILE_KIND_ARXIV_PDF,
+    FILE_KIND_PUBLISHED_PDF,
+    FILE_KIND_SUPPLEMENT,
+)
+
+#: Which version wins when a paper has several PDFs (decision 14): the published
+#: version beats whatever arrived first, the preprint loses to both. A supplement
+#: is never parsed, so it ranks last.
+PRIMARY_KIND_PRIORITY: dict[str, int] = {
+    FILE_KIND_PUBLISHED_PDF: 3,
+    FILE_KIND_ORIGINAL: 2,
+    FILE_KIND_ARXIV_PDF: 1,
+    FILE_KIND_SUPPLEMENT: 0,
+}
+
+#: Outcome labels of the primary-version decision.
+PRIMARY_ACTION_PRIMARY = "primary"
+PRIMARY_ACTION_PROMOTED = "promoted"
+PRIMARY_ACTION_NON_PRIMARY = "non_primary"
+PRIMARY_ACTION_NONE = "none"
 
 _NON_WORD = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
 _ARXIV_PREFIX = "arxiv:"
@@ -284,11 +313,154 @@ def list_paper_files(session: Session, paper_id: str) -> list[PaperFile]:
 
 
 def original_file(paper: Paper) -> PaperFile | None:
-    """The stored original PDF of a paper (if any)."""
-    for record in paper.files:
-        if record.deleted_at is None and record.kind == FILE_KIND_ORIGINAL:
+    """The stored PDF of a paper: the primary version when one is marked.
+
+    Falls back to the first live ``original`` file so rows written before the
+    primary-version column existed (and the backfill) behave exactly as before.
+    """
+    live = [record for record in paper.files if record.deleted_at is None]
+    for record in live:
+        if record.is_primary:
+            return record
+    for record in live:
+        if record.kind == FILE_KIND_ORIGINAL:
+            return record
+    return live[0] if live else None
+
+
+def live_files(paper: Paper) -> list[PaperFile]:
+    """Every file of a paper that has not been soft-deleted."""
+    return [record for record in paper.files if record.deleted_at is None]
+
+
+def primary_priority(kind: str | None) -> int:
+    """Rank of a file kind for the primary-version rule (unknown kinds rank 0)."""
+    return PRIMARY_KIND_PRIORITY.get((kind or "").strip().lower(), 0)
+
+
+def select_primary_file(files: Sequence[PaperFile]) -> PaperFile | None:
+    """Which of ``files`` should be the parsed/indexed version.
+
+    Highest priority kind wins; ties go to the file that arrived first, so an
+    existing primary is never displaced by an equally ranked newcomer.
+    """
+    live = [record for record in files if record.deleted_at is None]
+    if not live:
+        return None
+    return max(
+        live,
+        key=lambda record: (
+            primary_priority(record.kind),
+            -(record.created_at.timestamp() if record.created_at else 0.0),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class PrimaryOutcome:
+    """Result of applying the primary-version rule to one paper."""
+
+    action: str
+    primary: PaperFile | None = None
+    previous: PaperFile | None = None
+
+    @property
+    def needs_reindex(self) -> bool:
+        """A higher-priority version took over: the index must be rebuilt."""
+        return self.action == PRIMARY_ACTION_PROMOTED
+
+    @property
+    def indexed(self) -> bool:
+        """Whether the incoming file is the one that gets parsed and indexed."""
+        return self.action in (PRIMARY_ACTION_PRIMARY, PRIMARY_ACTION_PROMOTED)
+
+
+def apply_primary_selection(
+    session: Session, paper: Paper, *, incoming: PaperFile | None = None
+) -> PrimaryOutcome:
+    """Mark the winning file of a paper as ``is_primary``.
+
+    Returns what happened: ``primary`` (the incoming file is the one to index and
+    there was no primary before), ``promoted`` (the incoming file displaced an
+    existing primary -- the caller must reindex) or ``non_primary`` (the incoming
+    file is only stored, the existing primary stays).
+    """
+    files = list_paper_files(session, paper.id)
+    if not files:
+        return PrimaryOutcome(action=PRIMARY_ACTION_NONE)
+    current = next((record for record in files if record.is_primary), None)
+    winner = select_primary_file(files)
+    if winner is None:  # pragma: no cover - defensive, files is non-empty
+        return PrimaryOutcome(action=PRIMARY_ACTION_NONE)
+
+    if current is not None and current.id == winner.id:
+        if incoming is None or incoming.id == current.id:
+            return PrimaryOutcome(action=PRIMARY_ACTION_PRIMARY, primary=current)
+
+    changed = False
+    for record in files:
+        wanted = record.id == winner.id
+        if bool(record.is_primary) != wanted:
+            record.is_primary = wanted
+            changed = True
+    if changed:
+        session.flush()
+
+    if incoming is not None and incoming.id != winner.id:
+        return PrimaryOutcome(
+            action=PRIMARY_ACTION_NON_PRIMARY, primary=winner, previous=current
+        )
+    if current is not None and current.id != winner.id:
+        return PrimaryOutcome(
+            action=PRIMARY_ACTION_PROMOTED, primary=winner, previous=current
+        )
+    return PrimaryOutcome(action=PRIMARY_ACTION_PRIMARY, primary=winner, previous=current)
+
+
+def remove_file(session: Session, paper: Paper, record: PaperFile) -> PrimaryOutcome:
+    """Soft-delete one file and repair the primary selection (section 7.1).
+
+    * a non-primary file disappears: nothing else happens (``none``);
+    * the primary file disappears and another one is left: the next one by
+      priority is promoted and the caller must reindex (``promoted``);
+    * the last file disappears: the paper is marked ``FAILED`` and its index
+      documents are left alone for a human to decide (``none``).
+    """
+    record.deleted_at = datetime.now(timezone.utc)
+    was_primary = bool(record.is_primary)
+    record.is_primary = False
+    session.flush()
+
+    remaining = list_paper_files(session, paper.id)
+    if not remaining:
+        paper.status = STATUS_FAILED
+        session.flush()
+        logger.warning(
+            "paper %s lost its last file", paper.id, extra={"extra_fields": {"paper_id": paper.id}}
+        )
+        return PrimaryOutcome(action=PRIMARY_ACTION_NONE, previous=record)
+
+    if not was_primary:
+        return PrimaryOutcome(action=PRIMARY_ACTION_NONE, primary=primary_file(paper))
+
+    winner = select_primary_file(remaining)
+    for item in remaining:
+        item.is_primary = item.id == (winner.id if winner else None)
+    session.flush()
+    return PrimaryOutcome(action=PRIMARY_ACTION_PROMOTED, primary=winner, previous=record)
+
+
+def primary_file(paper: Paper) -> PaperFile | None:
+    """The file currently marked as the paper's primary version."""
+    for record in live_files(paper):
+        if record.is_primary:
             return record
     return None
+
+
+def is_shell(paper: Paper) -> bool:
+    """Whether the paper is waiting for its PDF (metadata-first import)."""
+    return (paper.status or "").upper() == STATUS_AWAITING_FILE
 
 
 # --------------------------------------------------------------------------- #
@@ -340,12 +512,19 @@ def register_original_file(
     size_bytes: int | None = None,
     filename: str | None = None,
     content_type: str | None = None,
+    kind: str = FILE_KIND_ORIGINAL,
+    source_id: str | None = None,
 ) -> PaperFile:
-    """Attach a stored original PDF to a paper."""
+    """Attach a stored PDF to a paper.
+
+    The row starts with ``is_primary=False``: which file is *the* version is
+    decided by :func:`apply_primary_selection` once every candidate is known.
+    """
     record = PaperFile(
         id=new_uuid(),
         paper_id=paper.id,
-        kind=FILE_KIND_ORIGINAL,
+        kind=kind or FILE_KIND_ORIGINAL,
+        source_id=source_id,
         object_key=object_key,
         bucket=bucket,
         filename=filename,
@@ -357,6 +536,11 @@ def register_original_file(
     if url and not paper.url:
         paper.url = url
     session.flush()
+    # The relationship may already be loaded (``original_file`` reads it), so it
+    # has to be dropped for the new row to be visible there.
+    state = sqlalchemy_inspect(paper)
+    if state.persistent:
+        session.expire(paper, ["files"])
     return record
 
 
@@ -414,12 +598,24 @@ def serialize_paper(paper: Paper, *, source_url: str | None = None) -> dict:
 
 
 __all__ = [
+    "FILE_KIND_ARXIV_PDF",
     "FILE_KIND_ORIGINAL",
+    "FILE_KIND_PUBLISHED_PDF",
+    "FILE_KIND_SUPPLEMENT",
+    "FILE_KINDS",
+    "PRIMARY_ACTION_NONE",
+    "PRIMARY_ACTION_NON_PRIMARY",
+    "PRIMARY_ACTION_PRIMARY",
+    "PRIMARY_ACTION_PROMOTED",
+    "PRIMARY_KIND_PRIORITY",
+    "PrimaryOutcome",
+    "STATUS_AWAITING_FILE",
     "STATUS_DELETED",
     "STATUS_FAILED",
     "STATUS_INDEXED",
     "STATUS_PENDING",
     "STATUS_PROCESSING",
+    "apply_primary_selection",
     "build_fingerprint",
     "compute_sha256",
     "compute_sha256_file",
@@ -428,13 +624,19 @@ __all__ = [
     "find_by_sha256",
     "get_or_create_author",
     "get_paper",
+    "is_shell",
     "list_paper_files",
+    "live_files",
     "normalize_arxiv_id",
     "normalize_doi",
     "normalize_text",
     "original_file",
     "paper_author_names",
+    "primary_file",
+    "primary_priority",
     "register_original_file",
+    "remove_file",
+    "select_primary_file",
     "serialize_paper",
     "serialize_paper_file",
     "set_paper_authors",

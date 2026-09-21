@@ -32,27 +32,22 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.models import Paper, PaperSource
+from app.services import metadata_sources as sources
 from app.services import provenance_service as prov
 
 logger = get_logger(__name__)
 
-SOURCE_TYPE_IEEE_API = "ieee_api"
-SOURCE_TYPE_ARXIV_API = "arxiv_api"
-SOURCE_TYPE_CROSSREF = "crossref"
-SOURCE_TYPE_PDF_EMBEDDED = "pdf_embedded"
-SOURCE_TYPE_PDF_HEURISTIC = "pdf_heuristic"
-SOURCE_TYPE_IMPORT_FILE = "import_file"
-SOURCE_TYPE_MANUAL = "manual"
+#: Source-type vocabulary lives in :mod:`app.services.metadata_sources`; the merge
+#: engine only classifies it, so the names are imported rather than re-declared.
+SOURCE_TYPES: tuple[str, ...] = sources.SOURCE_TYPES
+SOURCE_TYPE_IEEE_API = sources.SOURCE_TYPE_IEEE_API
+SOURCE_TYPE_ARXIV_API = sources.SOURCE_TYPE_ARXIV_API
+SOURCE_TYPE_CROSSREF = sources.SOURCE_TYPE_CROSSREF
+SOURCE_TYPE_PDF_EMBEDDED = sources.SOURCE_TYPE_PDF_EMBEDDED
+SOURCE_TYPE_PDF_HEURISTIC = sources.SOURCE_TYPE_PDF_HEURISTIC
+SOURCE_TYPE_IMPORT_FILE = sources.SOURCE_TYPE_IMPORT_FILE
+SOURCE_TYPE_MANUAL = sources.SOURCE_TYPE_MANUAL
 
-SOURCE_TYPES: tuple[str, ...] = (
-    SOURCE_TYPE_IEEE_API,
-    SOURCE_TYPE_ARXIV_API,
-    SOURCE_TYPE_CROSSREF,
-    SOURCE_TYPE_PDF_EMBEDDED,
-    SOURCE_TYPE_PDF_HEURISTIC,
-    SOURCE_TYPE_IMPORT_FILE,
-    SOURCE_TYPE_MANUAL,
-)
 
 #: Sources whose values may correct a heuristic value (rule 2).
 STRUCTURED_SOURCE_TYPES: frozenset[str] = frozenset(

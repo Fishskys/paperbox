@@ -264,12 +264,18 @@ def find_by_filename(session: Session, filename: str | None) -> list[Paper]:
     return papers
 
 
-def match_record(session: Session, match_input: MatchInput) -> MatchResult:
-    """Run the five matching steps and report the first decisive outcome."""
+def match_record(
+    session: Session, match_input: MatchInput, *, exclude_paper_id: str | None = None
+) -> MatchResult:
+    """Run the five matching steps and report the first decisive outcome.
+
+    ``exclude_paper_id`` skips one paper in every step: the ingest pipeline calls
+    this with the paper row it just created, which must never match itself.
+    """
     normalized = match_input.normalized_identifiers()
 
     paper, method, value = find_by_identifier(session, normalized)
-    if paper is not None:
+    if paper is not None and paper.id != exclude_paper_id:
         return MatchResult(
             status=STATUS_MATCHED,
             method=method,
@@ -279,7 +285,7 @@ def match_record(session: Session, match_input: MatchInput) -> MatchResult:
         )
 
     paper = find_by_sha256(session, match_input.sha256)
-    if paper is not None:
+    if paper is not None and paper.id != exclude_paper_id:
         return MatchResult(
             status=STATUS_MATCHED,
             method=METHOD_SHA256,
@@ -294,7 +300,7 @@ def match_record(session: Session, match_input: MatchInput) -> MatchResult:
         authors=match_input.authors,
         year=match_input.year,
     )
-    if paper is not None:
+    if paper is not None and paper.id != exclude_paper_id:
         return MatchResult(
             status=STATUS_MATCHED,
             method=METHOD_TITLE_YEAR_AUTHOR,
@@ -302,6 +308,9 @@ def match_record(session: Session, match_input: MatchInput) -> MatchResult:
             paper=paper,
             reason=reason,
         )
+    candidates = [
+        item for item in candidates if item.get("paper_id") != exclude_paper_id
+    ]
     if candidates:
         return MatchResult(
             status=STATUS_AMBIGUOUS,
@@ -311,7 +320,11 @@ def match_record(session: Session, match_input: MatchInput) -> MatchResult:
             reason=reason,
         )
 
-    filename_matches = find_by_filename(session, match_input.filename)
+    filename_matches = [
+        item
+        for item in find_by_filename(session, match_input.filename)
+        if item.id != exclude_paper_id
+    ]
     if filename_matches:
         return MatchResult(
             status=STATUS_AMBIGUOUS,
