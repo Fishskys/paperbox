@@ -27,8 +27,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.db.models import Paper, PaperFieldProvenance, new_uuid
+from app.db.models import Paper, PaperFieldProvenance, PaperSource, new_uuid
 from app.services import metadata_identifiers as identifiers
+from app.services import metadata_sources as source_vocab
 from app.services import venue_service as venues
 
 logger = get_logger(__name__)
@@ -519,16 +520,34 @@ def provenance_summary(
     return summary
 
 
+def claim_source_type(session: Session, claim: PaperFieldProvenance | None) -> str | None:
+    """Source type behind a claim row (``None`` when the source row is gone)."""
+    if claim is None or claim.source_id is None:
+        return None
+    source = session.get(PaperSource, claim.source_id)
+    if source is None:
+        return None
+    return (source.source_type or "").strip().lower() or None
+
+
 def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]]:
     """Disagreements the merge engine filed: a losing claim plus the winning one.
 
     A conflict is a *non-current* claim whose value differs from the current one for
     the same field -- exactly what rule R2 records instead of overwriting (section 8
     of the design). This is the second half of ``GET /api/metadata/review``.
+
+    Two things are deliberately *not* conflicts: a heuristic value that a structured
+    source replaced (that is rule 2 doing its job, not a disagreement between
+    sources), and anything belonging to a deleted paper.
     """
     statement = (
         select(PaperFieldProvenance)
-        .where(PaperFieldProvenance.is_current.is_(False))
+        .join(Paper, Paper.id == PaperFieldProvenance.paper_id)
+        .where(
+            PaperFieldProvenance.is_current.is_(False),
+            Paper.deleted_at.is_(None),
+        )
         .order_by(PaperFieldProvenance.decided_at.desc())
         .limit(max(1, min(limit * 4, 800)))
     )
@@ -541,6 +560,10 @@ def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]
             continue
         current = current_claim(session, row.paper_id, row.field)
         if current is None or _same_value(current.value, row.value):
+            continue
+        # A heuristic value losing to a structured one is an override (rule 2), and
+        # the design says that is expected -- not something to review.
+        if claim_source_type(session, row) == source_vocab.SOURCE_TYPE_PDF_HEURISTIC:
             continue
         seen.add(key)
         conflicts.append(
@@ -594,6 +617,7 @@ __all__ = [
     "provenance_summary",
     "read_field",
     "record_claim",
+    "claim_source_type",
     "recorded_conflicts",
     "rollback_field",
     "scheme_of_identifier_field",

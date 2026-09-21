@@ -128,6 +128,61 @@ def test_record_claim_can_keep_a_losing_value_out_of_the_columns(db_session) -> 
     assert len(prov.field_history(db_session, paper.id, "title")) == 2
 
 
+def test_an_override_is_not_a_conflict(db_session) -> None:
+    """Rule 2 replacing a heuristic value is expected, so it is not on the list."""
+    paper = make_paper(db_session)
+    heuristic = make_source(db_session, paper.id, "pdf_heuristic")
+    structured = make_source(db_session, paper.id, "ieee_api")
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="volume",
+        value="1",
+        source_id=heuristic.id,
+        decided_by="initial",
+        make_current=True,
+    )
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="volume",
+        value="62",
+        source_id=structured.id,
+        decided_by="structured_override",
+        make_current=True,
+    )
+
+    assert prov.recorded_conflicts(db_session) == []
+
+
+def test_two_structured_sources_disagreeing_is_a_conflict(db_session) -> None:
+    paper = make_paper(db_session)
+    first = make_source(db_session, paper.id, "ieee_api")
+    second = make_source(db_session, paper.id, "import_file")
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="volume",
+        value="62",
+        source_id=first.id,
+        decided_by="initial",
+        make_current=True,
+    )
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="volume",
+        value="63",
+        source_id=second.id,
+        decided_by="conflict",
+        make_current=False,
+    )
+
+    conflicts = prov.recorded_conflicts(db_session)
+    assert [row["field"] for row in conflicts] == ["volume"]
+    assert conflicts[0]["kept"] == "62" and conflicts[0]["rejected"] == "63"
+
+
 def test_claims_carry_their_source_and_confidence(db_session) -> None:
     paper = make_paper(db_session)
     source = make_source(db_session, paper.id)
