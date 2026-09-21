@@ -19,9 +19,17 @@ from app.core.security import require_api_key
 from app.db.models import PaperChunk
 from app.db.session import get_db
 from app.schemas.paper import PaperChunkList, PaperChunkOut, PaperListOut, PaperOut
+from app.schemas.metadata import (
+    MetadataPatch,
+    MetadataPatchOut,
+    MetadataRollbackIn,
+    MetadataRollbackOut,
+    PaperMetadataOut,
+)
 from app.search import opensearch
 from app.search.opensearch import SearchIndexError
 from app.services import ingestion_service as ingest
+from app.services import metadata_manual
 from app.services import object_storage
 from app.services import paper_service as papers
 from app.workers import queue as job_queue
@@ -159,6 +167,66 @@ def get_paper_chunks(
         for row in rows
     ]
     return PaperChunkList(paper_id=paper_id, total=total, chunks=chunks)
+
+
+@router.get("/{paper_id}/metadata", response_model=PaperMetadataOut)
+def get_paper_metadata(
+    paper_id: str, session: Session = Depends(get_db)
+) -> PaperMetadataOut:
+    """Current metadata plus, per field, who said what and when (section 9).
+
+    ``values`` is the merged current value of every field; ``provenance`` lists the
+    claims behind them (including the ones that lost, with the ``provenance_id`` a
+    rollback needs); ``sources`` names the records the paper was described by.
+    """
+    paper = _load_paper(session, paper_id)
+    return PaperMetadataOut.model_validate(metadata_manual.metadata_view(session, paper))
+
+
+@router.patch("/{paper_id}/metadata", response_model=MetadataPatchOut)
+def patch_paper_metadata(
+    paper_id: str,
+    body: MetadataPatch,
+    session: Session = Depends(get_db),
+) -> MetadataPatchOut:
+    """Edit one paper's metadata by hand (decision 12).
+
+    A human edit is recorded as ``decided_by='manual'`` provenance and always wins
+    over what a source or a heuristic said -- but it stays a claim, so it can be
+    rolled back. Changing ``doi``/``arxiv_id`` replaces the identifier and
+    re-derives the fingerprint.
+    """
+    paper = _load_paper(session, paper_id)
+    payload = body.model_dump(exclude_unset=True)
+    result = metadata_manual.patch_metadata(session, paper, payload)
+    session.commit()
+    return MetadataPatchOut.model_validate(result.as_dict())
+
+
+@router.post("/{paper_id}/metadata/rollback", response_model=MetadataRollbackOut)
+def rollback_paper_metadata(
+    paper_id: str,
+    body: MetadataRollbackIn,
+    session: Session = Depends(get_db),
+) -> MetadataRollbackOut:
+    """Restore one field to an earlier claim (nothing is deleted)."""
+    paper = _load_paper(session, paper_id)
+    try:
+        row = metadata_manual.rollback_metadata(
+            session, paper, body.field, body.provenance_id
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    session.commit()
+    return MetadataRollbackOut(
+        paper_id=paper.id,
+        field=row.field,
+        provenance_id=row.id,
+        value=row.value,
+        decided_by=row.decided_by,
+    )
 
 
 @router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT)

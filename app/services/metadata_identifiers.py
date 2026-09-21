@@ -245,6 +245,37 @@ def upsert_identifier(
     return row
 
 
+def replace_identifier(
+    session: Session,
+    *,
+    paper_id: str,
+    scheme: str,
+    value: str,
+    first_source_id: str | None = None,
+) -> PaperIdentifier | None:
+    """Set *the* identifier of a scheme for a paper, replacing an older value.
+
+    A human correcting a DOI means the old one is wrong, not that the paper has
+    two DOIs: leaving both rows behind would also leave ``is_primary`` pointing at
+    whichever came first. Only this path deletes identifier rows (a source stating
+    a second DOI is a conflict the merge engine reports instead).
+    """
+    normalized = normalize_identifier(scheme, value)
+    if not normalized:
+        return None
+    for row in identifiers_for_paper(session, paper_id):
+        if row.scheme == (scheme or "").strip().lower() and row.normalized_value != normalized:
+            session.delete(row)
+    session.flush()
+    return upsert_identifier(
+        session,
+        paper_id=paper_id,
+        scheme=scheme,
+        value=value,
+        first_source_id=first_source_id,
+    )
+
+
 def refresh_primary(session: Session, paper_id: str) -> PaperIdentifier | None:
     """Re-derive ``is_primary`` across a paper's identifiers; return the winner."""
     rows = identifiers_for_paper(session, paper_id)
@@ -260,9 +291,89 @@ def refresh_primary(session: Session, paper_id: str) -> PaperIdentifier | None:
     return winner
 
 
+def primary_fingerprint(
+    session: Session, paper: Paper, *, sha256: str | None = None
+) -> str:
+    """Fingerprint implied by a paper's identifiers (decision 2 ladder).
+
+    Falls back to the legacy ladder (title + first author + year, then sha256) when
+    no DOI/arXiv identifier is registered, so a paper that only has a PDF keeps the
+    fingerprint it has always had.
+    """
+    from app.services import paper_service
+
+    rows = identifiers_for_paper(session, paper.id)
+    authors = paper_service.paper_author_names(paper)
+    return build_fingerprint_from_identifiers(
+        rows,
+        title=paper.title,
+        first_author=authors[0] if authors else None,
+        year=paper.year,
+        sha256=sha256 or file_sha256(paper),
+    )
+
+
+def file_sha256(paper: Paper) -> str | None:
+    """Content hash of the paper's primary file (the ``sha256:`` fallback input)."""
+    from app.services import paper_service
+
+    record = paper_service.original_file(paper)
+    digest = getattr(record, "sha256", None) if record is not None else None
+    if isinstance(digest, str) and digest.strip():
+        return digest.strip()
+    for item in getattr(paper, "files", ()) or ():
+        candidate = getattr(item, "sha256", None)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def upgrade_fingerprint(
+    session: Session, paper: Paper, *, sha256: str | None = None
+) -> tuple[str, str | None]:
+    """Re-derive ``papers.fingerprint`` from the identifiers.
+
+    Returns ``(fingerprint, conflicting_paper_id)``. The conflicting id is set when
+    another live paper already holds the fingerprint the identifiers imply: the row
+    keeps the fingerprint it has, and the caller reports the collision instead of
+    merging two papers behind the user's back.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models import Paper as PaperModel
+
+    candidate = primary_fingerprint(session, paper, sha256=sha256)
+    if candidate == paper.fingerprint:
+        return candidate, None
+
+    conflict = session.execute(
+        select(PaperModel).where(
+            PaperModel.fingerprint == candidate,
+            PaperModel.deleted_at.is_(None),
+            PaperModel.id != paper.id,
+        )
+    ).scalars().first()
+    if conflict is not None:
+        return paper.fingerprint, conflict.id
+
+    previous = paper.fingerprint
+    paper.fingerprint = candidate
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        return previous, None
+    logger.info(
+        "fingerprint upgraded",
+        extra={
+            "extra_fields": {"paper_id": paper.id, "from": previous, "to": candidate}
+        },
+    )
+    return candidate, None
+
+
 def mirror_legacy_columns(session: Session, paper: Paper) -> None:
     """Keep ``papers.doi`` / ``papers.arxiv_id`` in step with the identifiers.
-
     Decision 13 keeps those two columns as convenient mirrors (they are indexed
     and every existing query/report uses them), so they must never drift from the
     identifier table. They are only ever filled, never blanked here: a paper whose
@@ -302,13 +413,17 @@ __all__ = [
     "SCHEME_SHA256",
     "SCHEME_URL",
     "build_fingerprint_from_identifiers",
+    "file_sha256",
     "find_identifier",
     "identifier_fingerprint",
     "identifier_rows_for_scheme",
     "identifiers_for_paper",
     "mirror_legacy_columns",
     "normalize_identifier",
+    "primary_fingerprint",
     "primary_identifier",
     "refresh_primary",
+    "replace_identifier",
+    "upgrade_fingerprint",
     "upsert_identifier",
 ]

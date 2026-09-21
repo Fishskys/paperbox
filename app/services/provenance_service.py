@@ -427,11 +427,23 @@ def _names_equal(paper: Paper, names: Sequence[str]) -> bool:
     return paper_service.paper_author_names(paper) == list(names)
 
 
-def _write_identifier(session: Session, paper: Paper, scheme: str, value: Any) -> bool:
-    """Identifier claims keep the table and the mirrored columns in step."""
-    row = identifiers.upsert_identifier(
-        session, paper_id=paper.id, scheme=scheme, value=str(value)
-    )
+def _write_identifier(
+    session: Session, paper: Paper, scheme: str, value: Any, *, replace: bool = False
+) -> bool:
+    """Identifier claims keep the table and the mirrored columns in step.
+
+    ``replace=True`` (rollback) also drops the other values of the same scheme: the
+    claim being restored was the value in force at that time, so any later DOI for
+    the same paper is what the rollback is undoing.
+    """
+    if replace:
+        row = identifiers.replace_identifier(
+            session, paper_id=paper.id, scheme=scheme, value=str(value)
+        )
+    else:
+        row = identifiers.upsert_identifier(
+            session, paper_id=paper.id, scheme=scheme, value=str(value)
+        )
     if row is None:
         return False
     identifiers.refresh_primary(session, paper.id)
@@ -444,7 +456,7 @@ def _restore_identifier(session: Session, paper: Paper, scheme: str, value: Any)
     attribute = "doi" if scheme == identifiers.SCHEME_DOI else "arxiv_id" if scheme == identifiers.SCHEME_ARXIV else None
     if attribute is not None and value:
         setattr(paper, attribute, identifiers.normalize_identifier(scheme, str(value)))
-    _write_identifier(session, paper, scheme, value)
+    _write_identifier(session, paper, scheme, value, replace=True)
 
 
 def _write_tags(session: Session, paper: Paper, field: str, value: Any) -> bool:
@@ -507,6 +519,45 @@ def provenance_summary(
     return summary
 
 
+def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]]:
+    """Disagreements the merge engine filed: a losing claim plus the winning one.
+
+    A conflict is a *non-current* claim whose value differs from the current one for
+    the same field -- exactly what rule R2 records instead of overwriting (section 8
+    of the design). This is the second half of ``GET /api/metadata/review``.
+    """
+    statement = (
+        select(PaperFieldProvenance)
+        .where(PaperFieldProvenance.is_current.is_(False))
+        .order_by(PaperFieldProvenance.decided_at.desc())
+        .limit(max(1, min(limit * 4, 800)))
+    )
+    rows = list(session.execute(statement).scalars().all())
+    seen: set[tuple[str, str]] = set()
+    conflicts: list[dict[str, Any]] = []
+    for row in rows:
+        key = (row.paper_id, row.field)
+        if key in seen:
+            continue
+        current = current_claim(session, row.paper_id, row.field)
+        if current is None or _same_value(current.value, row.value):
+            continue
+        seen.add(key)
+        conflicts.append(
+            {
+                "paper_id": row.paper_id,
+                "field": row.field,
+                "kept": current.value,
+                "rejected": row.value,
+                "source_id": row.source_id,
+                "decided_at": row.decided_at,
+            }
+        )
+        if len(conflicts) >= max(1, min(limit, 200)):
+            break
+    return conflicts
+
+
 def utcnow() -> datetime:  # pragma: no cover - trivial helper used by callers
     return datetime.now(timezone.utc)
 
@@ -543,6 +594,7 @@ __all__ = [
     "provenance_summary",
     "read_field",
     "record_claim",
+    "recorded_conflicts",
     "rollback_field",
     "scheme_of_identifier_field",
     "set_field",

@@ -52,9 +52,12 @@ def _sqlite_table(table, metadata) -> Table:
     return Table(table.name, metadata, *columns, *constraints)
 
 
-@pytest.fixture()
-def db_session():
-    """An in-memory SQLite session holding every paperbox table."""
+def build_session_factory():
+    """An in-memory SQLite session factory holding every paperbox table.
+
+    Returns ``(factory, engine)``; the caller disposes the engine. Used by the API
+    tests, which need a factory to override ``get_db`` with.
+    """
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -65,8 +68,24 @@ def db_session():
     for table in Base.metadata.sorted_tables:
         _sqlite_table(table, metadata)
     metadata.create_all(engine)
-
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    return factory, engine
+
+
+@pytest.fixture()
+def session_factory():
+    """``build_session_factory`` as a fixture."""
+    factory, engine = build_session_factory()
+    try:
+        yield factory
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture()
+def db_session():
+    """An in-memory SQLite session holding every paperbox table."""
+    factory, engine = build_session_factory()
     session = factory()
     try:
         yield session

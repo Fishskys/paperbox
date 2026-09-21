@@ -20,6 +20,7 @@ from app import __version__
 from app.api import ingestion as ingestion_api
 from app.api import jobs as jobs_api
 from app.api import health as health_api
+from app.api import metadata as metadata_api
 from app.api import papers as papers_api
 from app.api import search as search_api
 from app.api import search_logs as search_logs_api
@@ -81,6 +82,7 @@ app.include_router(health_api.router)
 app.include_router(ingestion_api.router)
 app.include_router(jobs_api.router)
 app.include_router(papers_api.router)
+app.include_router(metadata_api.router)
 app.include_router(search_api.router)
 app.include_router(search_logs_api.router)
 
