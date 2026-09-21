@@ -49,7 +49,7 @@ IEEE_SAMPLE = {
 }
 
 
-def make_legacy_paper(session, *, with_doi=True, with_arxiv=False) -> Paper:
+def make_legacy_paper(session, *, with_doi=True, with_arxiv=False, sha=SHA) -> Paper:
     """A paper exactly as the pre-metadata pipeline left it."""
     paper = Paper(
         id=paper_service.new_uuid(),
@@ -74,7 +74,7 @@ def make_legacy_paper(session, *, with_doi=True, with_arxiv=False) -> Paper:
             filename="original.pdf",
             content_type="application/pdf",
             size_bytes=10,
-            sha256=SHA,
+            sha256=sha,
         )
     )
     session.flush()
@@ -129,12 +129,36 @@ def test_backfill_is_idempotent(db_session) -> None:
     second = backfill_metadata.backfill_paper(db_session, paper, dry_run=False)
 
     assert first["sources"] == 1
-    assert second == {"sources": 0, "claims": 0, "identifiers": 0, "primary_files": 0}
+    assert second == {
+        "sources": 0,
+        "claims": 0,
+        "identifiers": 0,
+        "primary_files": 0,
+        "conflicts": 0,
+    }
     assert counts == (
         db_session.query(PaperSource).count(),
         db_session.query(PaperFieldProvenance).count(),
         db_session.query(PaperIdentifier).count(),
     )
+
+
+def test_backfill_reports_a_duplicate_identifier_instead_of_failing(db_session) -> None:
+    """Two live papers with the same arXiv id: one identifier, one warning."""
+    owner = make_legacy_paper(db_session, with_doi=False, with_arxiv=True)
+    backfill_metadata.backfill_paper(db_session, owner, dry_run=False)
+    duplicate = make_legacy_paper(
+        db_session, with_doi=False, with_arxiv=True, sha="b" * 64
+    )
+
+    counters = backfill_metadata.backfill_paper(db_session, duplicate, dry_run=False)
+
+    assert counters["conflicts"] == 1
+    arxiv_rows = [
+        row for row in db_session.query(PaperIdentifier).all() if row.scheme == "arxiv"
+    ]
+    assert len(arxiv_rows) == 1
+    assert arxiv_rows[0].paper_id == owner.id
 
 
 def test_backfill_dry_run_writes_nothing(db_session) -> None:

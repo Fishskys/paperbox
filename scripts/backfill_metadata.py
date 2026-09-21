@@ -94,9 +94,23 @@ def current_values(paper: Paper) -> dict[str, object]:
     return values
 
 
+def _owned_by_another_paper(session, scheme: str, value: str, paper_id: str) -> bool:
+    """Whether this identifier is already claimed by a *different* paper.
+
+    ``paper_identifiers`` allows one row per ``(scheme, normalized_value)``: when two
+    live papers carry the same DOI/arXiv id the library has a duplicate, and the
+    backfill must report it instead of failing on the unique index.
+    """
+    normalized = identifiers.normalize_identifier(scheme, value)
+    if not normalized:
+        return False
+    row = identifiers.find_identifier(session, scheme, normalized)
+    return row is not None and row.paper_id != paper_id
+
+
 def backfill_paper(session, paper: Paper, *, dry_run: bool) -> dict[str, int]:
     """Backfill one paper; returns the counters it contributed."""
-    counters = {"sources": 0, "claims": 0, "identifiers": 0, "primary_files": 0}
+    counters = {"sources": 0, "claims": 0, "identifiers": 0, "primary_files": 0, "conflicts": 0}
     source_ref = sources.paper_heuristic_ref(paper.id)
     existing = sources.find_source(
         session, sources.SOURCE_TYPE_PDF_HEURISTIC, source_ref
@@ -147,6 +161,16 @@ def backfill_paper(session, paper: Paper, *, dry_run: bool) -> dict[str, int]:
     ):
         if not value or scheme in known:
             continue
+        if _owned_by_another_paper(session, scheme, value, paper.id):
+            # The dedupe floor: one identifier belongs to one paper, so a second
+            # paper claiming the same DOI/arXiv id is a real duplicate that needs a
+            # human, not a second identifier row.
+            counters["conflicts"] = counters.get("conflicts", 0) + 1
+            print(
+                f"  WARNING: {scheme} {value} already belongs to another paper "
+                f"(skipped for {paper.id})"
+            )
+            continue
         counters["identifiers"] += 1
         if not dry_run:
             identifiers.upsert_identifier(
@@ -159,15 +183,20 @@ def backfill_paper(session, paper: Paper, *, dry_run: bool) -> dict[str, int]:
     file_record = paper_service.original_file(paper)
     digest = getattr(file_record, "sha256", None) if file_record is not None else None
     if digest and identifiers.SCHEME_SHA256 not in known:
-        counters["identifiers"] += 1
-        if not dry_run:
-            identifiers.upsert_identifier(
-                session,
-                paper_id=paper.id,
-                scheme=identifiers.SCHEME_SHA256,
-                value=digest,
-                first_source_id=source_id,
-            )
+        if _owned_by_another_paper(
+            session, identifiers.SCHEME_SHA256, digest, paper.id
+        ):
+            counters["conflicts"] = counters.get("conflicts", 0) + 1
+        else:
+            counters["identifiers"] += 1
+            if not dry_run:
+                identifiers.upsert_identifier(
+                    session,
+                    paper_id=paper.id,
+                    scheme=identifiers.SCHEME_SHA256,
+                    value=digest,
+                    first_source_id=source_id,
+                )
     if not dry_run and (paper.doi or paper.arxiv_id):
         identifiers.refresh_primary(session, paper.id)
 
@@ -191,7 +220,14 @@ def main() -> int:
     args = parser.parse_args()
 
     session = SessionLocal()
-    totals = {"papers": 0, "sources": 0, "claims": 0, "identifiers": 0, "primary_files": 0}
+    totals = {
+        "papers": 0,
+        "sources": 0,
+        "claims": 0,
+        "identifiers": 0,
+        "primary_files": 0,
+        "conflicts": 0,
+    }
     fingerprints: dict[str, str] = {}
     try:
         papers = live_papers(session)
@@ -203,7 +239,7 @@ def main() -> int:
             counters = backfill_paper(session, paper, dry_run=args.dry_run)
             totals["papers"] += 1
             for key, value in counters.items():
-                totals[key] += value
+                totals[key] = totals.get(key, 0) + value
             after = paper.fingerprint
             if before != after:
                 fingerprints[paper.id] = f"{before} -> {after}"
@@ -215,7 +251,8 @@ def main() -> int:
             session.commit()
         print(
             f"papers={totals['papers']} sources={totals['sources']} claims={totals['claims']} "
-            f"identifiers={totals['identifiers']} primary_files={totals['primary_files']}"
+            f"identifiers={totals['identifiers']} primary_files={totals['primary_files']} "
+            f"duplicate_identifiers={totals['conflicts']}"
         )
         if fingerprints:
             print(f"WARNING: {len(fingerprints)} fingerprint(s) changed:")
