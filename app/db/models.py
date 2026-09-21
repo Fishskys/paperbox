@@ -5,6 +5,14 @@ Nine tables form the minimum viable model:
     papers, authors, venues, paper_authors, paper_tags, papers_tags,
     paper_files, paper_chunks, ingestion_jobs
 
+The multi-source metadata layer (docs/metadata-architecture.md) adds four more:
+
+    paper_sources, paper_identifiers, paper_field_provenance, venue_editions
+
+so a paper is now ``papers <- paper_sources <- paper_field_provenance`` with
+``paper_identifiers`` as the dedupe skeleton and venues split into
+``venues`` (the entity) + ``venue_editions`` (one row per year).
+
 Conventions:
 * paper primary keys are UUID strings (they appear verbatim in API paths),
 * ``papers.fingerprint`` is unique and drives deduplication,
@@ -18,11 +26,12 @@ Conventions:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -72,6 +81,7 @@ class Paper(TimestampMixin, Base):
         Index("ix_papers_year", "year"),
         Index("ix_papers_status", "status"),
         Index("ix_papers_created_at", "created_at"),
+        Index("ix_papers_venue_year", "venue_year"),
         # Only live papers claim a fingerprint: deleting a paper releases it so the
         # same document can be ingested again (plan sections 5.1 and 23). The
         # deleted row keeps its value for audit/recovery.
@@ -100,6 +110,18 @@ class Paper(TimestampMixin, Base):
     venue_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("venues.id", ondelete="SET NULL")
     )
+    #: Bibliographic detail of the merged current value (docs/metadata-architecture.md
+    #: section 3.5). ``venue_year`` is a redundant copy of ``venue_editions.year``
+    #: so "venue + year" can be filtered without a join.
+    volume: Mapped[str | None] = mapped_column(String(32))
+    issue: Mapped[str | None] = mapped_column(String(32))
+    pages: Mapped[str | None] = mapped_column(String(64))
+    publication_date: Mapped[date | None] = mapped_column(Date)
+    paper_type: Mapped[str | None] = mapped_column(String(32))
+    venue_edition_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("venue_editions.id", ondelete="SET NULL")
+    )
+    venue_year: Mapped[int | None] = mapped_column(Integer)
 
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'pending'")
@@ -110,6 +132,16 @@ class Paper(TimestampMixin, Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     venue: Mapped["Venue | None"] = relationship(back_populates="papers")
+    venue_edition: Mapped["VenueEdition | None"] = relationship(back_populates="papers")
+    sources: Mapped[list["PaperSource"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
+    identifiers: Mapped[list["PaperIdentifier"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
+    field_provenance: Mapped[list["PaperFieldProvenance"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
     paper_authors: Mapped[list["PaperAuthor"]] = relationship(
         back_populates="paper", cascade="all, delete-orphan"
     )
@@ -173,8 +205,13 @@ class Venue(TimestampMixin, Base):
     )
     kind: Mapped[str | None] = mapped_column(String(32))
     publisher: Mapped[str | None] = mapped_column(String(255))
+    #: ISSN printed by the source (IEEE publishes it per journal/collection).
+    issn: Mapped[str | None] = mapped_column(String(64))
 
     papers: Mapped[list["Paper"]] = relationship(back_populates="venue")
+    editions: Mapped[list["VenueEdition"]] = relationship(
+        back_populates="venue", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Venue id={self.id} name={self.name!r}>"
@@ -257,6 +294,12 @@ class PapersTag(Base):
         ForeignKey("paper_tags.id", ondelete="CASCADE"),
         nullable=False,
     )
+    #: Which flavour of tag this link is: ``ieee_terms`` / ``author_terms`` /
+    #: ``dynamic_index_terms`` / ``source_tag`` (decision 10). Existing links
+    #: default to the catch-all ``source_tag``.
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'source_tag'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -275,6 +318,14 @@ class PaperFile(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_paper_files_paper_id", "paper_id"),
         Index("ix_paper_files_sha256", "sha256"),
+        # Exactly one live primary version per paper: the only file that is
+        # parsed, chunked and indexed (section 7.1 of the plan).
+        Index(
+            "uq_paper_files_primary",
+            "paper_id",
+            unique=True,
+            postgresql_where=text("is_primary AND deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -283,6 +334,11 @@ class PaperFile(TimestampMixin, Base):
     paper_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
     )
+    #: Which source record brought this PDF (arXiv preprint vs. published version).
+    source_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("paper_sources.id", ondelete="SET NULL")
+    )
+    #: ``original`` / ``arxiv_pdf`` / ``published_pdf`` / ``supplement``.
     kind: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'original'")
     )
@@ -292,9 +348,13 @@ class PaperFile(TimestampMixin, Base):
     content_type: Mapped[str | None] = mapped_column(String(128))
     size_bytes: Mapped[int | None] = mapped_column(Integer)
     sha256: Mapped[str | None] = mapped_column(String(64))
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     paper: Mapped["Paper"] = relationship(back_populates="files")
+    source: Mapped["PaperSource | None"] = relationship()
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<PaperFile id={self.id} key={self.object_key!r}>"
@@ -386,6 +446,228 @@ class IngestionJob(TimestampMixin, Base):
         return f"<IngestionJob id={self.id} stage={self.stage} progress={self.progress}>"
 
 
+# --------------------------------------------------------------------------- #
+# paper_sources (where a description of the paper came from)
+# --------------------------------------------------------------------------- #
+class PaperSource(Base):
+    """One description of a paper: IEEE JSON, arXiv API, PDF embed, manual...
+
+    ``paper_id`` is nullable on purpose -- a record that could not be matched yet
+    still lands here (``match_status='pending'``/``'ambiguous'``) so a later PDF
+    upload or a human decision can attach it. ``UNIQUE(source_type, source_ref)``
+    makes a repeated import idempotent, and ``raw`` keeps the payload verbatim so
+    a future parser can be replayed without re-fetching the source.
+    """
+
+    __tablename__ = "paper_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type", "source_ref", name="uq_paper_sources_type_ref"
+        ),
+        Index("ix_paper_sources_paper_id", "paper_id"),
+        Index("ix_paper_sources_match_status", "match_status"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=new_uuid
+    )
+    paper_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE")
+    )
+    #: ``ieee_api`` / ``arxiv_api`` / ``crossref`` / ``pdf_embedded`` /
+    #: ``pdf_heuristic`` / ``import_file`` / ``manual``.
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Stable key inside the source: ``doi:...``, ``arxiv:...``, ``ieee:7065247``,
+    #: ``file:<abspath>:<sha256>``, ``paper:<uuid>:heuristic``.
+    source_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(32))
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
+    match_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    match_method: Mapped[str | None] = mapped_column(String(32))
+    match_confidence: Mapped[float | None] = mapped_column(Float)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    importer: Mapped[str | None] = mapped_column(String(128))
+
+    paper: Mapped["Paper | None"] = relationship(back_populates="sources")
+    field_provenance: Mapped[list["PaperFieldProvenance"]] = relationship(
+        back_populates="source"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<PaperSource type={self.source_type} ref={self.source_ref!r} "
+            f"status={self.match_status}>"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# paper_identifiers (dedupe skeleton)
+# --------------------------------------------------------------------------- #
+class PaperIdentifier(Base):
+    """One normalized identifier of a paper (DOI, arXiv id, IEEE article number...).
+
+    The partial unique index ``uq_paper_identifiers_scheme_value`` is the dedupe
+    floor: one identifier belongs to exactly one paper, so two sources quoting the
+    same DOI cannot end up on two rows. ``is_primary`` marks the identifier that
+    feeds ``papers.fingerprint``.
+    """
+
+    __tablename__ = "paper_identifiers"
+    __table_args__ = (
+        UniqueConstraint(
+            "paper_id",
+            "scheme",
+            "normalized_value",
+            name="uq_paper_identifiers_paper_scheme_value",
+        ),
+        Index(
+            "uq_paper_identifiers_scheme_value",
+            "scheme",
+            "normalized_value",
+            unique=True,
+            postgresql_where=text("paper_id IS NOT NULL"),
+        ),
+        Index("ix_paper_identifiers_paper_id", "paper_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=new_uuid
+    )
+    paper_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``doi`` / ``arxiv`` / ``ieee_article_number`` / ``issn`` / ``isbn`` /
+    #: ``pmid`` / ``openalex`` / ``semantic_scholar`` / ``url`` / ``sha256``.
+    scheme: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(Text, nullable=False)
+    first_source_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("paper_sources.id", ondelete="SET NULL")
+    )
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    paper: Mapped["Paper"] = relationship(back_populates="identifiers")
+    first_source: Mapped["PaperSource | None"] = relationship()
+    provenance: Mapped[list["PaperFieldProvenance"]] = relationship(
+        back_populates="identifier", foreign_keys="PaperFieldProvenance.identifier_id"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<PaperIdentifier scheme={self.scheme} value={self.value!r}>"
+
+
+# --------------------------------------------------------------------------- #
+# paper_field_provenance (who said what, when, and whether it still counts)
+# --------------------------------------------------------------------------- #
+class PaperFieldProvenance(Base):
+    """One field-level claim about a paper.
+
+    History is append-only: a new value flips the previous current row to
+    ``is_current=false`` instead of deleting it, which is what makes a rollback
+    (section 6 of the plan) and "who overwrote whom" answerable at all.
+    """
+
+    __tablename__ = "paper_field_provenance"
+    __table_args__ = (
+        Index(
+            "uq_paper_field_provenance_current",
+            "paper_id",
+            "field",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+        Index("ix_paper_field_provenance_paper_field", "paper_id", "field"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=new_uuid
+    )
+    paper_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``NULL`` = system/human decision without a source record.
+    source_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("paper_sources.id", ondelete="SET NULL")
+    )
+    #: ``title`` / ``abstract`` / ``year`` / ``venue`` / ``volume`` / ``issue`` /
+    #: ``pages`` / ``authors`` / ``publication_date`` / ``paper_type`` /
+    #: ``identifier:doi`` / ``tag:ieee_terms`` / ...
+    field: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[object] = mapped_column(JSONB, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    #: ``initial`` / ``structured_override`` / ``manual``.
+    decided_by: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'initial'")
+    )
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    #: Set when the claim is about a specific identifier row (``identifier:doi``).
+    identifier_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("paper_identifiers.id", ondelete="SET NULL")
+    )
+
+    paper: Mapped["Paper"] = relationship(back_populates="field_provenance")
+    source: Mapped["PaperSource | None"] = relationship(back_populates="field_provenance")
+    identifier: Mapped["PaperIdentifier | None"] = relationship(
+        back_populates="provenance", foreign_keys=[identifier_id]
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<PaperFieldProvenance field={self.field} current={self.is_current} "
+            f"by={self.decided_by}>"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# venue_editions (one year of a venue)
+# --------------------------------------------------------------------------- #
+class VenueEdition(Base):
+    """A single year of a venue: the granularity decisions 7 asks for.
+
+    Searching "the conference" matches :class:`Venue`; searching "the conference
+    + 2015" matches this row (``papers.venue_year`` mirrors ``year`` so the
+    filter needs no join). The year is never glued into the venue name.
+    """
+
+    __tablename__ = "venue_editions"
+    __table_args__ = (
+        UniqueConstraint("venue_id", "year", name="uq_venue_editions_venue_year"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=new_uuid
+    )
+    venue_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    location: Mapped[str | None] = mapped_column(Text)
+    dates: Mapped[str | None] = mapped_column(Text)
+    publication_number: Mapped[str | None] = mapped_column(String(64))
+    is_number: Mapped[str | None] = mapped_column(String(64))
+
+    venue: Mapped["Venue"] = relationship(back_populates="editions")
+    papers: Mapped[list["Paper"]] = relationship(back_populates="venue_edition")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<VenueEdition venue_id={self.venue_id} year={self.year}>"
+
+
 class SearchQuery(Base):
     """One logged ``POST /api/search`` call (SPEC-P1 section B).
 
@@ -435,10 +717,14 @@ __all__ = [
     "Paper",
     "PaperAuthor",
     "PaperChunk",
+    "PaperFieldProvenance",
     "PaperFile",
+    "PaperIdentifier",
+    "PaperSource",
     "PaperTag",
     "SearchQuery",
     "PapersTag",
     "Venue",
+    "VenueEdition",
     "new_uuid",
 ]
