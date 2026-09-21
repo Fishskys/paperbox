@@ -209,6 +209,69 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
 **客户端脚本**：`scripts/bulk_ingest_dir.py`（同机默认走 `/ingest/dir`；远端用 `--via-http` 走 `/ingest/files`，
 默认每请求 1 个文件 + 429 退避；`--resume` 读上次报告跳过已完成）。
 
+### 3.4 元数据：多来源、外部导入、手动编辑（2026-09-21）
+
+架构权威是 `docs/metadata-architecture.md`；实测数字与坑见 `progress.md` §17。
+
+**三层模型**：论文（`papers`，唯一）+ 来源记录（`paper_sources`，一份外部数据/一次解析一行）+
+字段声明（`paper_field_provenance`，谁在什么时候把哪个字段写成了什么）。标识符表
+（`paper_identifiers`）作去重骨架，`venue` 与年份分离（`venues` + `venue_editions`）。
+
+**合并规则（R2，只有两条）**：① 只填空；② 结构化来源（`import_file`/`ieee_api`/`arxiv_api`/
+`crossref`/`pdf_embedded`/`manual`）可以覆盖 `pdf_heuristic`（首页启发式）。结构化来源之间**不比较
+权威性**——冲突登记进 `paper_field_provenance`（`is_current=false`）并出现在复核清单里，由人决定。
+`manual`（PATCH）不受 R2 约束。
+
+**标识符阶梯**：`DOI > arXiv > 标题+首作者+年 > sha256`。主标识符决定 `papers.fingerprint`
+（`doi:…` / `arxiv:…` / `title:…|作者|年` / `sha256:…`），改 DOI 会升级指纹。一个标识符只能属一篇
+论文；**删除论文会释放它的标识符**（否则墓碑会永久占住 DOI）。
+
+**主版本规则**：一篇论文的多个 PDF 里只有一个是主版本（`published_pdf > original > arxiv_pdf`），
+只有主版本会被解析、切块、索引；其余照样入库登记（`is_primary=false`）但不解析。`GET /api/papers/{id}/file`
+返回主版本。
+
+**两种导入顺序都支持**：先 PDF 后元数据（摄取后导入补全），或先元数据后 PDF（导入未知记录建
+`status=AWAITING_FILE` 的壳论文，PDF 到达时**复用同一 `paper_id`**）。
+
+```bash
+# 导入外部记录（默认 dry_run：只匹配并报告，不落库）
+curl -X POST http://127.0.0.1:8077/api/metadata/import \
+  -H "Authorization: Bearer ***" -F file=@ieee-export.json -F source_type=import_file
+# -> {"total_records":1,"matched":1,"created_shell":0,"ambiguous":0,"unchanged":0,
+#     "sources":[{"source_ref":"doi:10.1109/...","paper_id":"...","decision":"matched"}],
+#     "conflicts":[],"dry_run":true}
+# 真正落库：加 ?apply=true（或 dry_run=false）
+
+# 复核清单（没匹配上的来源 + 已登记的字段冲突）
+curl -H "Authorization: Bearer ***" 'http://127.0.0.1:8077/api/metadata/review?limit=20'
+# 人工把一条来源挂到某篇论文上
+curl -X POST http://127.0.0.1:8077/api/metadata/sources/<source_id>/attach \
+  -H "Authorization: Bearer ***" -H 'Content-Type: application/json' -d '{"paper_id":"<uuid>"}'
+
+# 看某篇论文的当前值 + 每字段来源与历史
+curl -H "Authorization: Bearer ***" http://127.0.0.1:8077/api/papers/<paper_id>/metadata
+# 手动改（decided_by='manual'，不受 R2 约束；未知字段在 rejected 里回显）
+curl -X PATCH http://127.0.0.1:8077/api/papers/<paper_id>/metadata \
+  -H "Authorization: Bearer ***" -H 'Content-Type: application/json' \
+  -d '{"volume":"62","issue":"7","doi":"10.1109/JSSC.2015.2441234"}'
+# 回滚某字段到历史主张（历史不删）
+curl -X POST http://127.0.0.1:8077/api/papers/<paper_id>/metadata/rollback \
+  -H "Authorization: Bearer ***" -H 'Content-Type: application/json' \
+  -d '{"field":"volume","provenance_id":"<claim uuid>"}'
+```
+
+**脚本**：
+
+```bash
+uv run python scripts/import_metadata.py records.json --dry-run     # 或 --apply / --report out.json
+uv run python scripts/backfill_metadata.py --dry-run                # 给历史论文补来源/声明/标识符/主版本
+uv run python scripts/acceptance_metadata.py [--cleanup]            # 真机验收 7 项（需要 API 已启动）
+```
+
+**注意（已知行为，非缺陷）**：检索的过滤字段（venue/year/tags/doi）在 chunk 文档上，
+`PATCH /metadata` 与导入只改 PostgreSQL；想让改动立刻进入检索过滤，需对受影响论文调
+`POST /api/papers/{id}/reindex`。
+
 ## 4. 使用示例
 
 ```bash

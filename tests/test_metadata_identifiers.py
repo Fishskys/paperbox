@@ -10,7 +10,7 @@ import pytest  # noqa: F401 - fixtures come from conftest
 
 from app.db.models import Paper, new_uuid
 from app.services import metadata_identifiers as ids
-from app.services import paper_service
+from app.services import paper_service, provenance_service
 
 
 def make_paper(session, **overrides) -> Paper:
@@ -202,6 +202,55 @@ def test_upsert_refuses_to_move_an_identifier_to_another_paper(db_session) -> No
     assert returned.id == existing.id
     assert returned.paper_id == first.id
     assert ids.identifiers_for_paper(db_session, second.id) == []
+
+
+def test_upsert_reclaims_an_identifier_from_a_deleted_paper(db_session) -> None:
+    """A soft-deleted paper must not keep its DOI out of circulation."""
+    from datetime import datetime, timezone
+
+    first = make_paper(db_session)
+    ids.upsert_identifier(
+        db_session, paper_id=first.id, scheme=ids.SCHEME_DOI, value="10.1/x"
+    )
+    first.deleted_at = datetime.now(timezone.utc)
+    db_session.flush()
+    second = make_paper(db_session, title="Re-ingested")
+
+    row = ids.upsert_identifier(
+        db_session, paper_id=second.id, scheme=ids.SCHEME_DOI, value="10.1/x"
+    )
+
+    assert row.paper_id == second.id
+    assert [
+        item.paper_id for item in ids.identifiers_for_paper(db_session, second.id)
+    ] == [second.id]
+
+
+def test_soft_delete_releases_the_identifiers(db_session) -> None:
+    """Deleting a paper frees its DOI for a future ingest (like the fingerprint)."""
+    paper = make_paper(db_session)
+    ids.upsert_identifier(
+        db_session, paper_id=paper.id, scheme=ids.SCHEME_DOI, value="10.1/x"
+    )
+    ids.upsert_identifier(
+        db_session, paper_id=paper.id, scheme=ids.SCHEME_SHA256, value="a" * 64
+    )
+
+    paper_service.soft_delete_paper(db_session, paper)
+
+    assert ids.identifiers_for_paper(db_session, paper.id) == []
+    assert ids.find_identifier(db_session, ids.SCHEME_DOI, "10.1/x") is None
+    assert paper.status == paper_service.STATUS_DELETED
+
+
+def test_soft_delete_keeps_the_claim_history(db_session) -> None:
+    """The ledger is history, not state: it survives the deletion."""
+    paper = make_paper(db_session)
+    provenance_service.set_field(db_session, paper, "title", "Kept as history")
+
+    paper_service.soft_delete_paper(db_session, paper)
+
+    assert provenance_service.current_claim(db_session, paper.id, "title") is not None
 
 
 def test_upsert_ignores_unusable_values(db_session) -> None:

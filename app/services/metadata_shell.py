@@ -14,10 +14,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.db.models import Paper, PaperSource, new_uuid
+from app.db.models import IngestionJob, Paper, PaperSource, new_uuid
 from app.services import metadata_identifiers as identifiers
 from app.services import metadata_merge as merge
 from app.services import metadata_sources as sources
@@ -160,9 +161,22 @@ def adopt_paper(
         moved += 1
     session.flush()
 
-    # The files moved, so the ORM's cached collection is wrong: expire it before
-    # deleting the row, or the cascade would delete the rows we just re-pointed.
-    session.expire(paper, ["files"])
+    # The job that is running this ingest points at the throwaway paper, and
+    # ``papers.ingestion_jobs`` cascades on delete: without re-pointing it here the
+    # job row (the only handle ``GET /api/jobs/{id}`` has) would vanish with the
+    # paper and the caller would poll a 404 for a job that actually succeeded.
+    jobs = list(
+        session.execute(
+            select(IngestionJob).where(IngestionJob.paper_id == paper.id)
+        ).scalars().all()
+    )
+    for job in jobs:
+        job.paper_id = target.id
+    session.flush()
+
+    # The files and jobs moved, so the ORM's cached collections are wrong: expire
+    # them before deleting the row, or the cascade would delete what we re-pointed.
+    session.expire(paper, ["files", "ingestion_jobs"])
     session.delete(paper)
     session.flush()
 

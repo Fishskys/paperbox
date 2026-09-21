@@ -208,6 +208,35 @@ def test_adopt_moves_the_file_and_drops_the_throwaway_row(db_session, monkeypatc
     assert row.id == record.id
 
 
+def test_adoption_keeps_the_running_job_and_re_points_it(db_session, monkeypatch) -> None:
+    """The job row must survive: it is the only handle ``GET /api/jobs/{id}`` has."""
+    from app.db.models import IngestionJob
+    from app.services import ingestion_service as ingest
+
+    shell = make_shell(db_session, {"title": SHELL_TITLE, "year": 2015})
+    temp = make_temp_paper(db_session)
+    paper_service.register_original_file(
+        db_session,
+        temp,
+        object_key=f"papers/{temp.id}/original.pdf",
+        bucket="paperbox",
+        filename="a.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+    )
+    job = ingest.create_job(
+        db_session, source_type="file", filename="low power sram.pdf"
+    )
+    job.paper_id = temp.id
+    db_session.flush()
+    monkeypatch.setattr(tasks.object_storage, "move_object", lambda *a, **kw: True)
+
+    metadata_shell.adopt_paper(db_session, temp, shell)
+
+    assert db_session.get(IngestionJob, job.id) is not None
+    assert db_session.get(IngestionJob, job.id).paper_id == shell.id
+
+
 def test_adoption_keeps_the_file_readable_when_minio_refuses(db_session, monkeypatch) -> None:
     shell = make_shell(db_session, {"title": "T"})
     temp = make_temp_paper(db_session)

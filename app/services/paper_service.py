@@ -23,7 +23,7 @@ from sqlalchemy import inspect as sqlalchemy_inspect, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
-from app.db.models import Author, Paper, PaperAuthor, PaperFile, new_uuid
+from app.db.models import Author, Paper, PaperAuthor, PaperFile, PaperIdentifier, new_uuid
 
 logger = get_logger(__name__)
 
@@ -545,13 +545,26 @@ def register_original_file(
 
 
 def soft_delete_paper(session: Session, paper: Paper) -> Paper:
-    """Mark a paper (and its files) deleted; the caller commits."""
+    """Mark a paper (and its files) deleted; the caller commits.
+
+    The paper's ``paper_identifiers`` rows are *deleted* rather than kept: an
+    identifier belongs to exactly one paper (``UNIQUE(scheme, normalized_value)``)
+    and a tombstone that still holds a DOI would block the same DOI from ever being
+    registered again -- which is precisely what deleting a paper is supposed to
+    release, exactly like the partial unique index on ``papers.fingerprint``
+    (``WHERE deleted_at IS NULL``). The claim history in
+    ``paper_field_provenance`` and the source snapshots in ``paper_sources`` stay,
+    so nothing about *what the paper said* is lost.
+    """
     now = datetime.now(timezone.utc)
     paper.deleted_at = now
     paper.status = STATUS_DELETED
     for record in paper.files:
         if record.deleted_at is None:
             record.deleted_at = now
+    session.query(PaperIdentifier).filter(PaperIdentifier.paper_id == paper.id).delete(
+        synchronize_session=False
+    )
     session.flush()
     return paper
 

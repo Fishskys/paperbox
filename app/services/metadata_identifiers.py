@@ -214,8 +214,30 @@ def upsert_identifier(
     if existing is not None:
         if existing.paper_id == paper_id:
             return existing
-        # Owned by another paper: the partial unique index forbids re-pointing it
-        # here, and silently stealing an identifier would merge two papers behind
+        owner = session.get(Paper, existing.paper_id)
+        if owner is None or owner.deleted_at is not None:
+            # The owner is gone (or soft-deleted): re-point the row instead of
+            # letting a tombstone keep the DOI out of circulation forever.
+            logger.info(
+                "identifier %s:%s re-pointed from deleted paper %s",
+                scheme,
+                normalized,
+                existing.paper_id,
+                extra={
+                    "extra_fields": {
+                        "scheme": scheme,
+                        "value": normalized,
+                        "paper_id": paper_id,
+                    }
+                },
+            )
+            existing.paper_id = paper_id
+            if first_source_id and not existing.first_source_id:
+                existing.first_source_id = first_source_id
+            session.flush()
+            return existing
+        # Owned by another live paper: the partial unique index forbids re-pointing
+        # it here, and silently stealing an identifier would merge two papers behind
         # the caller's back. The matcher handles this as a conflict instead.
         logger.warning(
             "identifier %s:%s already belongs to paper %s",
