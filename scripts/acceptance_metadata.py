@@ -34,6 +34,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,6 +161,9 @@ class Api:
 
     def patch(self, url: str, **kwargs) -> httpx.Response:
         return self.client.patch(url, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> httpx.Response:
+        return self.client.delete(url, **kwargs)
 
     def close(self) -> None:
         self.client.close()
@@ -596,6 +600,34 @@ def wait_for_job(api: Api, job_id: str, timeout_s: float = 180.0) -> dict:
     return last
 
 
+def cleanup(api: Api, session, checker: Checker, *, started_at: datetime) -> None:
+    """Remove the papers *and* the source records this run created.
+
+    A source row outlives its paper (the FK is ``ON DELETE SET NULL``: the record is
+    history), so the synthetic records that never matched a paper would otherwise
+    pile up in the review queue a little on every run.
+    """
+    deleted = 0
+    for paper_id in checker.created:
+        if api.delete(f"/api/papers/{paper_id}").status_code in (204, 404):
+            deleted += 1
+    print(f"cleanup: deleted {deleted}/{len(checker.created)} created paper(s)")
+
+    session.expire_all()
+    orphans = [
+        source
+        for source in session.execute(
+            select(PaperSource).where(PaperSource.imported_at >= started_at)
+        ).scalars()
+        if source.paper_id is None
+    ]
+    for source in orphans:
+        session.delete(source)
+    session.commit()
+    if orphans:
+        print(f"cleanup: deleted {len(orphans)} source record(s) with no paper")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8077")
@@ -615,6 +647,7 @@ def main() -> int:
     api = Api(args.base_url, settings.paper_api_key)
     session = SessionLocal()
     stamp = time.strftime("%Y%m%d%H%M%S")
+    started_at = datetime.now(timezone.utc)
     print(f"acceptance run {stamp} against {args.base_url}")
     try:
         check_backfill(session, checker)
@@ -665,11 +698,7 @@ def main() -> int:
 
         print(f"\npapers created by this run: {', '.join(checker.created) or 'none'}")
         if args.cleanup:
-            removed = 0
-            for paper_id in checker.created:
-                if api.client.delete(f"/api/papers/{paper_id}").status_code == 204:
-                    removed += 1
-            print(f"cleanup: deleted {removed}/{len(checker.created)} created paper(s)")
+            cleanup(api, session, checker, started_at=started_at)
     finally:
         session.close()
         api.close()
