@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect as sqlalchemy_inspect, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -303,7 +303,24 @@ def attach_venue(
         changed = True
     if changed:
         session.flush()
+        refresh_venue_links(session, paper)
     return changed
+
+
+def refresh_venue_links(session: Session, paper: Paper) -> None:
+    """Drop the cached ``venue`` / ``venue_edition`` relationships.
+
+    Assigning ``venue_id`` directly leaves an already-loaded ``paper.venue``
+    pointing at ``None`` (SQLAlchemy does not notice the foreign key change), so
+    every writer that re-points a paper has to expire the relationships.
+    """
+    state = sqlalchemy_inspect(paper)
+    if not state.persistent:
+        return
+    try:
+        session.expire(paper, ["venue", "venue_edition"])
+    except Exception:  # noqa: BLE001 - the attribute may not be loaded at all
+        logger.debug("could not expire venue links for %s", paper.id)
 
 
 def find_papers_by_venue(
@@ -381,6 +398,7 @@ __all__ = [
     "get_or_create_venue",
     "normalize_venue_name",
     "paper_type_for_content_type",
+    "refresh_venue_links",
     "resolve_venue",
     "venue_editions_for_venue",
     "venue_kind_for_content_type",

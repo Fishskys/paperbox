@@ -393,6 +393,7 @@ def _write_venue(
         parsed = venues._parse_year(claim.get("year"))
         paper.venue_year = parsed if parsed is not None else paper.year
         session.flush()
+        venues.refresh_venue_links(session, paper)
         return True
     changed = venues.attach_venue(session, paper, venue, edition)
     if paper.venue_year is None and claim.get("year") is not None:
