@@ -20,6 +20,7 @@ from app import __version__
 from app.api import ingestion as ingestion_api
 from app.api import jobs as jobs_api
 from app.api import health as health_api
+from app.api import consistency as consistency_api
 from app.api import metadata as metadata_api
 from app.api import papers as papers_api
 from app.api import search as search_api
@@ -79,6 +80,7 @@ async def request_id_middleware(
 
 
 app.include_router(health_api.router)
+app.include_router(consistency_api.router)
 app.include_router(ingestion_api.router)
 app.include_router(jobs_api.router)
 app.include_router(papers_api.router)
