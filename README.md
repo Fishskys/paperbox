@@ -21,7 +21,8 @@ PostgreSQL  OpenSearch     MinIO     Embedding Server
 | 能力 | 端点 |
 |------|------|
 | 依赖健康 | `GET /health` |
-| 论文列表（分页 / 按状态 / 标题搜索） | `GET /api/papers` |
+| 论文列表（分页 / 按状态 / 标题搜索 / 按 venue、年份区间、paper_type、tag 过滤） | `GET /api/papers` |
+| 三端一致性检查（PG / MinIO / OpenSearch 只读对账） | `GET /api/consistency` |
 | 任务列表（最近 N 条） | `GET /api/jobs` |
 | 导入队列深度（并发上限 / 在跑 / 排队） | `GET /api/jobs/queue` |
 | 任务重试（手动触发，plan §22） | `POST /api/jobs/{job_id}/retry` |
@@ -268,9 +269,30 @@ uv run python scripts/backfill_metadata.py --dry-run                # 给历史�
 uv run python scripts/acceptance_metadata.py [--cleanup]            # 真机验收 7 项（需要 API 已启动）
 ```
 
-**注意（已知行为，非缺陷）**：检索的过滤字段（venue/year/tags/doi）在 chunk 文档上，
-`PATCH /metadata` 与导入只改 PostgreSQL；想让改动立刻进入检索过滤，需对受影响论文调
-`POST /api/papers/{id}/reindex`。
+**注意（已知行为，非缺陷）**：检索的过滤字段（venue/year/tags/doi/新元数据列）在 chunk 文档上，
+`PATCH /metadata` 与导入只改 PostgreSQL；想让改动进入检索过滤，**改元数据用
+`uv run python scripts/refresh_index_metadata.py`**（秒级、不重算向量），要连向量一起重算才用
+`POST /api/papers/{id}/reindex`（≈1 chunk/s）。
+
+### 3.5 三端一致性检查（2026-09-22）
+
+PostgreSQL / MinIO / OpenSearch 存的是同一篇论文的三个投影，日常运维很容易漂移：删除清了一边、
+另一边失败；reindex 中途被打断；有人手删了对象。**`GET /api/consistency`** 回答"库、对象、索引现在还
+对不对得上"：
+
+```bash
+uv run python scripts/check_consistency.py            # 真机对账（有漂移返回非 0）
+uv run python scripts/check_consistency.py --no-fail  # 只报告，永远返回 0
+```
+
+逐篇核对 `paper_files.object_key` ↔ MinIO 的 `papers/<id>/` 对象，以及每篇论文的 chunk 行数 ↔ 索引里
+该 `paper_id` 的文档数；另外列出没有任何论文认领的对象与文档。问题码固定：
+`missing_object` / `orphan_object` / `missing_chunks` / `missing_index` / `orphan_index` /
+`chunk_count_mismatch` / `deleted_paper_residue`。
+
+**只读，且永不抛**：某个 store 连不上只记进 `errors`，另外两端照样给出结果（与 `/health` 同一套纪律）。
+软删论文按"已内联清理"预期（PG 行保留、文档与对象应已消失），有残留才算问题。
+本机 2026-09-22 实测：**68 篇存活论文 / 68 个对象 / 2883 个文档 / 0 漂移**。
 
 ## 4. 使用示例
 
@@ -364,7 +386,15 @@ curl -X POST http://127.0.0.1:8077/api/search \
 - `keyword`：OpenSearch BM25（`title^2` + `text`）
 - `semantic`：查询向量 → `knn`（hnsw/l2，1024 维）
 - `hybrid`（默认）：两路各取 `top_k*5` 后用 **RRF(k=60)** 融合
-- 过滤器：`year_from`、`year_to`、`authors`、`venue`、`doi`、`arxiv_id`、`tag`
+- 过滤器：`year_from`、`year_to`、`authors`、`venue`、`doi`、`arxiv_id`、`tag`，以及元数据层带来的
+  `venue_year`（会议/期刊**那一届**的年份——与论文自身的 `year` 是两回事，早录用/晚收录时两者不同）、
+  `paper_type`、`identifier`（`<scheme>:<值>`，如 `ieee_article_number:7065247`、`doi:10.1109/...`；
+  scheme 不认识直接 422，不会静默查空）、以及按 `papers_tags.kind` 分列的 `ieee_terms` / `author_terms` /
+  `dynamic_index_terms` / `source_tags`（`tag` 仍是四个 kind 的并集）
+- **过滤器读的是索引里的快照**（论文被索引时写进 chunk 文档，不是实时查 PostgreSQL）⇒ 改元数据
+  （PATCH / 导入 / 合并）**不会自动改变检索过滤结果**。只改元数据（不动分词器与模型）用
+  `uv run python scripts/refresh_index_metadata.py` 批量改写快照——**2883 个文档实测秒级**，不重算向量；
+  `POST /api/papers/{id}/reindex` 同样能生效，但要把 chunk 重新 embedding（≈1 chunk/s，一篇论文几十秒）
 - `rerank=true`（`POST /api/search`）：两阶段精排——先按 `top_k * RERANK_CANDIDATES` 扩大候选，再用交叉编码器（`RERANK_MODEL`）重排，取 `top_k * 2` 交给论文级聚合；服务不可用时自动降级为原顺序（`rerank_score` 为 `null`），不报错
 - **精排模型与限批（`RERANK_MODEL` / `RERANK_MAX_BATCH`）**：交叉编码器的激活内存随 `(token × 候选数)` 增长，所以精排有独立上限，与 embedding 的 `MAX_BATCH` 解耦（共用一个旋钮要么撑爆精排、要么让正常导入吃 422）。本机实测（WSL 9GB，`ORT_THREADS=4`，文档截断 2000 字符）：`jinaai/jina-reranker-v2-base-multilingual` 加载占 1.9GB，单批 4 条峰值 ~2.4GB、8 条 ~3.3GB、**16 条 ~5.1GB**，速度 ~1.1–1.4 s/候选；`Xenova/ms-marco-MiniLM-L-6-v2` 16 条仅 ~0.7GB、0.09 s/候选。**本机现用多语言档：`RERANK_MODEL=jinaai/jina-reranker-v2-base-multilingual` + `RERANK_MAX_BATCH=4`**（换轻量档请把 `RERANK_MAX_BATCH` 一起调回 16）
 - **精排超时必须跟着放大（`RERANK_TIMEOUT`）**：应用侧候选数 = `top_k × RERANK_CANDIDATES`（默认 5），精排后保留 `top_k × 2`。多语言档实测 ≈ **0.4–0.47 s/候选**（文档截断 2000 字符）⇒ `top_k=1` 约 2.3s、`top_k=10`（50 条候选）约 20s。默认 10 秒会让精排**静默降级**（响应里 `rerank.model=null`、`rerank_score=null`，日志 `rerank request failed ... {"error":"timed out"}`，结果仍是"能搜到但没重排"）→ 本机设 `RERANK_TIMEOUT=60`，覆盖到约 `top_k ≤ 28`；`top_k=50`（250 条候选 ≈100s）会超时降级，需要继续调大超时或调小 `RERANK_CANDIDATES`。实测端到端：`top_k=3` → 6.9s（精排 6.05s）、`top_k=10` → 20.4s（精排 19.7s），响应正常回报 `model` 与 `took_ms`
@@ -378,7 +408,9 @@ curl -X POST http://127.0.0.1:8077/api/search \
 |------|------|
 | `scripts/create_index.py` | 幂等创建 `paper_chunks_v1` + 别名 `paper_chunks_current`；`--index/--alias` 可指定，`--migrate-from <old>` 服务端 `_reindex` 整批拷贝（**不重新 embedding**）后原子切别名，旧索引保留供回滚 |
 | `scripts/reindex.py` | 全量/指定论文重建（`--missing` 只补没有 chunks 的论文） |
-| `scripts/purge_deleted.py` | 清理已删论文遗留的索引文档与 MinIO 对象（`--dry-run` 可先预览） |
+| `scripts/purge_deleted.py` | 清理已删论文遗留的索引文档与 MinIO 对象（`--dry-run` 可先预览）；`--hard` **连 PostgreSQL 行一起删**（chunks/files/identifiers/sources/provenance/authors/tags/jobs + 论文行，逐表打印计数；**不可逆**，安全网是 `backups/` 里的 `pg_dump`） |
+| `scripts/check_consistency.py` | 三端（PG / MinIO / OpenSearch）只读对账：逐篇核对文件行↔对象、chunk 行↔文档，报出缺失索引/缺失 chunk/缺失文档/孤儿对象/孤儿文档/删除残留；`--no-fail` 只报告不返回非 0 |
+| `scripts/refresh_index_metadata.py` | 批量改写**已索引文档的元数据快照**（不动 `embedding`/`text`，不重跑 embedding）：先 `PUT _mapping` 补新字段，再对每个 chunk 发 partial update；`--dry-run` / `--paper-id` / `--limit` / `--no-mapping` |
 | `scripts/healthcheck.py` | 四个依赖 + 应用健康检查与文档数统计 |
 | `scripts/acceptance.py` | 端到端验收：跑 plan §38 的 8 条 MVP 标准（真实导入/检索/鉴权） |
 | `scripts/bulk_ingest.py` | 批量导入语料（`evals/arxiv_ids.txt`，逐条串行 + 轮询作业；`--resume` 跳过已入库，`--dry-run` 只清单） |
@@ -398,13 +430,13 @@ uv run python scripts\acceptance.py
 uv run pytest            # 或 uv run pytest tests -q
 ```
 
-当前测试（`uv run pytest` 共 **495** 个用例，1 skipped：文件符号链接需开发者模式；以实际输出为准）：
+当前测试（`uv run pytest` 共 **842** 个用例，1 skipped：文件符号链接需开发者模式；以实际输出为准）：
 
 | 文件 | 覆盖 |
 |------|------|
 | `tests/test_parsing.py` | PDF 抽取、section 识别、分块（不跨 section、token 上限、overlap、无空洞） |
 | `tests/test_aggregation.py` | 论文级聚合与 evidence 选择 |
-| `tests/test_filters.py` | 过滤器构造（year/authors/venue/doi/arxiv_id/tag） |
+| `tests/test_filters.py` | 过滤器构造（year/authors/venue/doi/arxiv_id/tag + venue_year/paper_type/identifier/四个 tag kind） |
 | `tests/test_rrf.py` | RRF 融合排序 |
 | `tests/test_deletion.py` | 删除清理顺序、失败中止与可重试 |
 | `tests/test_fingerprint_release.py` | 删除即释放指纹（部分唯一索引） |
@@ -424,6 +456,11 @@ uv run pytest            # 或 uv run pytest tests -q
 | `tests/test_stored_cleanup.py` | STORED 后删 staging 与解包文件；STORED 之前失败保留 staging（可重试） |
 | `tests/test_upload_gc.py` | housekeeping：孤儿/终态 staging、**`STORED` 之前失败的行保留 72h 供重试 / 超期回收**、过期解包目录、残留压缩包、幂等、不改作业行、周期任务生命周期 |
 | `tests/test_bulk_ingest_dir.py` | 客户端脚本纯函数：预筛、清单、glob、429 退避、`--resume`、报告计数 |
+| `tests/test_consistency.py` | 三端一致性：缺失对象/孤儿对象/缺失索引/缺失 chunk/孤儿文档/删除残留/坏 store（一个挂了另两个照样答）/未传 client |
+| `tests/test_index_snapshot.py` | 索引映射与 chunk 文档形状快照：新字段类型、tag 按 kind 分列、identifiers 形状、`embedding` 仍是 1024 维 knn |
+| `tests/test_refresh_index_metadata.py` | 快照刷新：每个 chunk 一条 partial update（不含 embedding/text）、先 mapping 后文档、跳过软删与无 chunk 论文、`--dry-run`/`--paper-id`/`--no-mapping` |
+| `tests/test_paper_list_filters.py` | `GET /api/papers` 过滤（venue/年份区间/paper_type/tag）+ `PaperOut` 新列序列化 |
+| `tests/test_purge_deleted.py` | `purge_deleted.py`：默认只对账不删 PG 行、`--hard` 逐表删净 |
 
 **指纹与去重**：`papers.fingerprint` 按 `DOI > arXiv > 归一化标题+首作者+年 > sha256` 生成（`app/services/paper_service.py`）。导入时先以 `sha256` 占位，解析出元数据后**重算并落库**；若与另一篇存活论文撞指纹，则清理本次 chunks/索引/对象、软删本论文，作业以 `completed` + `duplicate=true` 指向既有论文结束（`app/workers/tasks.py`）。
 
@@ -437,19 +474,20 @@ uv run pytest            # 或 uv run pytest tests -q
 
 ```
 app/
-  api/        health / papers / ingestion / jobs / search 路由
+  api/        health / papers / ingestion / jobs / search / search_logs / metadata / consistency 路由
   core/       config(pydantic-settings) logging security(Bearer)
-  db/         SQLAlchemy 2.x models（9 张表）+ session
+  db/         SQLAlchemy 2.x models（13 张表；另有 authors.normalized_name 唯一约束）+ session
   schemas/    Pydantic 请求/响应
-  services/   paper / ingestion / embedding / metadata / object_storage / search
+  services/   paper / ingestion / embedding / metadata / object_storage / search /
+              consistency_service（三端只读对账）
               upload_admission（上传准入）· local_scan（目录导入）· archive_service（zip 解包与清理）
   parsing/    pdf 抽取、section 识别、分块
-  search/     mappings / opensearch / ranking(RRF) / hybrid
+  search/     mappings / opensearch / snapshot（元数据快照单一来源） / ranking(RRF) / hybrid
   workers/    tasks.py（流水线 + reindex）· queue.py（优先级队列）· housekeeping.py（GC）
 migrations/   Alembic
 infra/        依赖服务 docker-compose（PG/OpenSearch/MinIO/Embedding）
-scripts/      create_index / reindex / purge_deleted / healthcheck / acceptance / bulk_ingest /
-              bulk_ingest_dir / eval
+scripts/      create_index / reindex / purge_deleted / check_consistency / refresh_index_metadata /
+              healthcheck / acceptance / bulk_ingest / bulk_ingest_dir / eval
 tests/        单元测试
 ```
 
@@ -489,13 +527,13 @@ cp infra/.env.example infra/.env      # 容器侧：compose **只读** compose �
 #            · PAPERBOX_BIND_IP · OPENSEARCH_ADMIN_PASSWORD
 
 # 4) schema 与索引
-uv run alembic upgrade head          # 9 张表（papers.fingerprint 是部分唯一索引）
+uv run alembic upgrade head          # 13 张表（papers.fingerprint 是部分唯一索引）
 uv run python scripts/create_index.py  # 建 paper_chunks_v2（CJK 分词）+ 别名 paper_chunks_current
 
 # 5) 启动 / 自检 / 测试
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077   # 监听由 PAPER_API_HOST / PAPER_API_PORT 决定
 uv run python scripts/healthcheck.py     # 四依赖连通性
-uv run pytest                            # 310 用例；必须全绿才继续
+uv run pytest                            # 842 用例；必须全绿才继续
 ```
 
 ### 10.2 容器化构建（Linux 服务器）
@@ -511,13 +549,17 @@ docker compose -f docker-compose.yml up -d --build    # 应用容器（依赖服
 
 ### 10.3 改代码前必读的硬性约束
 
-1. **单 worker**：导入流水线走 FastAPI `BackgroundTasks`（进程内）⇒ 必须 `--workers 1`；要多副本先把导入改成外部队列。
+1. **单 worker**：导入流水线跑在**进程内队列**（`app/workers/queue.py`，`INGEST_CONCURRENCY` 默认 2，
+   超出停在 `stage=QUEUED`；不是 FastAPI `BackgroundTasks`）⇒ 必须 `--workers 1`；要多副本先把导入改成外部队列。
 2. **容器配置改 `infra/.env`**（根 `.env` 对容器无效）；改 `infra/embedding/server.py` 后必须
    `cd infra && docker compose build embedding && docker compose up -d embedding`（代码烤进镜像，只 `up -d` 会"环境变量生效但新代码不生效"）。
 3. **精排超时必须放大**：多语言档实测 ≈0.4–0.47 s/候选、候选数 = `top_k × RERANK_CANDIDATES` ⇒ `top_k=10` 约 20s；
    `RERANK_TIMEOUT` 保持默认 10 会让精排**静默降级**（响应 `rerank.model=null`、`rerank_score=null`，日志 `timed out`）。
 4. **两套限批别混用**：`MAX_BATCH`（`/embed`，默认 16，与 `EMBEDDING_BATCH_SIZE` 对齐）与 `RERANK_MAX_BATCH`（精排，多语言档必须 4）。
 5. **索引读写走别名** `paper_chunks_current`；换分词器/embedding 模型必须新建索引再原子切别名，旧索引保留回滚（`scripts/create_index.py --migrate-from`）。
+   给**活索引加新字段**是允许的（`PUT _mapping`，见 `app/search/opensearch.py::update_mapping` 与
+   `scripts/refresh_index_metadata.py`），但**必须赶在第一个带该字段的文档之前**——否则 `dynamic: true`
+   会先把它映成 `text`（`pages`、`paper_type` 这类想按 keyword 过滤的字段就废了）；改已有字段类型仍然只能新建索引。
 6. **密钥不进库**：`.env`、`infra/.env`、`data/`、`logs/` 均在 `.gitignore`。
 7. **日志位置**：运行日志进 `logs/{codex,app,eval}/`，不要写仓库根目录。
 8. **不要写自指统计**：不写"共 N 个 commit / 文件"，或写成「N（截至 `<sha>`；以 `git rev-list --count HEAD` 为准）」。
