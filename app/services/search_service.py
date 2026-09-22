@@ -24,7 +24,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.search.hybrid import ChunkHit
+from app.search.hybrid import ChunkHit, SearchError
 
 #: Maximum number of evidence chunks kept per paper.
 MAX_EVIDENCE = 3
@@ -328,6 +328,7 @@ __all__ = [
     "RELEVANCE_MEDIUM",
     "Evidence",
     "PaperResult",
+    "SearchError",
     "aggregate_papers",
     "classify_relevance",
     "results_to_payload",
