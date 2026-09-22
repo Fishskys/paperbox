@@ -34,7 +34,7 @@ from app.db.session import SessionLocal
 from app.parsing.chunking import chunk_document
 from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata, extract_pages
 from app.parsing.structure import detect_sections, merge_short_sections
-from app.search import opensearch
+from app.search import mappings, opensearch, snapshot
 from app.services import embedding_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_identifiers, metadata_matcher, metadata_merge
@@ -991,10 +991,27 @@ def _write_embeddings(
     session.flush()
 
 
+def _tag_names_by_kind(paper: Paper) -> dict[str, list[str]]:
+    """Backwards-compatible alias for :func:`app.search.snapshot.tag_names_by_kind`."""
+    return snapshot.tag_names_by_kind(paper)
+
+
+def _identifier_strings(paper: Paper) -> list[str]:
+    """Backwards-compatible alias for :func:`app.search.snapshot.identifier_strings`."""
+    return snapshot.identifier_strings(paper)
+
+
 def _index_rows(
     paper: Paper, rows: list[PaperChunk], vectors: list[list[float]]
 ) -> list[dict]:
-    """Build one OpenSearch document per persisted chunk (metadata + vector)."""
+    """Build one OpenSearch document per persisted chunk (metadata + vector).
+
+    The metadata part is :func:`app.search.snapshot.paper_metadata_snapshot` - the
+    *filter snapshot* of ``POST /api/search``: venue name plus edition year, paper
+    type, citation fields, identifiers and one tag list per kind. It is written at
+    index time, so a metadata change only reaches filtering once the paper is
+    reindexed (or ``scripts/refresh_index_metadata.py`` rewrites the snapshot).
+    """
     authors = paper_service.paper_author_names(paper)
     tags = [
         link.tag.name
@@ -1002,30 +1019,32 @@ def _index_rows(
         if getattr(link, "tag", None) is not None
     ]
     venue = paper.venue.name if paper.venue is not None else None
+    metadata = snapshot.paper_metadata_snapshot(paper)
     documents: list[dict] = []
     for row, vector in zip(rows, vectors):
-        documents.append(
-            {
-                "chunk_id": row.id,
-                "paper_id": paper.id,
-                "title": paper.title,
-                "authors": authors,
-                "year": paper.year,
-                "venue": venue,
-                "doi": paper.doi,
-                "arxiv_id": paper.arxiv_id,
-                "tags": tags,
-                "section": row.section,
-                "section_title": row.subsection or row.section,
-                "page_start": row.page_start,
-                "page_end": row.page_end,
-                "chunk_index": row.chunk_index,
-                "text": row.text,
-                "embedding": vector,
-                "embedding_model": settings.embedding_model,
-                "embedding_dimension": settings.embedding_dimension,
-            }
-        )
+        document: dict = {
+            "chunk_id": row.id,
+            "paper_id": paper.id,
+            "title": paper.title,
+            "authors": authors,
+            "year": paper.year,
+            "venue": venue,
+            "doi": paper.doi,
+            "arxiv_id": paper.arxiv_id,
+            "tags": tags,
+            "section": row.section,
+            "section_title": row.subsection or row.section,
+            "page_start": row.page_start,
+            "page_end": row.page_end,
+            "chunk_index": row.chunk_index,
+            "text": row.text,
+            "embedding": vector,
+            "embedding_model": settings.embedding_model,
+            "embedding_dimension": settings.embedding_dimension,
+        }
+        # --- metadata snapshot: the fields POST /api/search filters read ---
+        document.update(metadata)
+        documents.append(document)
     return documents
 
 

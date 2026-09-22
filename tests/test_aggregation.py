@@ -152,7 +152,16 @@ def test_payload_shape_matches_the_api_contract() -> None:
         "title",
         "authors",
         "year",
+        "venue",
         "doi",
+        "arxiv_id",
+        # metadata snapshot echoed from the best chunk
+        "venue_year",
+        "paper_type",
+        "volume",
+        "issue",
+        "pages",
+        "publication_date",
         "score",
         "relevance",
         "retrieval_score",
@@ -170,6 +179,33 @@ def test_paper_metadata_comes_from_the_best_chunk() -> None:
     worse = hit("c2", "p1", 0.2, title="Worse Paper")
     results = aggregate_papers([worse, best])
     assert results[0].title == "Best Paper"
+
+
+def test_the_metadata_snapshot_of_the_best_chunk_is_echoed() -> None:
+    """venue/venue_year/paper_type/citation fields ride along from the best chunk."""
+    best = ChunkHit(
+        chunk_id="c1",
+        paper_id="p1",
+        score=0.9,
+        title="Best",
+        venue="ISSCC",
+        venue_year=2021,
+        paper_type="conference",
+        volume="64",
+        issue="3",
+        pages="412-419",
+        publication_date="2021-03-01",
+    )
+    worse = ChunkHit(chunk_id="c2", paper_id="p1", score=0.1, venue="Other")
+    result = aggregate_papers([worse, best])[0]
+    assert (result.venue, result.venue_year) == ("ISSCC", 2021)
+    assert result.paper_type == "conference"
+    assert (result.volume, result.issue, result.pages) == ("64", "3", "412-419")
+    assert result.publication_date == "2021-03-01"
+    payload = result.to_dict()
+    assert payload["venue_year"] == 2021
+    assert payload["publication_date"] == "2021-03-01"
+    assert payload["paper_type"] == "conference"
 
 
 def test_aggregation_is_deterministic_for_equal_scores() -> None:

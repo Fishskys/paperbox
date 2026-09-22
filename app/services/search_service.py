@@ -81,6 +81,14 @@ class PaperResult:
     venue: str | None = None
     doi: str | None = None
     arxiv_id: str | None = None
+    #: Metadata snapshot echoed from the best chunk of the group (see
+    #: ``app/search/mappings.py``): edition year, literature type, citation fields.
+    venue_year: int | None = None
+    paper_type: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
+    publication_date: str | None = None
     evidence: list[Evidence] = field(default_factory=list)
     matched_chunks: int = 0
     #: Best first-stage (pre-rerank) score inside the group; ``None`` when the
@@ -96,7 +104,15 @@ class PaperResult:
             "title": self.title,
             "authors": list(self.authors),
             "year": self.year,
+            "venue": self.venue,
             "doi": self.doi,
+            "arxiv_id": self.arxiv_id,
+            "venue_year": self.venue_year,
+            "paper_type": self.paper_type,
+            "volume": self.volume,
+            "issue": self.issue,
+            "pages": self.pages,
+            "publication_date": self.publication_date,
             "score": self.score,
             "relevance": self.relevance,
             "retrieval_score": self.retrieval_score,
@@ -231,6 +247,12 @@ def aggregate_papers(
                 venue=best.venue,
                 doi=best.doi,
                 arxiv_id=best.arxiv_id,
+                venue_year=best.venue_year,
+                paper_type=best.paper_type,
+                volume=best.volume,
+                issue=best.issue,
+                pages=best.pages,
+                publication_date=best.publication_date,
                 evidence=evidence,
                 matched_chunks=len(group),
                 retrieval_score=_best_score(group, "retrieval_score"),

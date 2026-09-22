@@ -17,7 +17,7 @@ from opensearchpy.helpers import bulk
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.search.mappings import build_mapping
+from app.search.mappings import TAG_KIND_FIELDS, build_mapping
 
 logger = get_logger(__name__)
 
@@ -110,6 +110,101 @@ def ensure_index(
     }
 
 
+def update_mapping(
+    client: OpenSearch | None = None,
+    *,
+    index: str = ALIAS,
+) -> dict[str, Any]:
+    """Add the current mapping's properties to an existing index.
+
+    Adding *new* fields is allowed on a live index - only changing or removing an
+    existing field (the ``knn_vector``, the analyzers) needs a new index and a
+    ``_reindex`` copy. This is how a metadata snapshot field reaches an index that
+    is already deployed, and it must run **before** the first document carrying
+    the field is written: ``dynamic: true`` would otherwise map it as ``text``
+    (``pages``, ``paper_type``, ``identifiers``) and the explicit type could no
+    longer be applied.
+
+    Idempotent: re-sending the same properties is a no-op.
+    """
+    client = client or get_client()
+    body = {"properties": build_mapping()["mappings"]["properties"]}
+    try:
+        response = client.indices.put_mapping(index=index, body=body)
+    except NotFoundError:
+        return {"index": index, "updated": False, "exists": False}
+    except OpenSearchException as exc:  # pragma: no cover - live cluster only
+        raise SearchIndexError(f"update_mapping failed: {exc}") from exc
+    logger.info(
+        "updated index mapping",
+        extra={"extra_fields": {"index": index, "acknowledged": bool(response)}},
+    )
+    return {"index": index, "updated": True, "exists": True, "acknowledged": bool(response)}
+
+
+def bulk_update_documents(
+    updates: Iterable[dict[str, Any]],
+    *,
+    client: OpenSearch | None = None,
+    index: str = ALIAS,
+    batch_size: int = BULK_BATCH_SIZE,
+    refresh: bool = True,
+) -> dict[str, int]:
+    """Partial-update documents in bulk: ``{"chunk_id": ..., "doc": {...}}``.
+
+    Used to rewrite the metadata snapshot of documents that are already indexed -
+    the embedding and the text are left alone, so refreshing 3000 chunks costs
+    seconds instead of a full re-embedding pass. Unknown documents are skipped by
+    OpenSearch rather than created (``doc_as_upsert`` is not set).
+    """
+    client = client or get_client()
+    items = list(updates)
+    if not items:
+        return {"updated": 0, "failed": 0}
+    updated = 0
+    failed = 0
+    for start in range(0, len(items), batch_size):
+        batch = items[start : start + batch_size]
+        actions = [
+            {
+                "_op_type": "update",
+                "_index": index,
+                "_id": str(item["chunk_id"]),
+                "doc": dict(item.get("doc") or {}),
+            }
+            for item in batch
+        ]
+        try:
+            success, errors = bulk(
+                client,
+                actions,
+                refresh="wait_for" if refresh else False,
+                raise_on_error=False,
+                stats_only=False,
+            )
+        except OpenSearchException as exc:  # pragma: no cover - live cluster only
+            raise SearchIndexError(f"bulk update failed: {exc}") from exc
+        updated += int(success)
+        if errors:
+            failed += len(errors)
+            logger.warning(
+                "bulk update reported errors",
+                extra={
+                    "extra_fields": {
+                        "index": index,
+                        "first_error": json.dumps(errors[0])[:300],
+                    }
+                },
+            )
+    if refresh:
+        client.indices.refresh(index=index)
+    logger.info(
+        "updated documents",
+        extra={"extra_fields": {"index": index, "updated": updated, "failed": failed}},
+    )
+    return {"updated": updated, "failed": failed}
+
+
 def build_reindex_body(source: str, dest: str) -> dict[str, Any]:
     """Body for a server-side ``_reindex`` copy of every document.
 
@@ -138,6 +233,13 @@ def alias_swap_is_safe(old_count: int, new_count: int) -> bool:
     return old_count == new_count
 
 
+def _as_string_list(values: Any) -> list[str]:
+    """Stringify a list-ish document field (``None`` becomes ``[]``)."""
+    if not values:
+        return []
+    return [str(value) for value in values]
+
+
 def build_chunk_document(row: dict[str, Any]) -> dict[str, Any]:
     """Shape one ``paper_chunks`` row (+ paper metadata) into an ES document."""
     authors = row.get("authors") or []
@@ -162,6 +264,22 @@ def build_chunk_document(row: dict[str, Any]) -> dict[str, Any]:
         "embedding_dimension": row.get("embedding_dimension")
         or settings.embedding_dimension,
     }
+    # Metadata snapshot: the filter fields of POST /api/search (see mappings.py).
+    document["venue_year"] = row.get("venue_year")
+    document["paper_type"] = row.get("paper_type")
+    document["volume"] = row.get("volume")
+    document["issue"] = row.get("issue")
+    document["pages"] = row.get("pages")
+    document["identifiers"] = _as_string_list(row.get("identifiers"))
+    for field in TAG_KIND_FIELDS.values():
+        document[field] = _as_string_list(row.get(field))
+    publication_date = row.get("publication_date")
+    if publication_date is not None:
+        document["publication_date"] = (
+            publication_date.isoformat()
+            if hasattr(publication_date, "isoformat")
+            else str(publication_date)
+        )
     embedding = row.get("embedding")
     if embedding is not None:
         document["embedding"] = list(embedding)
@@ -290,9 +408,11 @@ __all__ = [
     "build_reindex_body",
     "build_chunk_document",
     "bulk_index_chunks",
+    "bulk_update_documents",
     "delete_by_paper_id",
     "ensure_index",
     "get_client",
     "index_exists",
     "index_stats",
+    "update_mapping",
 ]

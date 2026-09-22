@@ -67,9 +67,71 @@ def test_every_filter_field_produces_exactly_one_clause() -> None:
             "doi": "10.1/x",
             "arxiv_id": "2101.00001",
             "tag": ["sram"],
+            "venue_year": [2019],
+            "paper_type": ["conference"],
+            "identifier": ["ieee_article_number:7065247"],
+            "ieee_terms": ["low power sram"],
+            "author_terms": ["A. Vaswani"],
+            "dynamic_index_terms": ["dynamic"],
+            "source_tags": ["nlp"],
         }
     )
-    assert len(clauses) == 6
+    assert len(clauses) == 13
+
+
+# --- metadata snapshot filters (see app/search/mappings.py) ---------------- #
+
+
+def test_venue_year_is_a_terms_clause_on_the_edition_year() -> None:
+    assert build_filters({"venue_year": [2021]}) == [
+        {"terms": {"venue_year": [2021]}}
+    ]
+    assert build_filters({"venue_year": [2019, 2021]}) == [
+        {"terms": {"venue_year": [2019, 2021]}}
+    ]
+
+
+def test_venue_year_accepts_a_scalar_and_coerces_strings() -> None:
+    assert build_filters({"venue_year": "2021"}) == [{"terms": {"venue_year": [2021]}}]
+    assert build_filters({"venue_year": ["not-a-year"]}) == []
+
+
+def test_paper_type_becomes_a_terms_clause() -> None:
+    assert build_filters({"paper_type": ["conference", "journal"]}) == [
+        {"terms": {"paper_type": ["conference", "journal"]}}
+    ]
+    assert build_filters({"paper_type": "conference"}) == [
+        {"terms": {"paper_type": ["conference"]}}
+    ]
+
+
+def test_identifier_filter_matches_the_scheme_prefixed_field() -> None:
+    clause = {"terms": {"identifiers": ["ieee_article_number:7065247"]}}
+    assert build_filters({"identifier": ["ieee_article_number:7065247"]}) == [clause]
+    assert build_filters({"identifier": "doi:10.1/x"}) == [
+        {"terms": {"identifiers": ["doi:10.1/x"]}}
+    ]
+
+
+def test_each_tag_kind_has_its_own_field() -> None:
+    clauses = build_filters(
+        {
+            "ieee_terms": ["low power sram"],
+            "author_terms": ["A. Vaswani"],
+            "dynamic_index_terms": ["topic model"],
+            "source_tags": ["nlp"],
+        }
+    )
+    assert {"terms": {"ieee_terms": ["low power sram"]}} in clauses
+    assert {"terms": {"author_terms": ["A. Vaswani"]}} in clauses
+    assert {"terms": {"dynamic_index_terms": ["topic model"]}} in clauses
+    assert {"terms": {"source_tags": ["nlp"]}} in clauses
+
+
+def test_a_tag_kind_filter_does_not_fall_back_to_the_flat_field() -> None:
+    """``source_tag`` maps to ``source_tags``; the others keep their own name."""
+    clauses = build_filters({"source_tags": ["nlp"]})
+    assert clauses == [{"terms": {"source_tags": ["nlp"]}}]
 
 
 def test_unknown_filter_keys_are_ignored() -> None:

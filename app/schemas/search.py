@@ -4,7 +4,10 @@ Request shape::
 
     {"query": "...", "mode": "hybrid", "top_k": 10,
      "filters": {"year_from": 2020, "year_to": 2024, "authors": ["..."],
-                 "venue": ["..."], "doi": "...", "arxiv_id": "...", "tag": ["..."]},
+                 "venue": ["..."], "venue_year": [2021], "paper_type": ["conference"],
+                 "doi": "...", "arxiv_id": "...", "tag": ["..."],
+                 "identifier": ["ieee_article_number:7065247"],
+                 "ieee_terms": ["low power sram"]},
      "rerank": false}
 
 Response shape::
@@ -13,11 +16,17 @@ Response shape::
      "rerank": {"enabled": true, "model": "Xenova/ms-marco-MiniLM-L-6-v2",
                 "took_ms": 37},
      "results": [{"paper_id": "...", "title": "...", "authors": ["..."],
-                  "year": 2021, "doi": "...", "score": 0.031,
-                  "relevance": "high",
+                  "year": 2021, "venue": "ISSCC", "venue_year": 2021,
+                  "paper_type": "conference", "volume": "12", "issue": "3",
+                  "pages": "1-8", "publication_date": "2021-02-18",
+                  "doi": "...", "score": 0.031, "relevance": "high",
                   "retrieval_score": 0.016, "rerank_score": 0.87,
                   "evidence": [{"chunk_id": "...", "page": 3,
                                 "section": "2 Method", "text": "..."}]}]}
+
+Every filter and every echoed field comes from the index-time metadata snapshot
+(``app/search/mappings.py``), so a metadata change in PostgreSQL only shows up
+here after the affected papers are reindexed.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.search.hybrid import DEFAULT_MODE, MODES
+from app.services.metadata_identifiers import SCHEMES
 
 #: ``top_k`` bounds from the spec.
 MIN_TOP_K = 1
@@ -34,26 +44,82 @@ MAX_TOP_K = 50
 
 SearchModeLiteral = Literal["keyword", "semantic", "hybrid"]
 
+#: Filters whose value may be written as a bare string instead of a list.
+_SCALAR_FRIENDLY = (
+    "authors",
+    "venue",
+    "tag",
+    "paper_type",
+    "identifier",
+    "ieee_terms",
+    "author_terms",
+    "dynamic_index_terms",
+    "source_tags",
+)
+
 
 class SearchFilters(BaseModel):
     """Optional metadata filters; every field is optional."""
 
     model_config = ConfigDict(extra="ignore")
 
+    #: Year of the paper itself.
     year_from: int | None = None
     year_to: int | None = None
     authors: list[str] | None = None
     venue: list[str] | None = None
     doi: str | None = None
     arxiv_id: str | None = None
+    #: Any tag, whatever its kind (the flat ``tags`` snapshot field).
     tag: list[str] | None = None
+    # --- metadata snapshot (see app/search/mappings.py) -------------------- #
+    #: Year of the venue *edition*, i.e. "the conference in 2015" as opposed to
+    #: the paper year above; the two differ for early access and late indexing.
+    venue_year: list[int] | None = None
+    #: journal | conference | preprint | early_access | standard.
+    paper_type: list[str] | None = None
+    #: ``scheme:value`` pairs, e.g. ``ieee_article_number:7065247`` or
+    #: ``doi:10.1109/jssc.2020.1`` (``paper_identifiers`` rows).
+    identifier: list[str] | None = None
+    #: Tag filters narrowed to one ``papers_tags.kind`` each.
+    ieee_terms: list[str] | None = None
+    author_terms: list[str] | None = None
+    dynamic_index_terms: list[str] | None = None
+    source_tags: list[str] | None = None
 
-    @field_validator("authors", "venue", "tag", mode="before")
+    @field_validator(*_SCALAR_FRIENDLY, mode="before")
     @classmethod
     def _accept_scalar(cls, value):
         """Accept a bare string where a list is documented."""
         if isinstance(value, str):
             return [value]
+        return value
+
+    @field_validator("venue_year", mode="before")
+    @classmethod
+    def _accept_scalar_year(cls, value):
+        """Accept a bare year where a list is documented."""
+        if value is None or isinstance(value, (list, tuple, set, frozenset)):
+            return value
+        return [value]
+
+    @field_validator("identifier", mode="after")
+    @classmethod
+    def _check_identifier_scheme(cls, value):
+        """Require ``scheme:value`` with a known scheme.
+
+        Without this a typo like ``ieee:123`` would quietly return zero results
+        instead of a 422.
+        """
+        if not value:
+            return value
+        prefixes = tuple(f"{scheme}:" for scheme in SCHEMES)
+        for entry in value:
+            if not str(entry).strip().casefold().startswith(prefixes):
+                raise ValueError(
+                    "identifier entries must be scheme:value with a known scheme "
+                    f"({', '.join(SCHEMES)})"
+                )
         return value
 
     def to_query_filters(self) -> dict:
@@ -118,6 +184,15 @@ class SearchResult(BaseModel):
     authors: list[str] = Field(default_factory=list)
     year: int | None = None
     doi: str | None = None
+    #: Metadata snapshot echoed back so callers can tell "the conference" from
+    #: "the conference in a given year" without a second request.
+    venue: str | None = None
+    venue_year: int | None = None
+    paper_type: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
+    publication_date: str | None = None
     score: float
     relevance: str
     #: First-stage (BM25 / kNN / RRF) score; ``null`` when reranking was off.

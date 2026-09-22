@@ -25,8 +25,13 @@ is unavailable the original order and scores are returned unchanged
 (``rerank_score`` stays ``None``) and no exception is raised.
 
 Filters map onto a bool ``filter`` clause so they never influence scoring:
-``year_from``/``year_to`` (range), ``authors``/``venue``/``tag`` (terms),
-``doi``/``arxiv_id`` (term).
+``year_from``/``year_to`` (range on the paper year), ``authors``/``venue``/``tag``
+(terms), ``doi``/``arxiv_id`` (term), plus the metadata-snapshot filters
+``venue_year`` (edition year), ``paper_type``, ``identifier`` (``scheme:value``
+such as ``ieee_article_number:7065247``) and one list per ``papers_tags.kind``
+(``ieee_terms`` / ``author_terms`` / ``dynamic_index_terms`` / ``source_tags``).
+All of them read fields written at index time, so metadata changes only reach
+filtering after a reindex.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from opensearchpy.exceptions import NotFoundError, OpenSearchException
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.mappings import TAG_KIND_FIELDS
 from app.search.opensearch import ALIAS, SearchIndexError, get_client
 from app.search.ranking import DEFAULT_RRF_K, rrf_fuse
 from app.services import rerank_service
@@ -102,6 +108,14 @@ class ChunkHit:
     page_start: int | None = None
     page_end: int | None = None
     chunk_index: int | None = None
+    #: Metadata snapshot carried by the document (see ``app/search/mappings.py``):
+    #: edition year of the venue, literature type and citation fields.
+    venue_year: int | None = None
+    paper_type: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
+    publication_date: str | None = None
     keyword_score: float | None = None
     semantic_score: float | None = None
     rank: int | None = None
@@ -133,6 +147,12 @@ class ChunkHit:
             "page_start": self.page_start,
             "page_end": self.page_end,
             "chunk_index": self.chunk_index,
+            "venue_year": self.venue_year,
+            "paper_type": self.paper_type,
+            "volume": self.volume,
+            "issue": self.issue,
+            "pages": self.pages,
+            "publication_date": self.publication_date,
             "text": self.text,
             "keyword_score": self.keyword_score,
             "semantic_score": self.semantic_score,
@@ -222,6 +242,30 @@ def build_filters(filters: Mapping[str, Any] | None = None) -> list[dict[str, An
     tags = _as_list(filters.get("tag")) or _as_list(filters.get("tags"))
     if tags:
         clauses.append({"terms": {"tags": tags}})
+
+    # --- metadata snapshot filters ---------------------------------------- #
+    venue_years = [
+        year
+        for year in (_as_int(value) for value in _as_list(filters.get("venue_year")))
+        if year is not None
+    ]
+    if venue_years:
+        clauses.append({"terms": {"venue_year": venue_years}})
+
+    paper_types = _as_list(filters.get("paper_type"))
+    if paper_types:
+        clauses.append({"terms": {"paper_type": paper_types}})
+
+    #: ``scheme:value`` strings, e.g. ``ieee_article_number:7065247``.
+    identifiers = _as_list(filters.get("identifier"))
+    if identifiers:
+        clauses.append({"terms": {"identifiers": identifiers}})
+
+    # One clause per tag kind (``source_tag`` maps to the ``source_tags`` field).
+    for field in TAG_KIND_FIELDS.values():
+        names = _as_list(filters.get(field))
+        if names:
+            clauses.append({"terms": {field: names}})
 
     return clauses
 
@@ -329,6 +373,12 @@ def _hit_from_source(
         page_start=_as_int(source.get("page_start")),
         page_end=_as_int(source.get("page_end")),
         chunk_index=_as_int(source.get("chunk_index")),
+        venue_year=_as_int(source.get("venue_year")),
+        paper_type=source.get("paper_type"),
+        volume=source.get("volume"),
+        issue=source.get("issue"),
+        pages=source.get("pages"),
+        publication_date=source.get("publication_date"),
     )
 
 
