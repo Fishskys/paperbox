@@ -59,11 +59,32 @@ def list_papers(
     offset: int = 0,
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None, description="case-insensitive title substring"),
+    venue: list[str] | None = Query(default=None, description="venue name (repeatable)"),
+    year_from: int | None = Query(default=None, description="inclusive lower bound on year"),
+    year_to: int | None = Query(default=None, description="inclusive upper bound on year"),
+    paper_type: list[str] | None = Query(
+        default=None,
+        description="journal | conference | preprint | early_access | standard (repeatable)",
+    ),
+    tag: list[str] | None = Query(default=None, description="tag name, any kind (repeatable)"),
     session: Session = Depends(get_db),
 ) -> PaperListOut:
-    """List papers newest first (for browsing UIs and bulk maintenance)."""
+    """List papers newest first (for browsing UIs and bulk maintenance).
+
+    The metadata filters read PostgreSQL directly, so unlike the search filters
+    they see a metadata change immediately (no reindex needed).
+    """
     rows, total = papers.list_papers(
-        session, limit=limit, offset=offset, status=status_filter, query=q
+        session,
+        limit=limit,
+        offset=offset,
+        status=status_filter,
+        query=q,
+        venue=venue,
+        year_from=year_from,
+        year_to=year_to,
+        paper_type=paper_type,
+        tag=tag,
     )
     return PaperListOut(
         total=total,

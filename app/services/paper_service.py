@@ -23,7 +23,17 @@ from sqlalchemy import inspect as sqlalchemy_inspect, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
-from app.db.models import Author, Paper, PaperAuthor, PaperFile, PaperIdentifier, new_uuid
+from app.db.models import (
+    Author,
+    Paper,
+    PaperAuthor,
+    PaperFile,
+    PaperIdentifier,
+    PaperTag,
+    PapersTag,
+    Venue,
+    new_uuid,
+)
 
 logger = get_logger(__name__)
 
@@ -253,20 +263,73 @@ def list_papers(
     offset: int = 0,
     status: str | None = None,
     query: str | None = None,
+    venue: Sequence[str] | None = None,
+    year_from: int | None = None,
+    year_to: int | None = None,
+    paper_type: Sequence[str] | None = None,
+    tag: Sequence[str] | None = None,
 ) -> tuple[list[Paper], int]:
     """Return ``(papers, total)`` newest first, soft-deleted rows excluded.
 
     ``status`` filters on the paper status (PENDING/PROCESSING/INDEXED/FAILED)
     and ``query`` is a case-insensitive substring match on the title - both are
     conveniences for browsing UIs.
+
+    The metadata filters mirror what ``POST /api/search`` can filter on, but read
+    PostgreSQL directly (and therefore see a metadata change immediately, unlike
+    the index-time snapshot the search filters read):
+
+    ``venue``
+        Venue names, matched on the normalized key (so case/punctuation variants
+        hit the same row).
+    ``year_from`` / ``year_to``
+        Bounds on ``papers.year`` (inclusive).
+    ``paper_type``
+        ``journal`` / ``conference`` / ``preprint`` / ``early_access`` / ``standard``.
+    ``tag``
+        Tag names of any kind, matched through ``papers_tags``.
     """
     from sqlalchemy import func
+
+    # Imported here: ``metadata_tags`` and ``venue_service`` both import this
+    # module at module level, so a top-level import would be circular.
+    from app.services import metadata_tags, venue_service
 
     statement = _paper_query().where(Paper.deleted_at.is_(None))
     if status:
         statement = statement.where(Paper.status == status.strip().upper())
     if query and query.strip():
         statement = statement.where(Paper.title.ilike(f"%{query.strip()}%"))
+    venue_keys = [
+        venue_service.normalize_venue_name(name)
+        for name in (venue or [])
+        if name and str(name).strip()
+    ]
+    if venue_keys:
+        statement = statement.join(Venue, Paper.venue_id == Venue.id).where(
+            Venue.normalized_name.in_(venue_keys)
+        )
+    if year_from is not None:
+        statement = statement.where(Paper.year >= int(year_from))
+    if year_to is not None:
+        statement = statement.where(Paper.year <= int(year_to))
+    types = [value.strip().lower() for value in (paper_type or []) if value and str(value).strip()]
+    if types:
+        statement = statement.where(Paper.paper_type.in_(types))
+    tag_keys = [
+        metadata_tags.normalize_tag(name)
+        for name in (tag or [])
+        if name and str(name).strip()
+    ]
+    if tag_keys:
+        # A subquery keeps a paper with two matching tags from being listed twice.
+        statement = statement.where(
+            Paper.id.in_(
+                select(PapersTag.paper_id)
+                .join(PaperTag, PapersTag.tag_id == PaperTag.id)
+                .where(PaperTag.normalized_name.in_(tag_keys))
+            )
+        )
     total = session.execute(
         select(func.count()).select_from(statement.order_by(None).subquery())
     ).scalar_one()
@@ -601,6 +664,14 @@ def serialize_paper(paper: Paper, *, source_url: str | None = None) -> dict:
         "arxiv_id": paper.arxiv_id,
         "url": paper.url,
         "venue": paper.venue.name if paper.venue is not None else None,
+        # Metadata snapshot of the citation record (mirrors the index snapshot,
+        # but always current because it is read from PostgreSQL).
+        "venue_year": paper.venue_year,
+        "paper_type": paper.paper_type,
+        "volume": paper.volume,
+        "issue": paper.issue,
+        "pages": paper.pages,
+        "publication_date": paper.publication_date,
         "authors": paper_author_names(paper),
         "status": paper.status,
         "fingerprint": paper.fingerprint,

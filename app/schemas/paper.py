@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +33,14 @@ class PaperOut(BaseModel):
     arxiv_id: str | None = None
     url: str | None = None
     venue: str | None = None
+    #: Metadata snapshot (see ``docs/architecture/08-metadata.md``): the edition
+    #: year of the venue, the literature type and the citation fields.
+    venue_year: int | None = None
+    paper_type: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
+    publication_date: date | None = None
     authors: list[str] = Field(default_factory=list)
     status: str
     fingerprint: str
