@@ -64,6 +64,7 @@ def make_job_row(
     payload: dict,
     stage: str = "QUEUED",
     finished: bool = False,
+    finished_hours_ago: float = 0.0,
 ) -> str:
     session = session_factory()
     try:
@@ -74,7 +75,11 @@ def make_job_row(
             progress=0.0,
             payload=payload,
             started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc) if finished else None,
+            finished_at=(
+                datetime.now(timezone.utc) - timedelta(hours=finished_hours_ago)
+                if finished
+                else None
+            ),
         )
         session.add(job)
         session.commit()
@@ -143,6 +148,66 @@ def test_staging_object_of_a_live_job_is_kept(factory, tmp_path):  # noqa: F811
 
     assert report.removed == 0
     assert storage.deleted == []
+
+
+def test_staging_bytes_of_a_pre_stored_failure_are_kept_for_the_retry(
+    factory, tmp_path
+):  # noqa: F811
+    """A FAILED job without a paper row can still be retried from its bytes.
+
+    ``POST /api/jobs/{id}/retry`` re-reads ``payload["object_key"]`` for a job that
+    died before the ``STORED`` checkpoint, so the collector must not treat that
+    terminal row as "nobody needs this" (it did until 2026-09-22).
+    """
+    make_job_row(
+        factory,
+        payload={"source_type": "file", "object_key": "uploads/req9/1-i.pdf"},
+        stage="FAILED",
+        finished=True,
+    )
+    storage = FakeStorage(["uploads/req9/1-i.pdf"])
+
+    report = run(factory, storage, tmp_path)
+
+    assert storage.deleted == []
+    assert report.stale_staging == []
+    assert report.orphan_staging == []
+
+
+def test_pre_stored_staging_is_collected_once_the_retry_window_closes(
+    factory, tmp_path
+):  # noqa: F811
+    """The grace is finite: a job nobody retries must not pin storage forever."""
+    over = housekeeping.STAGING_RETRY_GRACE_HOURS + 1
+    make_job_row(
+        factory,
+        payload={"source_type": "file", "object_key": "uploads/req10/1-j.pdf"},
+        stage="FAILED",
+        finished=True,
+        finished_hours_ago=over,
+    )
+    storage = FakeStorage(["uploads/req10/1-j.pdf"])
+
+    report = run(factory, storage, tmp_path)
+
+    assert report.stale_staging == ["uploads/req10/1-j.pdf"]
+    assert storage.deleted == ["uploads/req10/1-j.pdf"]
+
+
+def test_only_failed_jobs_get_the_retry_grace(factory, tmp_path):  # noqa: F811
+    """A terminal row that is not a pre-STORED failure is debris as before."""
+    make_job_row(
+        factory,
+        payload={"source_type": "file", "object_key": "uploads/req11/1-k.pdf"},
+        stage="INTERRUPTED",
+        finished=True,
+    )
+    storage = FakeStorage(["uploads/req11/1-k.pdf"])
+
+    report = run(factory, storage, tmp_path)
+
+    assert report.stale_staging == ["uploads/req11/1-k.pdf"]
+    assert storage.deleted == ["uploads/req11/1-k.pdf"]
 
 
 def test_a_half_written_object_without_a_job_is_removed(factory, tmp_path):  # noqa: F811

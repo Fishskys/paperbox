@@ -17,6 +17,15 @@ The collector runs once at startup and then every ``INGEST_GC_INTERVAL_S``. It i
 **advisory only**: it never touches a job row (no state is invented, no job is
 failed), it only removes files, it is idempotent, and every failure is logged and
 reported rather than raised -- a broken collector must not take the app down.
+
+**Staging bytes a retry still needs are kept** (2026-09-22): a job that failed
+*before* the ``STORED`` checkpoint has no paper row (``paper_id IS NULL``) and
+``POST /api/jobs/{id}/retry`` re-reads ``payload["object_key"]`` to redo the
+download/store transaction. Treating a terminal row as "nobody needs this" deleted
+those bytes in the very next pass (the default interval is 300s), which made the
+documented retry of a pre-``STORED`` failure impossible -- a restart left behind
+``INTERRUPTED`` jobs in exactly that state. Such an object is now held for
+``STAGING_RETRY_GRACE_HOURS`` after ``finished_at`` and collected afterwards.
 """
 
 from __future__ import annotations
@@ -40,6 +49,11 @@ from app.services import archive_service, object_storage
 logger = get_logger(__name__)
 
 STAGING_PREFIX = f"{object_storage.UPLOAD_PREFIX}/"
+
+#: How long the bytes of a job that failed *before* ``STORED`` are held for a
+#: retry (see the module docstring). A code constant on purpose: this is a
+#: housekeeping policy, not a deployment knob (``AGENTS.md`` section 3.4).
+STAGING_RETRY_GRACE_HOURS = 72
 
 
 @dataclass
@@ -80,6 +94,10 @@ class JobRef:
     live: bool
     object_key: str | None
     local_path: str | None
+    #: Failed before the ``STORED`` checkpoint (no paper row): its retry re-reads
+    #: the staging object, so those bytes must survive the collector.
+    retryable: bool = False
+    finished_at: datetime | None = None
 
 
 def load_job_refs(session_factory=SessionLocal) -> list[JobRef]:
@@ -88,6 +106,12 @@ def load_job_refs(session_factory=SessionLocal) -> list[JobRef]:
     ``finished_at IS NULL`` is the definition of *live* used everywhere else (a
     job that is running or waiting has no finish timestamp), so a live job is
     never collected from under itself.
+
+    ``retryable`` marks the jobs a retry can still re-drive from their staging
+    bytes: ``FAILED`` with no ``paper_id`` means the pipeline died before the
+    ``STORED`` checkpoint (see ``app/services/ingestion_service.py``); once a
+    paper row exists the original lives under ``papers/`` and the staging copy
+    is debris again.
     """
     session = session_factory()
     try:
@@ -97,12 +121,13 @@ def load_job_refs(session_factory=SessionLocal) -> list[JobRef]:
                 IngestionJob.stage,
                 IngestionJob.finished_at,
                 IngestionJob.payload,
+                IngestionJob.paper_id,
             )
         ).all()
     finally:
         session.close()
     refs: list[JobRef] = []
-    for job_id, stage, finished_at, payload in rows:
+    for job_id, stage, finished_at, payload, paper_id in rows:
         data = payload if isinstance(payload, dict) else {}
         refs.append(
             JobRef(
@@ -110,6 +135,8 @@ def load_job_refs(session_factory=SessionLocal) -> list[JobRef]:
                 live=finished_at is None and stage not in ("COMPLETED", "FAILED"),
                 object_key=_as_text(data.get("object_key")),
                 local_path=_as_text(data.get("local_path")),
+                retryable=stage == "FAILED" and paper_id is None,
+                finished_at=finished_at,
             )
         )
     return refs
@@ -131,6 +158,26 @@ def _is_under(path: str, directory: str) -> bool:
     candidate = _norm(path)
     base = _norm(directory)
     return candidate == base or candidate.startswith(base + "/")
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite hands back naive timestamps, PostgreSQL aware ones (compare safe)."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _keeps_staging(ref: JobRef, moment: datetime) -> bool:
+    """Should this job's staging bytes survive this pass?
+
+    A live job always keeps them (it is about to read them). A job that failed
+    before ``STORED`` keeps them for ``STAGING_RETRY_GRACE_HOURS`` so its retry can
+    redo the download/store transaction, then they are collected like any other
+    stale object -- a job nobody retries must not pin storage forever.
+    """
+    if ref.live:
+        return True
+    if not ref.retryable or ref.finished_at is None:
+        return False
+    return _aware(ref.finished_at) > moment - timedelta(hours=STAGING_RETRY_GRACE_HOURS)
 
 
 def run_gc(
@@ -173,8 +220,8 @@ def run_gc(
 
     for key in keys:
         owners = staging_owners.get(key)
-        if owners and any(owner.live for owner in owners):
-            continue  # a waiting or running job still needs these bytes
+        if owners and any(_keeps_staging(owner, moment) for owner in owners):
+            continue  # a waiting, running or retryable job still needs these bytes
         bucket_name = "orphan" if not owners else "stale"
         if not _delete(storage, key, report):
             continue
@@ -331,6 +378,7 @@ __all__ = [
     "Housekeeping",
     "JobRef",
     "STAGING_PREFIX",
+    "STAGING_RETRY_GRACE_HOURS",
     "collect_once",
     "get_housekeeping",
     "load_job_refs",

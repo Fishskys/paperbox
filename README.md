@@ -203,7 +203,7 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
 
 **临时副本与清理**：staging 对象在 `STORED` 检查点删除（判重命中立即删除）；压缩包解出的本地文件
 （`cleanup_after`）在 `STORED` 后删除并剪掉空目录；`app/workers/housekeeping.py` 在启动时跑一次、
-之后每 `INGEST_GC_INTERVAL_S` 清理孤儿/终态作业的 staging、过期解包目录与残留压缩包——
+之后每 `INGEST_GC_INTERVAL_S` 清理孤儿/终态作业的 staging、过期解包目录与残留压缩包（**例外**：`STORED` 之前失败＝`stage=FAILED` 且 `paper_id IS NULL` 的行，自 `finished_at` 起保留 72h 供重试）——
 **只删文件、不改作业状态、幂等**。
 
 **客户端脚本**：`scripts/bulk_ingest_dir.py`（同机默认走 `/ingest/dir`；远端用 `--via-http` 走 `/ingest/files`，
@@ -422,7 +422,7 @@ uv run pytest            # 或 uv run pytest tests -q
 | `tests/test_ingest_dir.py` | `/ingest/dir`：白名单 403/404、`..` 与符号链接/junction 逃逸、dry_run、glob/limit、隐藏与临时文件跳过 |
 | `tests/test_ingest_compressed.py` | 压缩包：zip-slip（`..`/绝对/盘符/符号链接/设备条目）、zip bomb 三重上限、嵌套不递归、非 zip 415、临时目录清理 |
 | `tests/test_stored_cleanup.py` | STORED 后删 staging 与解包文件；STORED 之前失败保留 staging（可重试） |
-| `tests/test_upload_gc.py` | housekeeping：孤儿/终态 staging、过期解包目录、残留压缩包、幂等、不改作业行、周期任务生命周期 |
+| `tests/test_upload_gc.py` | housekeeping：孤儿/终态 staging、**`STORED` 之前失败的行保留 72h 供重试 / 超期回收**、过期解包目录、残留压缩包、幂等、不改作业行、周期任务生命周期 |
 | `tests/test_bulk_ingest_dir.py` | 客户端脚本纯函数：预筛、清单、glob、429 退避、`--resume`、报告计数 |
 
 **指纹与去重**：`papers.fingerprint` 按 `DOI > arXiv > 归一化标题+首作者+年 > sha256` 生成（`app/services/paper_service.py`）。导入时先以 `sha256` 占位，解析出元数据后**重算并落库**；若与另一篇存活论文撞指纹，则清理本次 chunks/索引/对象、软删本论文，作业以 `completed` + `duplicate=true` 指向既有论文结束（`app/workers/tasks.py`）。
