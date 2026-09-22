@@ -74,16 +74,37 @@ def retry_job(
 
 @router.get("", response_model=JobListOut)
 def list_jobs(
-    limit: int = 20,
+    limit: int = Query(ingestion_service.DEFAULT_JOB_LIMIT, ge=1, le=200),
+    offset: int = Query(0, ge=0, description="rows to skip (newest first)"),
+    stage: str | None = Query(
+        default=None, description="only jobs observed in this stage"
+    ),
     paper_id: str | None = Query(default=None),
     session: Session = Depends(get_db),
 ) -> JobListOut:
-    """List recent jobs newest first (used by the WebUI to show progress)."""
+    """List recent jobs newest first, pageable and filterable (2026-09-23).
+
+    ``limit`` + ``offset`` walk the history server-side (the WebUI's job tab pages
+    with them) and ``total`` always counts the *filtered* set, so the browser can
+    render "第 x / y 页" from one response. An unknown ``stage`` is a 422: a typo
+    must not look like "no such jobs".
+    """
+    if stage is not None and stage not in ingestion_service.STAGES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown stage: {stage} "
+                f"(expected one of {', '.join(ingestion_service.STAGES)})"
+            ),
+        )
     rows, total = ingestion_service.list_jobs(
-        session, limit=limit, paper_id=paper_id
+        session, limit=limit, offset=offset, stage=stage, paper_id=paper_id
     )
     return JobListOut(
         total=total,
+        limit=limit,
+        offset=offset,
+        stage=stage,
         jobs=[JobOut.model_validate(ingestion_service.serialize_job(row)) for row in rows],
     )
 

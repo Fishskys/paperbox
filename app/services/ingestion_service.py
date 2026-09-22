@@ -38,6 +38,26 @@ STAGE_STORED = "STORED"
 STAGE_COMPLETED = "COMPLETED"
 STAGE_FAILED = "FAILED"
 
+#: Every stage a job can be observed in, in pipeline order (2026-09-23). The
+#: worker owns PARSING..INDEXING (``app/workers/tasks.py``); this tuple is the
+#: single list the API validates ``GET /api/jobs?stage=`` against, so a typo is a
+#: 422 instead of an empty page that looks like "no such jobs".
+STAGES: tuple[str, ...] = (
+    "RECEIVED",
+    "QUEUED",
+    "DOWNLOADING",
+    "STORED",
+    "PARSING",
+    "CHUNKING",
+    "EMBEDDING",
+    "INDEXING",
+    "COMPLETED",
+    "FAILED",
+)
+
+#: Default page size of ``GET /api/jobs`` (the WebUI passes its own).
+DEFAULT_JOB_LIMIT = 20
+
 #: ``payload["source_type"]`` of a PDF that already sits on this machine: the
 #: server reads it directly (``/ingest/dir`` and ``/ingest/compressed``).
 SOURCE_TYPE_LOCAL = "local_path"
@@ -264,20 +284,33 @@ def get_job(session: Session, job_id: str) -> IngestionJob | None:
 
 
 def list_jobs(
-    session: Session, *, limit: int = 20, paper_id: str | None = None
+    session: Session,
+    *,
+    limit: int = DEFAULT_JOB_LIMIT,
+    offset: int = 0,
+    stage: str | None = None,
+    paper_id: str | None = None,
 ) -> tuple[list[IngestionJob], int]:
-    """Return ``(jobs, total)`` newest first, optionally for one paper."""
+    """Return ``(jobs, total)`` newest first, optionally filtered.
+
+    ``total`` counts the *filtered* set (not the page), so a caller can render
+    "第 x / y 页" without a second request; ``offset`` is applied in SQL, which is
+    what makes the WebUI's job list pageable past the first ``limit`` rows.
+    """
     from sqlalchemy import func, select as _select
 
     statement = _select(IngestionJob)
     if paper_id:
         statement = statement.where(IngestionJob.paper_id == paper_id)
+    if stage:
+        statement = statement.where(IngestionJob.stage == stage)
     total = session.execute(
         _select(func.count()).select_from(statement.subquery())
     ).scalar_one()
     rows = (
         session.execute(
             statement.order_by(IngestionJob.created_at.desc())
+            .offset(max(0, offset))
             .limit(max(1, min(limit, 200)))
         )
         .scalars()
@@ -513,10 +546,12 @@ def read_upload(data: bytes, filename: str, content_type: str | None) -> UploadR
 
 
 __all__ = [
+    "DEFAULT_JOB_LIMIT",
     "DownloadResult",
     "LocalSourceUnavailable",
     "SOURCE_TYPE_LOCAL",
     "IN_FLIGHT_STAGES",
+    "STAGES",
     "IngestionError",
     "STAGE_COMPLETED",
     "STAGE_DOWNLOADING",

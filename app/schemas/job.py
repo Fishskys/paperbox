@@ -32,6 +32,12 @@ class JobListOut(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     total: int = 0
+    #: The window this page was cut with (echoed so the caller can page without
+    #: tracking it: 2026-09-23).
+    limit: int = 20
+    offset: int = 0
+    #: Stage filter this page was cut with; ``None`` when unfiltered.
+    stage: str | None = None
     jobs: list[JobOut] = Field(default_factory=list)
 
 

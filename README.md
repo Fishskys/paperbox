@@ -23,7 +23,7 @@ PostgreSQL  OpenSearch     MinIO     Embedding Server
 | 依赖健康 | `GET /health` |
 | 论文列表（分页 / 按状态 / 标题搜索 / 按 venue、年份区间、paper_type、tag 过滤） | `GET /api/papers` |
 | 三端一致性检查（PG / MinIO / OpenSearch 只读对账） | `GET /api/consistency` |
-| 任务列表（最近 N 条） | `GET /api/jobs` |
+| 任务列表（`limit`/`offset` 分页 + `stage`/`paper_id` 过滤，响应回显窗口与 `total`） | `GET /api/jobs` |
 | 导入队列深度（并发上限 / 在跑 / 排队） | `GET /api/jobs/queue` |
 | 任务重试（手动触发，plan §22） | `POST /api/jobs/{job_id}/retry` |
 | URL 导入 / 文件上传导入 | `POST /api/papers/ingest`、`POST /api/papers/ingest/file` |
@@ -327,6 +327,16 @@ curl -X POST http://127.0.0.1:8077/api/jobs/<job_id>/retry \
   -H "Authorization: Bearer $API_KEY"
 # -> 202，body 为重置后的作业（stage=QUEUED），继续轮询 GET /api/jobs/<job_id> 即可
 
+# 任务列表：limit/offset 服务端分页 + stage/paper_id 过滤（2026-09-23）
+# - total 永远是**过滤后**的总数（不是本页条数），所以一页就能算出「第 x / y 页」
+# - 响应回显 limit/offset/stage，调用方不必自己记窗口
+# - stage 取值限 RECEIVED/QUEUED/DOWNLOADING/STORED/PARSING/CHUNKING/EMBEDDING/INDEXING/COMPLETED/FAILED，
+#   写错是 422（不是空列表——否则打错的阶段名看起来像「没有这种任务」）
+curl "http://127.0.0.1:8077/api/jobs?limit=20&offset=40" -H "Authorization: Bearer $API_KEY"
+# -> {"total":137,"limit":20,"offset":40,"stage":null,"jobs":[...]}
+curl "http://127.0.0.1:8077/api/jobs?stage=FAILED&limit=50" -H "Authorization: Bearer $API_KEY"
+# -> {"total":3,"limit":50,"offset":0,"stage":"FAILED","jobs":[...]}  ← 拿来挑要重试的作业
+
 # 上传本地 PDF
 curl -X POST http://127.0.0.1:8077/api/papers/ingest/file \
   -H "Authorization: Bearer $API_KEY" -F file=@paper.pdf
@@ -430,7 +440,7 @@ uv run python scripts\acceptance.py
 uv run pytest            # 或 uv run pytest tests -q
 ```
 
-当前测试（`uv run pytest` 共 **842** 个用例，1 skipped：文件符号链接需开发者模式；以实际输出为准）：
+当前测试（`uv run pytest` 共 **854** 个用例，1 skipped：文件符号链接需开发者模式；以实际输出为准）：
 
 | 文件 | 覆盖 |
 |------|------|
@@ -456,7 +466,8 @@ uv run pytest            # 或 uv run pytest tests -q
 | `tests/test_stored_cleanup.py` | STORED 后删 staging 与解包文件；STORED 之前失败保留 staging（可重试） |
 | `tests/test_upload_gc.py` | housekeeping：孤儿/终态 staging、**`STORED` 之前失败的行保留 72h 供重试 / 超期回收**、过期解包目录、残留压缩包、幂等、不改作业行、周期任务生命周期 |
 | `tests/test_bulk_ingest_dir.py` | 客户端脚本纯函数：预筛、清单、glob、429 退避、`--resume`、报告计数 |
-| `tests/test_consistency.py` | 三端一致性：缺失对象/孤儿对象/缺失索引/缺失 chunk/孤儿文档/删除残留/坏 store（一个挂了另两个照样答）/未传 client |
+| `tests/test_consistency.py` | 三端一致性：缺失对象/孤儿对象/缺失索引/缺失 chunk/孤儿文档/删除残留/坏 store（一个挂了另两个照样答）/未传 client |
+| `tests/test_jobs_api.py` | `GET /api/jobs` 的 offset 分页（新→旧、越界为空、负值 422）与 `stage` 过滤（total 随过滤变、未知 stage 422、十个阶段全放行、与 paper_id 叠加）、窗口回显 |
 | `tests/test_index_snapshot.py` | 索引映射与 chunk 文档形状快照：新字段类型、tag 按 kind 分列、identifiers 形状、`embedding` 仍是 1024 维 knn |
 | `tests/test_refresh_index_metadata.py` | 快照刷新：每个 chunk 一条 partial update（不含 embedding/text）、先 mapping 后文档、跳过软删与无 chunk 论文、`--dry-run`/`--paper-id`/`--no-mapping` |
 | `tests/test_paper_list_filters.py` | `GET /api/papers` 过滤（venue/年份区间/paper_type/tag）+ `PaperOut` 新列序列化 |
@@ -533,7 +544,7 @@ uv run python scripts/create_index.py  # 建 paper_chunks_v2（CJK 分词）+ �
 # 5) 启动 / 自检 / 测试
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077   # 监听由 PAPER_API_HOST / PAPER_API_PORT 决定
 uv run python scripts/healthcheck.py     # 四依赖连通性
-uv run pytest                            # 842 用例；必须全绿才继续
+uv run pytest                            # 854 用例；必须全绿才继续
 ```
 
 ### 10.2 容器化构建（Linux 服务器）
