@@ -7,6 +7,8 @@ Reindexing a paper re-runs metadata extraction, which calls
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import sqlalchemy
 import pytest
 from sqlalchemy import create_engine
@@ -89,3 +91,50 @@ def test_replacing_authors_drops_the_old_links(session) -> None:
 
     assert paper_service.paper_author_names(paper) == ["Carol"]
     assert session.query(Author).filter(Author.name == "Carol").count() == 1
+
+
+def test_the_same_author_is_reused_across_papers(session) -> None:
+    """``get_or_create_author`` is the only writer: one row per normalized name."""
+    first = make_paper(session)
+    second = make_paper(session)
+
+    paper_service.set_paper_authors(session, first, ["Alice Smith"])
+    session.commit()
+    paper_service.set_paper_authors(session, second, ["alice  smith"])
+    session.commit()
+
+    assert session.query(Author).count() == 1
+
+
+def test_a_duplicate_author_row_does_not_fail_the_lookup(session) -> None:
+    """A database that has not run migration ``0de3ab5e24dc`` yet may hold two
+    rows with the same normalized name; the lookup must keep working and pick the
+    oldest one instead of raising ``MultipleResultsFound`` (which used to fail the
+    whole paper). The tables this fixture builds carry no unique constraint, so the
+    duplicate can be created here on purpose.
+    """
+    oldest = Author(
+        id=new_uuid(),
+        name="Alice Smith",
+        normalized_name="alice smith",
+        created_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    newest = Author(
+        id=new_uuid(),
+        name="Alice  Smith",
+        normalized_name="alice smith",
+        created_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add_all([oldest, newest])
+    session.commit()
+
+    author = paper_service.get_or_create_author(session, "Alice Smith")
+    assert author.id == oldest.id
+
+
+def test_a_missing_author_is_created_once(session) -> None:
+    first = paper_service.get_or_create_author(session, "Grace Hopper")
+    session.commit()
+    second = paper_service.get_or_create_author(session, "grace hopper")
+    assert first.id == second.id
+    assert session.query(Author).count() == 1

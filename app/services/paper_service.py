@@ -179,17 +179,41 @@ def title_from_url(url: str) -> str:
 # author helpers
 # --------------------------------------------------------------------------- #
 def get_or_create_author(session: Session, name: str) -> Author:
-    """Return the author row for ``name``, creating it when needed."""
+    """Return the author row for ``name``, creating it when needed.
+
+    ``authors.normalized_name`` is unique (``uq_authors_normalized_name``), so at
+    most one row can match. The lookup is written tolerantly anyway - oldest row
+    first, a warning when several match - because a database that has not run that
+    migration yet can still hold duplicates, and a duplicate must not fail the
+    whole paper (it used to raise ``MultipleResultsFound`` out of the ingestion
+    pipeline and leave a FAILED job behind).
+    """
     normalized = normalize_text(name) or name.strip().casefold()
-    author = session.execute(
-        select(Author).where(Author.normalized_name == normalized)
-    ).scalar_one_or_none()
-    if author is None:
-        author = Author(
-            id=new_uuid(), name=name.strip(), normalized_name=normalized
+    matches = (
+        session.execute(
+            select(Author)
+            .where(Author.normalized_name == normalized)
+            .order_by(Author.created_at, Author.id)
         )
-        session.add(author)
-        session.flush()
+        .scalars()
+        .all()
+    )
+    if len(matches) > 1:
+        logger.warning(
+            "duplicate author rows share a normalized name",
+            extra={
+                "extra_fields": {
+                    "normalized_name": normalized,
+                    "rows": len(matches),
+                    "kept": matches[0].id,
+                }
+            },
+        )
+    if matches:
+        return matches[0]
+    author = Author(id=new_uuid(), name=name.strip(), normalized_name=normalized)
+    session.add(author)
+    session.flush()
     return author
 
 

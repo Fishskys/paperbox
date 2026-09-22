@@ -17,6 +17,7 @@ from __future__ import annotations
 from sqlalchemy import Boolean, Date, Integer, String, Text
 
 from app.db.models import (
+    Author,
     Base,
     Paper,
     PaperFieldProvenance,
@@ -228,3 +229,21 @@ def test_paper_relationships_cover_the_new_layer() -> None:
     assert "field_provenance" in Paper.__mapper__.relationships
     assert "venue_edition" in Paper.__mapper__.relationships
     assert "editions" in Venue.__mapper__.relationships
+
+
+def test_author_normalized_name_is_unique() -> None:
+    """One row per normalized name (migration ``0de3ab5e24dc``).
+
+    ``paper_service.get_or_create_author`` looks authors up by this column, so two
+    rows sharing it used to raise ``MultipleResultsFound`` and fail the paper.
+    """
+    constraint_names = {
+        constraint.name for constraint in Author.__table__.constraints
+    }
+    assert "uq_authors_normalized_name" in constraint_names
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in Author.__table__.constraints
+        if constraint.name == "uq_authors_normalized_name"
+    }
+    assert unique_columns == {("normalized_name",)}

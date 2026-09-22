@@ -172,7 +172,13 @@ class Paper(TimestampMixin, Base):
 # --------------------------------------------------------------------------- #
 class Author(TimestampMixin, Base):
     __tablename__ = "authors"
-    __table_args__ = (Index("ix_authors_name", "name"),)
+    __table_args__ = (
+        # One row per normalized name: ``get_or_create_author`` looks an author up
+        # by it, and two rows would make that lookup ambiguous (migration
+        # ``0de3ab5e24dc`` merges the duplicates that existed before the index).
+        UniqueConstraint("normalized_name", name="uq_authors_normalized_name"),
+        Index("ix_authors_name", "name"),
+    )
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=new_uuid
