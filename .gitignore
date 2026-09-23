@@ -32,3 +32,10 @@ envpatch.txt
 t2.txt
 tmp_probe.txt
 *.log
+
+# uv 的仓库内缓存（UV_CACHE_DIR 指到仓库里时会出现；它自带 .gitignore，但别指望那个）
+.uvcache/
+# Windows / macOS 常见垃圾文件
+Thumbs.db
+desktop.ini
+.DS_Store
