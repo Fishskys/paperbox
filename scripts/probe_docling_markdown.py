@@ -14,6 +14,19 @@ IMPORTANT — request shape (verified against the running container, 2026-09-28)
 Query parameters are silently ignored, so every option below has to travel in the
 multipart body; passing them as ``params=`` makes docling run on pure defaults and
 look "broken" (no page markers, no heading levels, OCR silently on).
+
+Two option quirks found while checking the owner's decisions (T2b, 2026-09-28):
+
+* ``pdf_heading_hierarchy_options`` (``enabled=true`` etc.) has **no effect on the
+  markdown export** in v1.35.0 — the title stays ``##``. The DoclingDocument JSON
+  already marks it ``section_header, level=1``, and the markdown exporter only emits
+  ``#`` for the ``title`` label, which docling no longer produces. We keep sending
+  the option (it is what the owner asked for) but the ``#`` has to come from our own
+  post-processing rule.
+* Formula LaTeX needs **both** ``do_formula_enrichment=true`` and
+  ``code_formula_preset=codeformulav2``; alone the former answers 404
+  (``Preset 'default' not found for CodeFormulaVlmOptions``), and the preset's
+  weights are not baked into the image, so ``--formula`` also needs plan T1.5.
 """
 
 from __future__ import annotations
@@ -29,6 +42,24 @@ import httpx
 
 DEFAULT_URL = "http://127.0.0.1:8091"
 DEFAULT_PAGE_BREAK = "<!-- page-break -->"
+
+#: docling remaps DocItemLabel.TITLE onto SECTION_HEADER, so `do_pdf_heading_hierarchy`
+#: alone leaves the paper title at the same level as the sections. Only this options
+#: blob (enabled=true) makes docling infer real levels; max_level=6 also clamps the
+#: bogus 7-level headings it sometimes emits.
+DEFAULT_HEADING_OPTIONS = json.dumps(
+    {
+        "enabled": True,
+        "use_bookmarks": True,
+        "use_numbering": True,
+        "use_style": True,
+        "use_font_style": True,
+        "style_size_tolerance": 0.05,
+        "max_level": 6,
+        "bookmark_match_threshold": 0.8,
+    },
+    separators=(",", ":"),
+)
 
 #: Multipart fields matching the parameter mapping table in the plan (§1.3).
 #: Values are strings because they all travel as form fields; pydantic coerces.
@@ -61,6 +92,8 @@ def convert(
     formats: list[str],
     page_range: str | None = None,
     document_timeout: float | None = 150.0,
+    heading_options: str | None = DEFAULT_HEADING_OPTIONS,
+    formula: bool = False,
 ) -> dict[str, Any]:
     """Send one PDF to docling-serve and return the parsed response."""
     fields: dict[str, Any] = dict(COMMON_FIELDS)
@@ -69,6 +102,14 @@ def convert(
     fields["md_page_break_placeholder"] = page_break
     if ocr:
         fields["do_ocr"] = "true"
+    if formula:
+        # Both fields are required: without the preset docling answers 404
+        # ("Preset 'default' not found for CodeFormulaVlmOptions"), and the
+        # preset's weights are not in the image (see plan T1.5).
+        fields["do_formula_enrichment"] = "true"
+        fields["code_formula_preset"] = "codeformulav2"
+    if heading_options:
+        fields["pdf_heading_hierarchy_options"] = heading_options
     if document_timeout is not None:
         fields["document_timeout"] = str(document_timeout)
     else:
@@ -122,6 +163,17 @@ def main() -> int:
         default=150.0,
         help="server-side deadline in seconds (0/negative = none; keep it set!)",
     )
+    parser.add_argument(
+        "--heading-options",
+        default=DEFAULT_HEADING_OPTIONS,
+        help='JSON for pdf_heading_hierarchy_options (default: enabled=true, max_level=6); "" disables',
+    )
+    parser.add_argument(
+        "--formula",
+        action="store_true",
+        help="enable formula LaTeX (do_formula_enrichment + code_formula_preset=codeformulav2); "
+        "needs the CodeFormulaV2 model from plan T1.5, else docling answers 404",
+    )
     parser.add_argument("--out", type=Path, default=None, help="output directory")
     parser.add_argument("--no-json", action="store_true", help="skip writing the DoclingDocument JSON")
     args = parser.parse_args()
@@ -145,6 +197,8 @@ def main() -> int:
                     formats=formats,
                     page_range=args.page_range,
                     document_timeout=args.document_timeout if args.document_timeout > 0 else None,
+                    heading_options=args.heading_options or None,
+                    formula=args.formula,
                 )
             except httpx.HTTPError as exc:
                 print(f"!! {pdf.name}: {exc}")
