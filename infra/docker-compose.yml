@@ -107,3 +107,63 @@ services:
       interval: 15s
       timeout: 10s
       retries: 30
+
+  # ── Docling 解析服务（2026-09-28，见 .hermes/plans/2026-09-28_160551-docling-parser-backend.md）──
+  # 用途: 第二个（主）PDF 解析后端，替换 pypdf 处理双栏论文；pypdf 保留为降级后端。
+  # 镜像: CPU 版 4.4GB，模型烤在镜像里（不需要联网下载）。**tag 必须写死**（解析结果要可追溯，
+  #       也避免 latest 漂移后同一份 PDF 解析出不同结果）。本机无 NVIDIA 卡（Ryzen 5 5600U/15.4GB），
+  #       所以只能 CPU 版；有卡时换 quay.io/docling-project/docling-serve-cu128:<tag>（注意 CUDA 镜像没有 latest 标签）。
+  # 端口: 宿主 8091 → 容器 5001。**新增容器后必须在 WSL 里放行**: ufw allow 8091/tcp（AGENTS.md §3.2）。
+  # 内存: WSL 上限 9GB，实测 embedding 容器已占 4.3GB + OpenSearch 1.3GB，只剩 ~1.7GB 余量。
+  #       这里**故意设上限**：宁可 docling 被 OOM-kill（app 侧会降级回 pypdf），也不要连累
+  #       embedding/精排容器（它们没有降级路径，历史上被 OOM-killer 杀过）。
+  #       T1 实测峰值后可以再调这个数。
+  docling:
+    image: quay.io/docling-project/docling-serve-cpu:v1.35.0
+    container_name: paperbox-docling
+    restart: unless-stopped
+    environment:
+      UVICORN_WORKERS: "1"
+      DOCLING_SERVE_LOG_LEVEL: "WARNING"
+      # ── 资源与超时（2026-09-28 T1/T2 实测后的取值，依据官方 configuration.md）──
+      # LOAD_MODELS_AT_BOOT 默认 true：开机就把 layout+tableformer+RapidOCR 全加载，
+      #   实测容器在 2200m 上限下 OOM 自杀并重启了一次（重启窗口里请求全 502）。
+      #   本机要和 embedding(4.3GB 暖) 抢内存，改成懒加载：冷请求付一次模型加载，
+      #   平时只占几百 MB，被 OOM-kill 也只影响 docling 自己。
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "false"
+      # 每个 options 组合一个 DocumentConverter（含其模型），默认缓存 2 份 → 内存翻倍。只留 1 份。
+      DOCLING_SERVE_OPTIONS_CACHE_SIZE: "1"
+      # 同步端点默认只等 120s 就返回 504（首次实测就是这么超时的）。留足冷启动+解析时间。
+      # 真正兜底的是请求级 document_timeout=150（app 会带），不是这个值。
+      DOCLING_SERVE_MAX_SYNC_WAIT: "300"
+      # 打开内存统计端点（默认 false 会 403）：GET /v1/memory/stats、/v1/memory/counts
+      DOCLING_SERVE_ENABLE_MANAGEMENT_ENDPOINTS: "true"
+      # docling 内部的 CPU 线程数（torch/onnxruntime）。不设会按 12 线程跑满整机，
+      # 把同 VM 的 PG/OpenSearch/embedding 一起饿死（2026-09-28 实测：整机假死 17 分钟）。
+      DOCLING_NUM_THREADS: "4"
+      DOCLING_DEVICE: "cpu"
+      # ── 开启 OCR（默认关闭，见决策 1）────────────────────────────────────────
+      # 现状: 语料是电子版 PDF（有文本层），OCR 纯属浪费（官方参考：带 OCR 吞吐掉一半以上）。
+      # 开启方式 a) 按请求开（推荐，也是本项目的开关）: POST /v1/convert/file 带 do_ocr=true，
+      #            即 app 侧 DOCLING_OCR=true；脚本里用 probe_docling_markdown.py --ocr。
+      # 开启方式 b) 按服务开（全局默认）: 容器 /docs 与官方 configuration.md 没有“默认 do_ocr”
+      #            的服务级开关，只有 DOCLING_SERVE_OCR_BATCH_SIZE 等调优项；默认值 do_ocr=true
+      #            是**请求级**字段的默认，所以本项目必须显式传 do_ocr=false。
+      # 另外 force_ocr=false（不要用 OCR 结果覆盖已有文本层）。
+    ports:
+      - "${PAPERBOX_BIND_IP:-0.0.0.0}:8091:5001"
+    mem_limit: ${DOCLING_MEM_LIMIT:-3000m}
+    # memswap_limit == mem_limit：禁止容器用 swap。2026-09-28 实测教训——不设时
+    # 一次 CPU 解析把整个 WSL VM 拖到 8+ 核满载 17 分钟，连 `wsl.exe` 都开不出新会话
+    # （宿主的其他服务一起假死）。宁可容器被 OOM-kill（app 侧降级 pypdf），也不许拖垮 VM。
+    memswap_limit: ${DOCLING_MEM_LIMIT:-3000m}
+    # 只给 4 线程：本机 6 核 12 线程，全给 docling 会让同 VM 的 PG/OpenSearch/embedding 饿死。
+    cpus: ${DOCLING_CPUS:-4}
+    volumes:
+      - ${DOCLING_DATA_DIR:-./data/docling}:/var/lib/docling
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:5001/health', timeout=5).status==200 else sys.exit(1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
