@@ -394,22 +394,35 @@ def upgrade_fingerprint(
     return candidate, None
 
 
-def mirror_legacy_columns(session: Session, paper: Paper) -> None:
+def mirror_legacy_columns(
+    session: Session, paper: Paper, *, force_scheme: str | None = None
+) -> None:
     """Keep ``papers.doi`` / ``papers.arxiv_id`` in step with the identifiers.
+
     Decision 13 keeps those two columns as convenient mirrors (they are indexed
     and every existing query/report uses them), so they must never drift from the
-    identifier table. They are only ever filled, never blanked here: a paper whose
-    DOI was removed by a human edit is handled by the manual-update path.
+    identifier table. The default is fill-only: a column that already has a value
+    is left alone, because the pipeline must not blank what a source provided.
+
+    ``force_scheme`` is for the **manual** path: a human correcting a DOI means the
+    superseded value is wrong, so that column has to follow the new identifier.
+    Without it ``papers.doi`` kept the old DOI while ``paper_identifiers`` and
+    ``papers.fingerprint`` already said the new one -- a drift that showed up as an
+    intermittent failure in ``tests/test_manual_metadata.py`` (2026-09-30).
     """
+    rows = identifiers_for_paper(session, paper.id)
     updated = False
     for scheme, attribute in ((SCHEME_DOI, "doi"), (SCHEME_ARXIV, "arxiv_id")):
-        if getattr(paper, attribute):
+        match = next(
+            (row for row in rows if row.scheme == scheme and row.normalized_value), None
+        )
+        if match is None:
             continue
-        for row in identifiers_for_paper(session, paper.id):
-            if row.scheme == scheme and row.normalized_value:
-                setattr(paper, attribute, row.normalized_value)
-                updated = True
-                break
+        if scheme != force_scheme and getattr(paper, attribute):
+            continue
+        if getattr(paper, attribute) != match.normalized_value:
+            setattr(paper, attribute, match.normalized_value)
+            updated = True
     if updated:
         session.flush()
 

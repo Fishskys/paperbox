@@ -165,7 +165,9 @@ def patch_metadata(
                 first_source_id=source.id,
             )
             identifiers.refresh_primary(session, paper.id)
-            identifiers.mirror_legacy_columns(session, paper)
+            # A manual correction is authoritative: the mirror column must follow
+            # the new identifier (fill-only would keep the superseded DOI).
+            identifiers.mirror_legacy_columns(session, paper, force_scheme=scheme)
             changed_identifier = True
             result.fields.append(key)
             continue
