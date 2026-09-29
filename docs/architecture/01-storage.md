@@ -13,7 +13,7 @@
 - PostgreSQL 是元数据的事实源（`app/db/session.py:3-5`），承载 14 张表（`app/db/models.py`），软删除只改 `deleted_at`；
 - MinIO 存原文 PDF 与上传暂存对象，键布局由 `app/services/object_storage.py` 统一构造，API 只经 `GET /api/papers/{id}/file` 转发（`app/services/object_storage.py:11-12`）；
 - OpenSearch 存 chunk 级文档（含 1024 维向量），全部读写走别名 `paper_chunks_current`（`app/search/opensearch.py:4-5`、`:24-27`）；
-- **三端一致性对账（只读）**：`GET /api/consistency` + `scripts/check_consistency.py` 逐篇核对「`paper_files.object_key` ↔ MinIO 对象」与「chunk 行 ↔ 索引文档」，报出缺失/孤儿/删除残留；不写任何一端，某个 store 连不上只记进 `errors` 并继续回答另外两端（`app/services/consistency_service.py:460`，2026-09-22）。加 `?parser_papers=true`（或 `check_consistency.py --parser-papers`）时另外按解析戳给出**存活论文 id 清单**（`:338` `_census_ids`，上限 `:85` `PARSER_PAPER_ID_LIMIT`）——那是 `scripts/reindex.py --parser-backend <name>` 的工作清单，默认报告仍是摘要（2026-09-30）。
+- **三端一致性对账（只读）**：`GET /api/consistency` + `scripts/check_consistency.py` 逐篇核对「`paper_files.object_key` ↔ MinIO 对象」与「chunk 行 ↔ 索引文档」，报出缺失/孤儿/删除残留；**解析产物（`papers/<id>/extracted/...`，即 `PARSER_CACHE`）单独计成 `cache_objects`/`cache_objects_total`，永不算 problem**（它从不登记 `paper_files`，2026-09-30 前被误报成 `orphan_object`，30 篇 = `problems=30`）；不写任何一端，某个 store 连不上只记进 `errors` 并继续回答另外两端（`app/services/consistency_service.py:485`，2026-09-22）。加 `?parser_papers=true`（或 `check_consistency.py --parser-papers`）时另外按解析戳给出**存活论文 id 清单**（`:354` `_census_ids`，上限 `:93` `PARSER_PAPER_ID_LIMIT`）——那是 `scripts/reindex.py --parser-backend <name>` 的工作清单，默认报告仍是摘要（2026-09-30）。
 - 清理职责：`DELETE /api/papers/{id}` 先删索引文档与对象再置 `deleted_at`（`app/api/papers.py:302-331`）；`app/workers/housekeeping.py` 回收 `uploads/` 残留与解包目录；`scripts/purge_deleted.py` 补历史遗留。
 
 不做：
@@ -32,7 +32,7 @@
 | `app/db/session.py` | `get_engine` | 懒建引擎，`pool_pre_ping=True, pool_size=5, max_overflow=10, pool_recycle=1800`（:22-34） |
 | | `session_scope` / `get_db` | 脚本事务上下文（:56-67）/ FastAPI 请求级依赖（:70-76） |
 | `migrations/env.py` | `get_url` / `include_object` | DSN 只来自 `settings.database_url`（:31-37）；`include_object` 恒返回 True（:40-42） |
-| `app/search/mappings.py` | `build_mapping` | 返回 `paper_chunks_v1` 的 settings+mappings（:104-167） |
+| `app/search/mappings.py` | `build_mapping` | 返回 `paper_chunks_v1` 的 settings+mappings（:104-174） |
 | `app/search/opensearch.py` | `ensure_index` | 幂等建索引并把别名指过去（:69-110） |
 | | `build_alias_swap_body` / `alias_swap_is_safe` | 原子换别名（带 `is_write_index`，:122-133）；只在两侧文档数相等时允许切换（:136-138） |
 | | `build_chunk_document` / `bulk_index_chunks` | 行→文档（:141-173）；批量写 200/批（:176-235） |
@@ -48,7 +48,7 @@
 
 ## 3. 数据结构（表/字段/索引）
 
-`models.py` 文档字符串写的是"9 + 4 = 13 张"（`app/db/models.py:3-14`），实际定义 **14** 张：第 14 张是后加的 `search_queries`（`app/db/models.py:757-796`）。下表按 14 张全列。
+`models.py` 文档字符串写的是"9 + 4 = 13 张"（`app/db/models.py:3-14`），实际定义 **14** 张：第 14 张是后加的 `search_queries`（`app/db/models.py:763-804`）。下表按 14 张全列。
 
 | 表 | 列（类型 / 可空 / 默认） | 索引与约束 |
 |---|---|---|
@@ -72,8 +72,8 @@
 | 索引（定义处） | 谓词 | 不变量 |
 |---|---|---|
 | `uq_papers_fingerprint_live`（`app/db/models.py:88-93`；迁移 `7359b44a3938:24-25`） | `WHERE deleted_at IS NULL` | 只有"活"论文占用指纹；删除后释放，同一文档可重新导入（`app/services/paper_service.py:634-648` 只置 `deleted_at`，行保留供审计） |
-| `uq_paper_identifiers_scheme_value`（`models.py:538-544`；迁移 `7a2f4c9d51be:107-113`） | `WHERE paper_id IS NOT NULL` | 一个 `(scheme, normalized_value)` 至多属于一篇论文，两个来源引用同一 DOI 不会落成两行。**注意谓词实际恒真**：`paper_id` 列本身 `NOT NULL`（`models.py:551-553`、迁移 `:80`），所以它等价于全表唯一；删除论文时 `paper_identifiers` 行被物理删除以释放 DOI（`paper_service.py:652-654`） |
-| `uq_paper_field_provenance_current`（`models.py:592-598`；迁移 `7a2f4c9d51be:152-158`） | `WHERE is_current` | 每个 `(paper_id, field)` 只有一条 current 记录；历史行 `is_current=false` 可无限追加，这是回滚能力的基础（`models.py:583-588`） |
+| `uq_paper_identifiers_scheme_value`（`models.py:544-550`；迁移 `7a2f4c9d51be:107-113`） | `WHERE paper_id IS NOT NULL` | 一个 `(scheme, normalized_value)` 至多属于一篇论文，两个来源引用同一 DOI 不会落成两行。**注意谓词实际恒真**：`paper_id` 列本身 `NOT NULL`（`models.py:557-559`、迁移 `:80`），所以它等价于全表唯一；删除论文时 `paper_identifiers` 行被物理删除以释放 DOI（`paper_service.py:652-654`） |
+| `uq_paper_field_provenance_current`（`models.py:598-604`；迁移 `7a2f4c9d51be:152-158`） | `WHERE is_current` | 每个 `(paper_id, field)` 只有一条 current 记录；历史行 `is_current=false` 可无限追加，这是回滚能力的基础（`models.py:589-594`） |
 | `uq_paper_files_primary`（`models.py:333-338`；迁移 `7a2f4c9d51be:214-220`） | `WHERE is_primary AND deleted_at IS NULL` | 每篇活论文至多一个主版本文件（唯一键只有 `paper_id`，谓词已含 `is_primary`）；"至少一个"不受约束，实际允许 0 个 |
 
 ### ER 关系图（FK 与删除行为）
@@ -97,7 +97,7 @@ venues ──CASCADE──> venue_editions
 ```
 
 - 论文之下**级联删除**（DB `ON DELETE CASCADE`，ORM 亦 `cascade="all, delete-orphan"`）：`paper_authors`、`papers_tags`、`paper_files`、`paper_chunks`、`paper_sources`、`paper_identifiers`、`paper_field_provenance`（`models.py:144-172`）。
-- `Paper.ingestion_jobs` 同样声明 `cascade="all, delete-orphan"`（`models.py:172-172`），但 FK 是 `ON DELETE SET NULL`（`models.py:432-434`）——两者语义不同：ORM 删除论文会删掉作业行，直接 SQL 删论文只会把 `ingestion_jobs.paper_id` 置空。
+- `Paper.ingestion_jobs` 同样声明 `cascade="all, delete-orphan"`（`models.py:172-172`），但 FK 是 `ON DELETE SET NULL`（`models.py:438-440`）——两者语义不同：ORM 删除论文会删掉作业行，直接 SQL 删论文只会把 `ingestion_jobs.paper_id` 置空。
 - 同理 `paper_files.source_id`、`paper_identifiers.first_source_id`、`paper_field_provenance.source_id/identifier_id` 都是 SET NULL：来源行消失不会连带删证据行。
 
 ## 4. 调用链（从入口到落地，逐跳，带函数名）
@@ -125,7 +125,7 @@ venues ──CASCADE──> venue_editions
 
 - 指纹优先序 `DOI > arXiv > 标题+首作者+年份 > sha256`（`app/services/paper_service.py:3-5`、`build_fingerprint:127-140`），指纹唯一性是**部分**索引，删除即释放（见第 3 节）。
 - `papers.status` 的 DB 默认值是小写 `'pending'`（`models.py:126-128`），而应用写的是大写常量 `STATUS_PENDING = "PENDING"`（`paper_service.py:40-44`），且筛选时 `.strip().upper()`（`:332`）——绕过 ORM 插入的行会是小写。
-- `ingestion_jobs.stage` 默认 `'received'`（`models.py:439-441`），而 housekeeping 用大写判断终态 `("COMPLETED","FAILED")`（`app/workers/housekeeping.py:135`）；`finished_at IS NULL` 才是"活着"的统一判据。
+- `ingestion_jobs.stage` 默认 `'received'`（`models.py:445-447`），而 housekeeping 用大写判断终态 `("COMPLETED","FAILED")`（`app/workers/housekeeping.py:135`）；`finished_at IS NULL` 才是"活着"的统一判据。
 - `knn_vector` 映射无法原地修改：`ensure_index` 从不在已存在的索引上重写 mapping（`app/search/opensearch.py:69-82`），换分词器/维度只能新建索引 + `_reindex`（`scripts/create_index.py:1-27`）。
 - **但给活索引「加」新字段是允许的**：`opensearch.update_mapping()`（`opensearch.py:113`）走 `PUT _mapping`，只补 `build_mapping()` 里新增的 properties；存量文档用 `scripts/refresh_index_metadata.py`（→ `bulk_update_documents`，`opensearch.py:145`）批量 partial update，不重算向量。**必须赶在第一个带该字段的文档之前**，否则 `dynamic: true` 会先把它映成 `text`（`pages`/`paper_type` 这类要按 keyword 过滤的字段就废了）；改**已有**字段的类型仍然只能新建索引。
 - 别名切换有闸门：只有新旧索引文档数完全相等才允许切（`opensearch.py:231-233`，`create_index.py` 第 3 步），失败时不动别名。

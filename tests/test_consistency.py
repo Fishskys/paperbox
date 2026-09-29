@@ -298,6 +298,50 @@ def test_a_cleanly_deleted_paper_is_not_reported(factory) -> None:  # noqa: F811
     assert report.problems_total == 0
 
 
+def test_parse_artifacts_are_counted_but_never_orphans(factory) -> None:  # noqa: F811
+    """``papers/<id>/extracted/...`` is the parse cache (T7.1), not drift.
+
+    2026-09-30: docling + ``PARSER_CACHE`` became the default and the cache
+    artifacts -- which never get a ``paper_files`` row -- turned every paper into
+    an ``orphan_object`` problem, i.e. the whole report red for a healthy library.
+    They are legitimate: counted (``cache_objects``), never a problem.
+    """
+    paper_id = add_paper(factory, chunks=2)
+    keys = [
+        object_key(paper_id),
+        object_key(paper_id, "extracted/parsed/docling/document.md"),
+        object_key(paper_id, "extracted/parsed/docling/document.json"),
+        object_key(paper_id, "extracted/parsed/parse-meta.json"),
+    ]
+    report = run(factory, FakeStorage(keys), FakeClient({paper_id: 2}))
+    assert report.problems_total == 0
+    assert report.consistent is True
+    assert report.cache_objects_total == 3
+    # The store total stays honest: every object is still counted.
+    assert report.objects_minio == 4
+
+
+def test_a_true_orphan_beside_parse_artifacts_is_still_reported(factory) -> None:  # noqa: F811
+    paper_id = add_paper(factory, chunks=1)
+    keys = [
+        object_key(paper_id),
+        object_key(paper_id, "extracted/parsed/parse-meta.json"),
+        object_key(paper_id, "stray.pdf"),
+    ]
+    report = run(factory, FakeStorage(keys), FakeClient({paper_id: 1}))
+    assert problems_by_paper(report)[paper_id] == [consistency_service.ISSUE_ORPHAN_OBJECT]
+    assert report.cache_objects_total == 1
+    assert report.consistent is False
+
+
+def test_parse_artifacts_left_on_a_deleted_paper_are_residue(factory) -> None:  # noqa: F811
+    """The delete path purges the whole prefix, cache artifacts included."""
+    paper_id = add_paper(factory, deleted=True, chunks=0)
+    keys = [object_key(paper_id, "extracted/parsed/parse-meta.json")]
+    report = run(factory, FakeStorage(keys), FakeClient({}))
+    assert problems_by_paper(report)[paper_id] == [consistency_service.ISSUE_DELETED_RESIDUE]
+
+
 def test_objects_and_documents_of_unknown_papers_are_listed(factory) -> None:  # noqa: F811
     ghost_object = object_key(new_uuid(), "original.pdf")
     ghost_paper = new_uuid()

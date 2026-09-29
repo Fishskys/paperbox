@@ -66,6 +66,14 @@ ISSUE_PARSER_STAMP_MISMATCH = "parser_stamp_mismatch"
 OBJECT_PREFIX = f"{object_storage.ORIGINAL_PREFIX}/"
 STAGING_PREFIX = f"{object_storage.UPLOAD_PREFIX}/"
 
+#: The parse-artifact folder under a paper's prefix (``papers/<id>/extracted/``).
+#: Those objects are the parse cache (``PARSER_CACHE``, T7.1): legitimate, never
+#: registered in ``paper_files``, and therefore **not** orphans. They used to be
+#: counted as orphans, which turned the whole report red as soon as docling +
+#: cache became the default (2026-09-30: 30 papers, one ``orphan_object`` each).
+#: They are counted separately (``cache_objects``) so nothing is hidden.
+CACHE_SEGMENT = "extracted/"
+
 #: The status a paper reaches once its chunks are indexed (chunks expected).
 INDEXED_STATUS = "INDEXED"
 
@@ -100,6 +108,9 @@ class PaperConsistency:
     issues: list[str] = field(default_factory=list)
     missing_objects: list[str] = field(default_factory=list)
     orphan_objects: list[str] = field(default_factory=list)
+    #: Parse artifacts under ``papers/<id>/extracted/`` (the parse cache). Not
+    #: drift, not orphans -- reported so the count stays visible.
+    cache_objects: int = 0
     #: What PostgreSQL stamps for the paper (``None`` = indexed before the stamp).
     parser_backend: str | None = None
     #: What the paper's index documents carry, sorted. Empty = no documents, or
@@ -119,6 +130,7 @@ class PaperConsistency:
             "issues": list(self.issues),
             "missing_objects": list(self.missing_objects),
             "orphan_objects": list(self.orphan_objects),
+            "cache_objects": self.cache_objects,
             "parser_backend": self.parser_backend,
             "index_backends": list(self.index_backends),
         }
@@ -144,6 +156,9 @@ class ConsistencyReport:
     orphan_objects_total: int
     orphan_documents: list[str]
     orphan_documents_total: int
+    #: Parse-cache objects across the corpus (``papers/<id>/extracted/...``):
+    #: legitimate, counted, never a problem.
+    cache_objects_total: int
     #: Backend census, keyed by backend name (or ``unknown``): what PostgreSQL
     #: stamps for its live papers, and what the index documents carry.
     parser_backends_papers: dict[str, int]
@@ -187,6 +202,7 @@ class ConsistencyReport:
                 "problems": self.problems_total,
                 "orphan_objects": self.orphan_objects_total,
                 "orphan_documents": self.orphan_documents_total,
+                "cache_objects": self.cache_objects_total,
             },
             "parser_backends": {
                 "papers": dict(sorted(self.parser_backends_papers.items())),
@@ -385,7 +401,12 @@ def _compare_paper(
 ) -> PaperConsistency | None:
     """Compare one paper across the three stores; ``None`` when it agrees."""
     expected = set(file_keys)
-    actual = set(objects)
+    all_objects = set(objects)
+    # Parse artifacts (``papers/<id>/extracted/...``) are the parse cache, not
+    # drift: they never get a ``paper_files`` row. Split them out before the
+    # comparison and report their count instead of calling them orphans.
+    cache_objects = {key for key in all_objects if CACHE_SEGMENT in key}
+    actual = all_objects - cache_objects
 
     if row.deleted:
         # Deletion purges documents and objects inline (``DELETE /api/papers/{id}``)
@@ -393,7 +414,9 @@ def _compare_paper(
         # file without its object is the *expected* state here. The only thing worth
         # reporting is what the purge left behind.
         issues: list[str] = []
-        if actual or chunks_os > 0:
+        # Residue means *any* leftover object, cache artifacts included: the
+        # delete path purges the whole ``papers/<id>/`` prefix.
+        if all_objects or chunks_os > 0:
             issues.append(ISSUE_DELETED_RESIDUE)
         if not issues:
             return None
@@ -407,7 +430,8 @@ def _compare_paper(
             chunks_pg=chunks_pg,
             chunks_os=chunks_os,
             issues=issues,
-            orphan_objects=sorted(actual),
+            orphan_objects=sorted(all_objects),
+            cache_objects=len(cache_objects),
             parser_backend=row.parser_backend,
             index_backends=tuple(sorted(index_backends or {})),
         )
@@ -452,6 +476,7 @@ def _compare_paper(
         issues=issues,
         missing_objects=missing_objects,
         orphan_objects=orphan_objects,
+        cache_objects=len(cache_objects),
         parser_backend=row.parser_backend,
         index_backends=tuple(index_stamped),
     )
@@ -537,6 +562,13 @@ def check_consistency(
     orphan_documents = sorted(
         paper_id for paper_id in documents if paper_id not in papers
     )
+    # Parse-cache artifacts across the corpus: legitimate, counted, not problems.
+    cache_objects_total = sum(
+        1
+        for keys in objects_per_paper.values()
+        for key in keys
+        if CACHE_SEGMENT in key
+    )
 
     paper_ids: dict[str, list[str]] = {}
     paper_ids_truncated = False
@@ -565,6 +597,7 @@ def check_consistency(
         orphan_objects_total=len(orphan_objects),
         orphan_documents=orphan_documents[:ORPHAN_SAMPLE],
         orphan_documents_total=len(orphan_documents),
+        cache_objects_total=cache_objects_total,
         parser_backends_papers=_census(
             row.parser_backend for row in papers.values() if not row.deleted
         ),

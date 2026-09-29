@@ -21,6 +21,8 @@ class PaperConsistencyOut(BaseModel):
     issues: list[str] = Field(default_factory=list)
     missing_objects: list[str] = Field(default_factory=list)
     orphan_objects: list[str] = Field(default_factory=list)
+    #: Parse-cache objects for this paper (not orphans, reported for visibility).
+    cache_objects: int = 0
     #: Parser provenance: what PostgreSQL stamps vs what the documents carry.
     parser_backend: str | None = None
     index_backends: list[str] = Field(default_factory=list)
@@ -42,6 +44,9 @@ class ConsistencyTotalsOut(BaseModel):
     problems: int = 0
     orphan_objects: int = 0
     orphan_documents: int = 0
+    #: Parse-cache objects (``papers/<id>/extracted/...``): legitimate, counted,
+    #: never a problem. Added 2026-09-30 together with the checker fix.
+    cache_objects: int = 0
 
 
 class ParserBackendsOut(BaseModel):
