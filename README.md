@@ -59,7 +59,8 @@ uv run python scripts/healthcheck.py       # 检查四个依赖 + 应用端口
 | PostgreSQL | `127.0.0.1:5432` | db `paperbox`，Alembic 管理 schema |
 | OpenSearch | `http://127.0.0.1:9200` | 单节点，安全插件关闭（内网自用） |
 | MinIO | `127.0.0.1:9000` | bucket `paperbox`，路径 `papers/<paper_id>/original.pdf` |
-| Embedding | `http://127.0.0.1:8090` | `POST /embed`，模型 `intfloat/multilingual-e5-large`（1024 维，512 token 上限，`MAX_BATCH` 限批）；`POST /rerank` 交叉编码器精排（模型 `RERANK_MODEL`，单次候选上限 `RERANK_MAX_BATCH`）；`GET /health`、`GET /info` 均含 `rerank_model`，`/info` 另含 `max_batch` 与 `rerank_max_batch` |
+| Embedding | `http://127.0.0.1:8090` | `POST /embed`，模型 `intfloat/multilingual-e5-large`（1024 维，512 token 上限，`MAX_BATCH` 限批）；`POST /rerank` 交叉编码器精排（模型 `RERANK_MODEL`，单次候选上限 `RERANK_MAX_BATCH`）；`GET /health`、`GET /info` 均含 `rerank_model`，`/info` 另含 `max_batch` 与 `rerank_max_batch` || Embedding | `http://127.0.0.1:8090` | `POST /embed`，模型 `intfloat/multilingual-e5-large`（1024 维，512 token 上限，`MAX_BATCH` 限批）；`POST /rerank` 交叉编码器精排（模型 `RERANK_MODEL`，单次候选上限 `RERANK_MAX_BATCH`）；`GET /health`、`GET /info` 均含 `rerank_model`，`/info` 另含 `max_batch` 与 `rerank_max_batch` |
+| Docling（可选，第二解析后端） | `http://192.168.31.53:8091`（fnOS NAS） | `POST /v1/convert/file`，`GET /health`、`GET /version`；镜像 `paperbox-docling-cpu:v1.35.0-formula`（公式模型 CodeFormulaV2 已烤进镜像）。**不在本机 WSL 里跑**：WSL 只剩 ~1.7 GiB 余量，公式密集论文会被 OOM-kill。本机保留 compose profile `local-docling` 作回滚：`cd infra && docker compose --profile local-docling up -d docling`（然后给 WSL `ufw allow 8091/tcp`）。地址写进 `.env` 的 `DOCLING_URL`；**留空 = 关闭 docling 后端**，客户端直接抛 `DoclingUnavailable` |
 
 ## 3. 快速开始
 
@@ -293,6 +294,52 @@ uv run python scripts/check_consistency.py --no-fail  # 只报告，永远返回
 **只读，且永不抛**：某个 store 连不上只记进 `errors`，另外两端照样给出结果（与 `/health` 同一套纪律）。
 软删论文按"已内联清理"预期（PG 行保留、文档与对象应已消失），有残留才算问题。
 本机 2026-09-22 实测：**68 篇存活论文 / 68 个对象 / 2883 个文档 / 0 漂移**。
+
+### 3.6 解析后端：docling（主）与 pypdf（降级）（2026-09-29）
+
+PDF 解析有两个后端，输出**同一份 markdown 方言**（标题层级、`<!-- page-break -->` 页标记、表格/公式约定），
+所以下游切块只认 markdown、不认后端：
+
+| 后端 | 做什么 | 何时用 |
+|------|--------|--------|
+| `docling` | 远端 `docling-serve` 转换：版面模型给阅读顺序、表格结构、公式 LaTeX；页眉页脚与页号在客户端剔除 | 论文主路径（两栏、公式、表格） |
+| `pypdf` | 进程内纯 Python：`extract_pages` + 分栏修复 + 启发式标题；无公式、表格只留占位 | docling 不可用时的降级；或刻意摸底对比 |
+
+```bash
+PARSER_BACKEND=pypdf    # 默认。pypdf 一档，零依赖
+PARSER_BACKEND=docling  # 走远端 docling-serve（地址见 DOCLING_URL）
+PARSER_CONCURRENCY=1    # 同时允许几个 docling 转换（进程内信号量）
+PARSER_CACHE=true       # 解析产物存 MinIO，按 (paper_id, backend, 解析器版本) 复用
+PARSER_MAX_PAGES=0      # 0=整篇；>0 只解析前 N 页（只作用于 docling，会记进 degraded_reason）
+```
+
+**降级永远是显式的**，绝不静默：
+
+* docling 连不上 / 超时 / 返回非 JSON → 回落到 pypdf，`ParseBundle.degraded_reason` 写上原因，
+  同时进 `paper_degradations` 账本（`stage=parsing`, `code=docling_unavailable`），
+  `GET /api/papers/{id}/degradations` 能看到，`scripts/reindex.py --degraded` 能筛出来。
+* docling 第一次带公式失败（缺模型、超时）→ 关掉公式重试一次，成功则记 `formulas=text`
+  （公式退化为纯文本），不是整篇失败。
+* pypdf 侧带 `no formula latex`（一定能变；再按文档实际情况加 `table structure`、`reading order not verified`）
+  — 这是降级后端的能力边界，不是异常。
+
+**解析产物缓存**（MinIO `papers/<id>/extracted/parsed/`）：命中要求 markdown 对象还在、
+docling 服务端报的版本与当初一致（`GET /version`，毫秒级）、当初不是降级产物；
+**部分解析（`--page-range` 或 `PARSER_MAX_PAGES>0`）既不读缓存也不写缓存** — 拿半篇冒充整篇比慢一点更糟。
+
+**两条后端的真机对照**（`scripts/acceptance_parser.py`，只读、不写库，跑完自净）：
+
+```bash
+uv run python scripts/acceptance_parser.py \
+  --pdf logs/eval/docling/corpus/1807.11311.pdf logs/eval/docling/corpus/smoke_sample.pdf \
+  --mem-ssh fishsky@192.168.31.53:65422          # docling 在 NAS 上，用 SSH 采内存
+uv run python scripts/acceptance_parser.py --paper-id <uuid>   # 额外探一次解析缓存
+```
+
+报告写到 `logs/eval/docling/acceptance-<时间戳>/report.json`（外加每篇的
+`.docling.md` / `.pypdf.md` / `.diff.txt`）。2026-09-29 实测 5 份输入 × 2 后端：10 次运行
+0 失败、0 次 docling 降级、页标记全部对齐（页数−1）、库总量前后不变；docling 端点峰值 2.20 GiB
+（NAS 8 GiB 上限）。逐篇判断见 `docs/examine/解析双后端验收-20260929.md`。
 
 ## 4. 使用示例
 
