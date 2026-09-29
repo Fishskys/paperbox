@@ -132,6 +132,11 @@ services:
       args:
         HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+    # 2026-09-29：docling 已搬到 fnOS NAS 上（见 infra/docling/fnos/README.md），本机这份
+    # 保留为**回滚**用。打完 profile 后，不带 --profile 的 `docker compose up -d` 不会再把它
+    # 拉起来（免得白占 WSL 那 ~1.7GiB 余量，也正是当初公式密集论文翻车的原因）。
+    #   要用本机这份：cd infra && docker compose --profile local-docling up -d docling
+    profiles: ["local-docling"]
     container_name: paperbox-docling
     restart: unless-stopped
     environment:

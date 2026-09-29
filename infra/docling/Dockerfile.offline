@@ -1,0 +1,21 @@
+# 离线版 docling-serve 镜像（用于 fnOS）
+#
+# 与上级目录的 Dockerfile 等价，但**不需要外网**：公式模型（docling-project/CodeFormulaV2）
+# 已经由本机镜像里 `docker cp` 抽出并通过局域网传过来，这里只做 COPY。
+#
+# 为什么要有这个变体：fnOS 上 huggingface.co 无法解析（DNS SERVFAIL、直连 000），
+# 常见代理端口也都不通，所以那边的 `docling-tools models download-hf-repo` 必然失败；
+# 而 quay.io 是通的（/v2/ 返回 401），基础镜像可以在 fnOS 本地 pull。
+#
+# 构建（在 fnOS 上，构建上下文 = 已传过去的模型目录的父目录）：
+#   cd /vol1/docker/docling-build
+#   docker build -f Dockerfile.offline -t paperbox-docling-cpu:v1.35.0-formula .
+#
+# 模型目录名必须是 HF 仓库名的 `--` 变体，docling 的 snapshot 缓存就是这么落盘的。
+FROM quay.io/docling-project/docling-serve-cpu:v1.35.0
+
+COPY docling-project--CodeFormulaV2 /opt/app-root/src/.cache/docling/models/docling-project--CodeFormulaV2
+
+# 断言模型真的进去了，否则让构建失败（不要产出一个"看着成功但没公式"的镜像）
+RUN test -f /opt/app-root/src/.cache/docling/models/docling-project--CodeFormulaV2/model.safetensors \
+    && du -sh /opt/app-root/src/.cache/docling/models
