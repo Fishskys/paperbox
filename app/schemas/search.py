@@ -240,7 +240,11 @@ class SearchResponse(BaseModel):
     #: English search expression actually used for retrieval, when rewritten.
     rewritten_query: str | None = None
     mode: str
+    #: 本次查询 + 过滤条件下命中的**论文**数（引擎 ``cardinality(paper_id)``
+    #: 真值，见 ``app.search.hybrid.count_papers``）。
     total: int
+    #: 喂给论文聚合的 chunk 候选池大小（2026-09-30 前，这个数字被当成 ``total``）。
+    candidates: int
     took_ms: float
     rerank: SearchRerankInfo = Field(default_factory=SearchRerankInfo)
     rewrite: SearchRewriteInfo = Field(default_factory=SearchRewriteInfo)

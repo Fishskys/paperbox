@@ -395,7 +395,9 @@ def test_api_gate_rewrites_cjk_queries_when_enabled(monkeypatch) -> None:
 
 
 def test_response_exposes_the_rewrite_contract() -> None:
-    response = SearchResponse(query="中文查询", mode="hybrid", total=2, took_ms=12.0)
+    response = SearchResponse(
+        query="中文查询", mode="hybrid", total=2, candidates=5, took_ms=12.0
+    )
 
     payload = response.model_dump()
 
@@ -416,6 +418,7 @@ def test_response_reports_an_applied_rewrite() -> None:
         rewritten_query="english query",
         mode="hybrid",
         total=1,
+        candidates=4,
         took_ms=9.0,
         rewrite=SearchRewriteInfo(
             enabled=True, applied=True, model="test-chat-model", took_ms=42

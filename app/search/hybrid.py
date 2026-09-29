@@ -316,6 +316,98 @@ def build_semantic_query(
     return {"knn": {"embedding": knn}}
 
 
+#: ``cardinality`` precision threshold for the paper count. Below this many
+#: distinct papers the aggregation is exact; above it the engine switches to a
+#: HyperLogLog estimate (OpenSearch default is 3000).
+CARDINALITY_PRECISION = 3000
+#: How many neighbours the kNN leg offers when counting papers.
+COUNT_K = 1000
+
+
+def build_count_body(
+    query: str,
+    mode: SearchMode | str = DEFAULT_MODE,
+    filters: Mapping[str, Any] | None = None,
+    *,
+    k: int = COUNT_K,
+) -> dict[str, Any]:
+    """``size: 0`` + ``cardinality(paper_id)`` body for the paper count.
+
+    Pure, so the clause shape can be asserted without a cluster. ``hybrid`` puts
+    both legs in a ``should`` so the count is the union of what each leg would
+    retrieve (a keyword-only count would hide papers that only the vector leg
+    finds). The kNN clause is bounded by ``k``, which is the one part of this
+    number that is a pool size rather than a global truth: ANN recall is
+    approximate by construction.
+    """
+    normalized_mode = (mode or DEFAULT_MODE).strip().lower()
+    if normalized_mode == "keyword":
+        clause: dict[str, Any] = build_keyword_query(query, filters)
+    elif normalized_mode == "semantic":
+        clause = _semantic_clause(query, filters, k)
+    elif normalized_mode == "hybrid":
+        clause = {
+            "bool": {
+                "should": [
+                    build_keyword_query(query, filters),
+                    _semantic_clause(query, filters, k),
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+    else:
+        raise ValueError(f"unsupported search mode: {mode!r}")
+    return {
+        "size": 0,
+        "track_total_hits": False,
+        "query": clause,
+        "aggs": {
+            "papers": {
+                "cardinality": {
+                    "field": "paper_id",
+                    "precision_threshold": CARDINALITY_PRECISION,
+                }
+            }
+        },
+    }
+
+
+def _semantic_clause(
+    query: str, filters: Mapping[str, Any] | None, k: int
+) -> dict[str, Any]:
+    try:
+        vector = embed_text(query)
+    except EmbeddingError as exc:
+        raise SearchError(f"embedding the query failed: {exc}") from exc
+    return build_semantic_query(vector, filters, k=k)
+
+
+def count_papers(
+    query: str,
+    mode: SearchMode | str = DEFAULT_MODE,
+    filters: Mapping[str, Any] | None = None,
+    *,
+    client: OpenSearch | None = None,
+    index: str = ALIAS,
+    k: int = COUNT_K,
+) -> int:
+    """Distinct papers the query matches under ``filters`` -- the ``total`` truth.
+
+    ``hits.total`` cannot answer this: it counts *chunks*, and once ``top_k``
+    truncates the page the paper count is just whatever fitted. This asks the
+    engine for ``cardinality(paper_id)`` on the same filters and the same legs
+    the search uses. Empty query (or no matches) is ``0``.
+    """
+    query = (query or "").strip()
+    if not query:
+        return 0
+    response = _search(
+        build_count_body(query, mode, filters, k=k), client=client, index=index
+    )
+    value = ((response.get("aggregations") or {}).get("papers") or {}).get("value") or 0
+    return int(value)
+
+
 # --------------------------------------------------------------------------- #
 # execution
 # --------------------------------------------------------------------------- #
