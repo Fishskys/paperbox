@@ -201,6 +201,33 @@ def test_a_doi_edit_replaces_the_identifier_and_upgrades_the_fingerprint(db_sess
     assert result.fingerprint == "doi:10.1/new"
 
 
+def test_a_second_identifier_edit_moves_the_mirror_column(db_session) -> None:
+    """The mirror columns follow a human correction, not just fill a blank.
+
+    2026-09-30: ``mirror_legacy_columns`` is fill-only (the pipeline must not
+    blank a value a source provided), so a paper that already had a DOI kept the
+    **superseded** one in ``papers.doi`` while ``paper_identifiers`` and
+    ``papers.fingerprint`` already said the new one. That drift made
+    ``test_a_doi_edit_replaces_the_identifier_and_upgrades_the_fingerprint`` fail
+    intermittently in full-suite runs. ``patch_metadata`` now passes
+    ``force_scheme``, which is what this test pins.
+    """
+    paper = make_paper(db_session)
+    ids.upsert_identifier(
+        db_session, paper_id=paper.id, scheme=ids.SCHEME_DOI, value="10.1/old"
+    )
+    ids.refresh_primary(db_session, paper.id)
+    ids.mirror_legacy_columns(db_session, paper)
+    assert paper.doi == "10.1/old"
+
+    metadata_manual.patch_metadata(db_session, paper, {"doi": "10.1/new"})
+
+    assert paper.doi == "10.1/new"
+    assert [row.normalized_value for row in ids.identifiers_for_paper(db_session, paper.id)] == [
+        "10.1/new"
+    ]
+
+
 def test_an_arxiv_edit_sets_the_mirror_and_the_fingerprint(db_session) -> None:
     paper = make_paper(db_session)
 
