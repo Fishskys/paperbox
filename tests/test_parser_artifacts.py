@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.config import settings
 from app.parsing.docling_client import DoclingResult, DoclingUnavailable
 from app.services import parser_service
 from app.services.object_storage import ObjectNotFound, ObjectStorageError
@@ -453,3 +454,59 @@ def test_the_setting_decides_when_the_argument_is_omitted(
 
     assert converter.calls == 2
     assert store.objects == {}
+
+
+# --------------------------------------------------------------------------- #
+# partial parses stay out of the cache (2026-09-29 T8)
+# --------------------------------------------------------------------------- #
+def test_a_partial_parse_is_neither_read_nor_written() -> None:
+    store = FakeStore()
+    converter = CountingConverter(docling_result())
+
+    bundle = parse_docling(store, converter, page_range="1-2")
+
+    assert converter.calls == 1
+    assert bundle.cache_hit is False
+    # No artifact write at all: not even a meta file, so a later full parse
+    # cannot mistake this slice for the document.
+    assert store.objects == {}
+    assert store.calls == []
+
+
+def test_parser_max_pages_also_disables_the_cache(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "parser_max_pages", 4)
+    store = FakeStore()
+    converter = CountingConverter(docling_result())
+
+    bundle = parse_docling(store, converter)
+
+    assert converter.calls == 1
+    assert bundle.cache_hit is False
+    assert store.objects == {}
+
+
+def test_a_stored_full_parse_is_not_replayed_for_a_partial_request() -> None:
+    store = FakeStore()
+    first = CountingConverter(docling_result())
+    parse_docling(store, first)
+    assert first.calls == 1
+    assert set(store.objects) == {MARKDOWN_KEY, JSON_KEY, META_KEY}
+
+    second = CountingConverter(docling_result())
+    parse_docling(store, second, page_range="1-1")
+
+    # The slice must be parsed, not answered from the full-document artifact.
+    assert second.calls == 1
+
+
+def test_a_partial_parse_does_not_evict_the_full_one() -> None:
+    store = FakeStore()
+    parse_docling(store, CountingConverter(docling_result()), page_range="1-1")
+    written_by_slice = dict(store.objects)
+
+    converter = CountingConverter(docling_result())
+    bundle = parse_docling(store, converter)
+
+    assert converter.calls == 1
+    assert bundle.cache_hit is False  # nothing was cached by the slice
+    assert set(store.objects) == set(written_by_slice) | {MARKDOWN_KEY, JSON_KEY, META_KEY}

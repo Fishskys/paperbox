@@ -68,8 +68,13 @@ CODE_DOCLING_UNAVAILABLE = "docling_unavailable"
 CODE_FORMULAS_AS_TEXT = "formulas_as_text"
 CODE_TABLE_STRUCTURE = "table_structure_lost"
 CODE_READING_ORDER = "reading_order_unverified"
+#: ``PARSER_MAX_PAGES`` deliberately cut the document (cheap probes on huge papers).
+CODE_PAGES_TRUNCATED = "pagination_truncated"
 #: Fallback so an unrecognised reason is never lost silently.
 CODE_PARSE_DEGRADED = "parse_degraded"
+
+#: ``degraded_reason`` fragment written when ``PARSER_MAX_PAGES`` truncated.
+PAGES_LIMIT_PREFIX = "pages="
 
 #: ``degraded_reason`` fragment -> ledger code. The fragments are produced by
 #: ``app.parsing.markdown``; the parse layer still carries them as one joined
@@ -81,6 +86,7 @@ _REASON_CODES: tuple[tuple[str, str], ...] = (
     (markdown_dialect.DEGRADED_TABLE, CODE_TABLE_STRUCTURE),
     (markdown_dialect.DEGRADED_ORDER, CODE_READING_ORDER),
     (DOCLING_FALLBACK_PREFIX, CODE_DOCLING_UNAVAILABLE),
+    (PAGES_LIMIT_PREFIX, CODE_PAGES_TRUNCATED),
 )
 
 
@@ -155,11 +161,19 @@ def parse_pdf(
         PdfParseError: the bytes are not a readable PDF (no backend can save it).
     """
     resolved = _resolve_backend(backend)
+    limit_range = _max_pages_range()
+    effective_range = page_range if page_range is not None else limit_range
     if resolved == "docling":
         try:
             bundle = _parse_with_docling(
-                data, filename=filename, converter=converter, page_range=page_range
+                data, filename=filename, converter=converter, page_range=effective_range
             )
+            if limit_range is not None and page_range is None:
+                # PARSER_MAX_PAGES cut the document: the result is thinner on
+                # purpose, and that must be visible in the artifact + the ledger.
+                bundle.degraded_reason = _merge_reasons(
+                    f"{PAGES_LIMIT_PREFIX}{limit_range}", bundle.degraded_reason
+                )
             _report_degradation(bundle, on_degrade)
             return bundle
         except DoclingError as exc:
@@ -175,6 +189,21 @@ def parse_pdf(
     bundle = _parse_with_pypdf(data)
     _report_degradation(bundle, on_degrade)
     return bundle
+
+
+def _max_pages_range() -> str | None:
+    """``PARSER_MAX_PAGES`` as a docling ``page_range``; ``None`` = whole file.
+
+    Only docling is limited: the pypdf fallback costs about a second, and
+    slicing it would silently change what the fallback is meant to reproduce.
+    """
+    limit = int(settings.parser_max_pages or 0)
+    return f"1-{limit}" if limit > 0 else None
+
+
+def _partial_parse(page_range: str | None) -> bool:
+    """True when this call parses less than the whole document."""
+    return page_range is not None or _max_pages_range() is not None
 
 
 def _resolve_backend(backend: str | None) -> str:
@@ -282,6 +311,10 @@ def parse_paper_file(
       (probed with ``GET /version``, which is milliseconds against a conversion
       that can take minutes).
 
+    A **partial** parse (explicit ``page_range``, or ``PARSER_MAX_PAGES`` > 0) is
+    never read from nor written to the cache -- replaying a truncated document
+    as if it were complete would be worse than a slow parse.
+
     Args:
         paper_id: owning paper; also the object-key prefix.
         data: the PDF bytes, read only when the cache cannot answer.
@@ -304,6 +337,19 @@ def parse_paper_file(
     resolved = _resolve_backend(backend)
     storage = store if store is not None else _default_store()
     enabled = settings.parser_cache if cache is None else bool(cache)
+    if enabled and _partial_parse(page_range):
+        # A partial parse is a probe, not a product: caching it would let the
+        # next full parse replay a truncated document as if it were complete.
+        logger.info(
+            "partial parse: artifacts are neither read nor written",
+            extra={
+                "extra_fields": {
+                    "reason": "page_range" if page_range else "PARSER_MAX_PAGES",
+                    "paper_id": paper_id,
+                }
+            },
+        )
+        enabled = False
 
     if enabled:
         cached = _load_cached_bundle(
