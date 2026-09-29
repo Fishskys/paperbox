@@ -42,6 +42,11 @@ def print_report(report) -> None:
         f"{totals['staging_objects']} staging object(s)"
     )
     print(f"  opensearch: {totals['documents_os']} document(s)")
+    census = data.get("parser_backends") or {}
+    print(
+        f"  parser    : papers {census.get('papers') or {}}  "
+        f"documents {census.get('documents') or {}}"
+    )
     print(
         "consistent: "
         + ("yes" if data["consistent"] else "NO")

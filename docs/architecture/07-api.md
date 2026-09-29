@@ -80,7 +80,7 @@
 两个互不相干的机制：
 
 1. **HTTP 错误** = 各 endpoint 内手写 `raise HTTPException(...)`。没有统一异常处理器，也没有业务异常基类到状态的集中映射；FastAPI 默认处理器输出字符串 `detail`，与 `docs/architecture/MVP-SPEC.md:108`「统一 `{"detail": "…"}`」一致。
-2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1092`。
+2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1118`。
 
 业务异常 → HTTP 状态映射（全部为端点内显式 raise）：
 
@@ -137,7 +137,7 @@
 | `paper.py` | `PaperOut`(`:22`)、`PaperFileOut`(`:10`)、`PaperListOut`(`:52`)、`PaperChunkOut`(`:63`)、`PaperChunkList`(`:79`) | 论文读接口 |
 | `metadata.py` | `PaperMetadataOut`(`:55`)、`SourceOut`(`:11`)、`IdentifierOut`(`:29`)、`ProvenanceEntry`(`:41`)、`MetadataPatch`(`:70`)、`MetadataPatchOut`(`:97`)、`MetadataRollbackIn/Out`(`:108`/`:115`)、`ImportReportOut`(`:127`)、`ConflictOut`(`:144`)、`ReviewOut`(`:157`)、`AttachIn/Out`(`:167`/`:173`)、`ApplyEntryIn/ApplyIn/ApplyOut`(`:186`/`:194`/`:202`) | 元数据读写与导入报告 |
 | `search.py` | `SearchRequest`(`:130`)、`SearchFilters`(`:61`)、`SearchResponse`(`:233`)、`SearchResult`(`:177`)、`SearchEvidence`(`:166`)、`SearchRerankInfo`(`:205`)、`SearchRewriteInfo`(`:218`)、`MIN_TOP_K/MAX_TOP_K`(`:42-43`) | 检索请求/响应 |
-| `consistency.py` | `PaperConsistencyOut`(`:8`)、`ConsistencyTotalsOut`(`:26`)、`ConsistencyOut`(`:44`) |
+| `consistency.py` | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:25`)、`ConsistencyTotalsOut`(`:29`)、**`ParserBackendsOut`(`:47`)**、`ConsistencyOut`(`:62`，含 `parser_backends` `:72`) |
 | `search_log.py` | `SearchLogOut`(`:11`)、`SearchLogListOut`(`:32`) | 检索日志读接口 |
 | `__init__.py` | — | 仍是占位（1 行 docstring），无重导出；导入一律走子模块 |
 
@@ -200,7 +200,7 @@
 | `INGEST_MAX_REQUEST_MB` | `200` | `/files` 单请求总字节上限（超 → 413） | `config.py:143` |
 | `INGEST_UPLOAD_CONCURRENCY` | `2` | 在途上传请求上限（超 → 429） | `config.py:131` |
 | `INGEST_QUEUE_HIGH_WATERMARK` | `50` | 积压水位，仅拒多文件（0 = 关闭） | `config.py:135` |
-| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单（空 = 端点 404） | `config.py:149`, `:229-232` |
+| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单（空 = 端点 404） | `config.py:149`, `:230-233` |
 | `INGEST_ARCHIVE_MAX_MB` | `500` | 上传 zip 体积上限 | `config.py:153` |
 | `INGEST_ARCHIVE_MAX_FILES` / `_MAX_UNCOMPRESSED_MB` / `_MAX_RATIO` | `2000` / `5000` / `100` | zip-bomb 三重上限 | `config.py:155-161` |
 | `INGEST_ARCHIVE_TMP_DIR` / `INGEST_ARCHIVE_TTL_HOURS` | `""`（系统 temp）/ `24` | 解包位置与保留时长（GC 用） | `config.py:163-165` |
@@ -209,7 +209,7 @@
 | `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:55`, `:59`, `:62`；`health.py:60-76` |
 | `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:114-115` |
 | `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:75`, `:81`；`search.py:103-107` |
-| `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:96-98`, `:204-222` |
+| `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:96-98`, `:205-223` |
 
 非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py:36`）、`CANDIDATE_FACTOR = 5`（`app/api/search.py:46`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py:27`）、chunk 分页上限 200（`app/api/papers.py:178`）。
 

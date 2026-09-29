@@ -264,6 +264,14 @@ def build_chunk_document(row: dict[str, Any]) -> dict[str, Any]:
         "embedding_dimension": row.get("embedding_dimension")
         or settings.embedding_dimension,
     }
+    # Provenance of the *text*: which parser produced it (plan §6.1 step 2).
+    # Not a filter exposed by ``POST /api/search`` (hence not in KEYWORD_FIELDS),
+    # but a keyword field in the index, so ``parser_backend: pypdf`` finds what a
+    # backend switch did not reach. NULL means the paper predates the stamp --
+    # not the same as "no backend". A metadata refresh deliberately leaves these
+    # alone: it must not make a stale parse look fresh.
+    document["parser_backend"] = row.get("parser_backend")
+    document["parser_version"] = row.get("parser_version")
     # Metadata snapshot: the filter fields of POST /api/search (see mappings.py).
     document["venue_year"] = row.get("venue_year")
     document["paper_type"] = row.get("paper_type")

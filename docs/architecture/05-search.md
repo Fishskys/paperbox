@@ -57,9 +57,9 @@
 | `app/services/search_log_service.py` | `serialize_results` `:47`、`log_search` `:100`、`list_search_logs` `:184` | 日志压缩 / 落库（从不抛错）/ 回读 |
 | `app/api/search.py` | `search` `:50`、`_maybe_rewrite` `:160`、`serialize_results` `:173`、`_log_search` `:192` | 路由 + 改写门控 + 日志专用 session |
 | `app/api/search_logs.py` | `list_search_logs` `:28` | `GET /api/search-logs` |
-| `app/workers/tasks.py` | `_index_rows` `:1004` | chunk 文档的**唯一构造点**（元数据部分来自 `snapshot.paper_metadata_snapshot`，`tasks.py:1017`） |
+| `app/workers/tasks.py` | `_index_rows` `:1024` | chunk 文档的**唯一构造点**（元数据部分来自 `snapshot.paper_metadata_snapshot`，`tasks.py:1037`） |
 | `app/search/snapshot.py` | `paper_metadata_snapshot` `:74`、`tag_names_by_kind` `:39` | 元数据快照的**单一来源**（流水线 + 刷新脚本共用） |
-| `app/db/models.py` | `SearchQuery` `:677` | `search_queries` 表 |
+| `app/db/models.py` | `SearchQuery` `:685` | `search_queries` 表 |
 
 ## 3. 数据结构（表/字段/索引，或内存结构）
 
@@ -70,14 +70,15 @@
 | `title` / `section_title` / `text` | `text` | `analyzer` = `search_analyzer` = `cjk`（`mappings.py:55`） |
 | `authors` / `venue` / `doi` / `arxiv_id` / `tags` / `section` / `chunk_id` / `paper_id` | `keyword` | 精确匹配（`mappings.py:61`） |
 | `year` / `page_start` / `page_end` / `chunk_index` | `integer` | `year` 供 range 过滤 |
-| `venue_year` | `integer` | 会议/期刊**那一届**的年份（≠ 论文 `year`）；terms/range 过滤（`mappings.py:104-165`） |
-| `paper_type` / `volume` / `issue` / `pages` / `identifiers` | `keyword` | 元数据层新列；`identifiers` 是 `scheme:value` 串（如 `doi:10.1109/…`）（`mappings.py:104-165`） |
-| `publication_date` | `date` | ISO 日期（`mappings.py:104-165`） |
+| `venue_year` | `integer` | 会议/期刊**那一届**的年份（≠ 论文 `year`）；terms/range 过滤（`mappings.py:104-170`） |
+| `paper_type` / `volume` / `issue` / `pages` / `identifiers` | `keyword` | 元数据层新列；`identifiers` 是 `scheme:value` 串（如 `doi:10.1109/…`）（`mappings.py:104-170`） |
+| `publication_date` | `date` | ISO 日期（`mappings.py:104-170`） |
 | `ieee_terms` / `author_terms` / `dynamic_index_terms` / `source_tags` | `keyword` | 按 `papers_tags.kind` 分列的索引词；`tags` 仍是四者的并集（`mappings.py:96`） |
 | `embedding` | `knn_vector(1024)` | `hnsw` / `l2` / `lucene`，`ef_construction=128`、`m=16`（`mappings.py:122`） |
 | `embedding_model` / `embedding_dimension` / `created_at` | `keyword` / `integer` / `date` | |
+| `parser_backend` / `parser_version` | `keyword` | **哪条解析器产出了这条 chunk**（`mappings.py:137-138`，值来自 `papers` 的两个戳列，`tasks.py:1095-1096`）。可以按它筛出「后端切换没覆盖到」的论文（`parser_backend: pypdf`）；同一个字段也是 `GET /api/consistency` 的 `parser_backends` 普查依据 |
 
-索引 settings：`index.knn=true`、1 shard、0 replica；`dynamic: true`（`mappings.py:150`）。文档 `_id` = `chunk_id`（`opensearch.py:320`）。
+索引 settings：`index.knn=true`、1 shard、0 replica；`dynamic: true`（`mappings.py:155`）。文档 `_id` = `chunk_id`（`opensearch.py:320`）。
 
 **命中回传字段**：`SOURCE_FIELDS`（`hybrid.py:68`）显式列出 15 个字段，**不含 `embedding`**——向量不会被检出。
 
@@ -87,7 +88,7 @@
 - `PaperResult` / `Evidence`（`search_service.py:49`、`:71`）：论文分、`relevance`、`evidence`、`matched_chunks`、`retrieval_score`、`rerank_score`。
 - 融合中间态：`by_id: dict[str, ChunkHit]`（`hybrid.py:495`）先按 chunk 去重合并两腿分数，再按 RRF 顺序重建列表。
 
-**`search_queries` 表**（`app/db/models.py:749`，索引 `created_at`、`mode`）：
+**`search_queries` 表**（`app/db/models.py:757`，索引 `created_at`、`mode`）：
 
 | 列 | 类型 | 内容 |
 |---|---|---|
@@ -135,14 +136,14 @@ POST /api/search                                    app/api/search.py:50（路�
  └─ 返回 SearchResponse{query, rewritten_query, mode, total, took_ms, rerank, rewrite, results}
 ```
 
-**快照刷新（不重算向量）**：`uv run python scripts/refresh_index_metadata.py` → `opensearch.update_mapping()`（`opensearch.py:113`，给活索引**加**新字段）→ `opensearch.bulk_update_documents()`（`opensearch.py:145`，每个 chunk 一条 partial update，不动 `embedding`/`text`）。2026-09-22 真机：2883 文档全部更新、0 失败。
+**快照刷新（不重算向量）**：`uv run python scripts/refresh_index_metadata.py` → `opensearch.update_mapping()`（`opensearch.py:145`，给活索引**加**新字段）→ `opensearch.bulk_update_documents()`（`opensearch.py:113`，每个 chunk 一条 partial update，不动 `embedding`/`text`）。2026-09-22 真机：2883 文档全部更新、0 失败。
 
-**写入链（元数据快照的产生点）**：`POST /api/papers/{paper_id}/reindex`（`app/api/papers.py:345`）→ `job_queue.KIND_REINDEX` → `workers/tasks.py::_run_pipeline` → `_index_rows`（`:1004`）→ `opensearch.bulk_index_chunks`（`opensearch.py:294`，默认写 `ALIAS`）。
+**写入链（元数据快照的产生点）**：`POST /api/papers/{paper_id}/reindex`（`app/api/papers.py:345`）→ `job_queue.KIND_REINDEX` → `workers/tasks.py::_run_pipeline` → `_index_rows`（`:1004`）→ `opensearch.bulk_index_chunks`（`opensearch.py:364`，默认写 `ALIAS`）。
 
 ## 5. 不变量与踩过的坑
 
 1. **过滤不参与打分**：过滤器一律进 `bool.filter`（`hybrid.py:273-284`）；kNN 模式下 filter 被塞进 `knn` 子句内部（`hybrid.py:313-315`，注释称 "filter first, then kNN"）。
-2. **过滤字段是索引时快照**：文档里的 `venue`/`year`/`authors`/`doi`/`arxiv_id`/`tags`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers` 全部来自 `_index_rows` 里的 `paper` 对象（`tasks.py:1010-1044`），即索引那一刻 PG 的值；`build_filters` 只读文档（`hybrid.py:219-244`），**不查 PostgreSQL**。因此 `PATCH /metadata`、外部导入、合并**不会改变检索过滤结果**，必须 `POST /api/papers/{id}/reindex`（`docs/progress/project.md:767-769`，元数据真机验收第 5 项即先 reindex 再按 venue 命中，`docs/progress/project.md:753`）。同理 `tag` 过滤目前必然为空，因为 tag 写入路径本身未接通（`docs/progress/project.md:126`、`docs/progress/project.md:161`）。
+2. **过滤字段是索引时快照**：文档里的 `venue`/`year`/`authors`/`doi`/`arxiv_id`/`tags`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers` 全部来自 `_index_rows` 里的 `paper` 对象（`tasks.py:1030-1064`），即索引那一刻 PG 的值；`build_filters` 只读文档（`hybrid.py:219-244`），**不查 PostgreSQL**。因此 `PATCH /metadata`、外部导入、合并**不会改变检索过滤结果**，必须 `POST /api/papers/{id}/reindex`（`docs/progress/project.md:767-769`，元数据真机验收第 5 项即先 reindex 再按 venue 命中，`docs/progress/project.md:753`）。同理 `tag` 过滤目前必然为空，因为 tag 写入路径本身未接通（`docs/progress/project.md:126`、`docs/progress/project.md:161`）。
 3. **论文分取组内最大值**：`aggregate_papers` 先按 `_hit_score` 降序排组（`search_service.py:222`），再取 `ordered_group[0]` 的分（`:223`、`:238`）——是 max，不是加权和/平均；`matched_chunks` 单独记录组内 chunk 数（`:257`）。单测锁定：`tests/test_aggregation.py:93`。
 4. **论文元数据也来自最佳 chunk**：`title`/`authors`/`year`/`venue`/`doi`/`arxiv_id` 都取 `best`（`search_service.py:242-249`，锁定于 `tests/test_aggregation.py:177`）。
 5. **evidence 选取规则**：先过滤"噪声"（文本 `< MIN_EVIDENCE_CHARS` 或 `section/section_title` 命中 `NOISE_SECTION` 正则，`search_service.py:37`、`:177-182`），优先取非噪声、不足时用剩余项补齐，上限 `MAX_EVIDENCE=3`（`:184-188`）；每条文本截断到 `EVIDENCE_TEXT_LIMIT=500`（`:137`）。`evidence[].section` 优先取 `section_title`（`:229`），`page` 取 `page_start`。
@@ -151,7 +152,7 @@ POST /api/search                                    app/api/search.py:50（路�
 8. **`top_k × RERANK_CANDIDATES` 是一阶段候选窗，但日志字段不是**：`_first_stage_k = top_k × RERANK_CANDIDATES`（默认 5，`hybrid.py:551`），hybrid 模式每条腿再乘 `CANDIDATE_MULTIPLIER=5`（`:488`）。而日志里的 `candidates` 恒为 `top_k × CANDIDATE_FACTOR(5)`（`api/search.py:46`、`:131`）且**只用于日志**，未传给检索——`rerank=true` 时它与真实候选池不符。
 9. **`_semantic_hits` 的 k 是过取后的值**：`k = fetch_k × SEMANTIC_K_MULTIPLIER(3)`，同时作为 ES `size` 与 `knn.k` 传入（`hybrid.py:484-485`、`:422`），之后截回 `fetch_k`（`:486`）。代码里**没有 `num_candidates` 参数**（Lucene engine 只用 `k` + 可选 `filter`，`hybrid.py:312-315`）。
 10. **空查询短路**：`search_chunks` 在 `strip()` 后为空时返回 `[]`，不报错（`hybrid.py:472-474`）；上层 schema 已用 `min_length=1` + strip 校验挡住（`schemas/search.py:147-153`）。
-11. **别名是唯一读写入口**：`ALIAS`/`INDEX` 直接取配置（`opensearch.py:25-27`），`_search`/`bulk_index_chunks`/`delete_by_paper_id`/`index_stats` 默认都走 `ALIAS`。`is_write_index` 只在迁移的别名切换里设置（`opensearch.py:227`）；`ensure_index` 首次绑别名**不设**该属性（`:97`），单索引下仍可写入。
+11. **别名是唯一读写入口**：`ALIAS`/`INDEX` 直接取配置（`opensearch.py:25-27`），`_search`/`bulk_index_chunks`/`delete_by_paper_id`/`index_stats` 默认都走 `ALIAS`。`is_write_index` 只在迁移的别名切换里设置（`opensearch.py:392`）；`ensure_index` 首次绑别名**不设**该属性（`:97`），单索引下仍可写入。
 12. **`top_k` 有两套边界**：schema 限制 1..50（`schemas/search.py:42-43`），`search_chunks` 只要求 `> 0`（`hybrid.py:470`）；非法 mode 在 schema 与 `search_chunks` 两处各校验一次（`:467-469`）。
 13. **`SearchError` 的 503 映射曾完全失效（2026-09-22 已修，有回归测试）**：`app/api/search.py:89` 捕获 `search_service.SearchError`，而类只定义在 `app/search/hybrid.py:87`——原先 `search_service` 只导入 `ChunkHit`，该 `except` 被触发时会先抛 `AttributeError`（**实测**：`uv run python -c "from app.services import search_service; search_service.SearchError"` → `AttributeError`），于是后端故障返回 **500** 而不是 503。修法：`app/services/search_service.py:27` 一并导入 `SearchError` 并加入 `__all__`；回归 `tests/test_search_api.py`（后端抛错 → 503、`ValueError` → 422、`search_service.SearchError is hybrid.SearchError`）。
 14. **`total` 语义与 docstring 不一致**：`search_papers` 的 docstring 说返回 "chunk candidate pool"（`search_service.py:318-319`），但实现返回 `len(results)`（`:335`）；API 直接把它当 `total`（`api/search.py:152`），因此 `total` = **被 `top_k` 截断后的论文数**。

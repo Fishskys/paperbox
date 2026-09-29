@@ -43,6 +43,7 @@ from app.db.models import (
 )
 from app.core.config import settings
 from app.parsing.chunking import CHUNK_MODE_SEMANTIC, Chunk
+from app.parsing.markdown import ParseBundle, page_spans_from_markdown
 from app.services import degradation_service
 from app.workers import tasks
 
@@ -168,27 +169,28 @@ def stubbed_pipeline(monkeypatch):
         lambda key: b"%PDF-1.4 fake",
     )
     monkeypatch.setattr(tasks, "extract_pages", lambda data: ["page one text"])
-    monkeypatch.setattr(tasks, "detect_sections", lambda pages: ["body"])
-    monkeypatch.setattr(tasks, "merge_short_sections", lambda sections: sections)
     monkeypatch.setattr(
         tasks, "_backfill_metadata", lambda session, paper, pages, data=None: None
     )
-    monkeypatch.setattr(
-        tasks,
-        "chunk_document",
-        lambda pages, sections, embed_fn=None, **kwargs: [
-            Chunk(
-                chunk_index=0,
-                text="some chunk text",
-                page_start=1,
-                page_end=1,
-                section="body",
-                section_title="body",
-                token_count=3,
-                char_count=15,
-            )
-        ],
-    )
+
+    def _parse_paper_file(paper_id, data, **kwargs):
+        """The parse backend is the one collaborator that must not run here.
+
+        Everything after it is real: this bundle goes through the actual
+        ``chunk_markdown``, so the assertions below still describe the production
+        chunking path (plan §6.1).
+        """
+        markdown = "# body\n\nsome chunk text\n"
+        page_count, spans = page_spans_from_markdown(markdown)
+        return ParseBundle(
+            markdown=markdown,
+            page_count=page_count,
+            spans=spans,
+            backend="pypdf",
+            parser_version="test-version",
+        )
+
+    monkeypatch.setattr(tasks.parser_service, "parse_paper_file", _parse_paper_file)
 
     def _replace_chunks(session, paper, chunks):
         row = PaperChunk(
@@ -509,7 +511,7 @@ def test_pipeline_records_and_resolves_a_chunking_degradation(
     """A fallback the chunker reports must outlive the job that hit it (T7.3)."""
     degraded = {"value": True}
 
-    def chunker(pages, sections, embed_fn=None, on_degrade=None, **kwargs):
+    def chunker(bundle, embed_fn=None, on_degrade=None, **kwargs):
         if degraded["value"] and on_degrade is not None:
             on_degrade("chunking", "semantic_fallback", {"section": "body"})
         return [
@@ -525,7 +527,7 @@ def test_pipeline_records_and_resolves_a_chunking_degradation(
             )
         ]
 
-    monkeypatch.setattr(tasks, "chunk_document", chunker)
+    monkeypatch.setattr(tasks, "chunk_markdown", chunker)
     paper_id = make_paper(factory)
     job_id = make_job(factory, paper_id)
     session = factory()
@@ -570,14 +572,14 @@ def test_chunk_mode_decides_whether_the_chunker_gets_the_embedder(
 ):
     """``CHUNK_MODE`` is the one chunking decision the chunker cannot make.
 
-    ``length`` (the default) must reach ``chunk_document`` with no embedding
+    ``length`` (the default) must reach ``chunk_markdown`` with no embedding
     callable at all -- that is what keeps the default path free of a network
     dependency during chunking -- while ``semantic`` hands over the retrieval
     embedder.
     """
     recorded: list[object] = []
 
-    def recording_chunker(pages, sections, embed_fn=None, **kwargs):
+    def recording_chunker(bundle, embed_fn=None, **kwargs):
         recorded.append((embed_fn, kwargs))
         return [
             Chunk(
@@ -592,7 +594,7 @@ def test_chunk_mode_decides_whether_the_chunker_gets_the_embedder(
             )
         ]
 
-    monkeypatch.setattr(tasks, "chunk_document", recording_chunker)
+    monkeypatch.setattr(tasks, "chunk_markdown", recording_chunker)
 
     def run_once() -> None:
         paper_id = make_paper(factory)

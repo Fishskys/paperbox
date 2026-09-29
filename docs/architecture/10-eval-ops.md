@@ -170,7 +170,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:164-165, 396-398` |
 | **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md:327-331`、`.gitignore:23-24`、`tests/conftest.py:62` |
 | `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md:90` |
-| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:128-135` |
+| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:129-136` |
 | 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md:126`、`.env.example:118-119` |
 | `Dockerfile` 的监听参数 | CMD 用 `sh -c exec` 展开 `PAPER_API_HOST/PORT`，此前写死导致 compose 传参**被静默忽略** | `Dockerfile:31-33`、`docs/progress/project.md:509` |
 | 评测脚本不硬编码 WSL | `_docker_argv` 按 `PAPERBOX_DOCKER_PREFIX` → `docker` → `wsl -e docker` 选择，Linux 上可用 | `build_eval_set.py:26-43`、`docs/progress/project.md:510` |
@@ -224,7 +224,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `acceptance.py` | plan §38 端到端验收 9 项 | `--api`、`--url` | 否（会真导入一篇 arXiv PDF，判重则复用） | **写**：导入论文 | `0` 全 PASS / `1` 有 FAIL（`acceptance.py:61, 118`） |
 | `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引 | `0` 无失败 / `1` 有失败（`reindex.py:60`） |
 | `purge_deleted.py` | 清已删论文的索引文档与 MinIO 对象 | `--dry-run` | 是 | **写**：删索引文档 + 对象（PG 行保留） | 无残留 `0`；有失败 `1`；`--dry-run` 恒 `0`（`purge_deleted.py:126-128, 96, 101`） |
-| `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留 | `--no-fail` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:84-111`） |
+| `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留 | `--no-fail` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:89-116`） |
 | `refresh_index_metadata.py` | 批量改写已索引文档的元数据快照（不重算向量） | `--dry-run`、`--paper-id`、`--limit`、`--no-mapping` | 是（同元数据同输出） | **写**：`PUT _mapping` + 每个 chunk 一条 partial update | 全成功 `0` / 有失败 `1`（`refresh_index_metadata.py:94-141`） |
 | `bulk_ingest.py` | 按 arXiv 清单串行导入 | `--file`、`--limit`、`--resume`、`--dry-run`、`--out`、`--timeout`、`--poll-interval`、`--base-url`、`--api-key` | 否（`--resume` 靠 `arxiv_id` 跳过） | **写**：批量导入 | 无失败 `0`；有失败 `1`；`--dry-run` `0`；`--limit<=0` `2`（`bulk_ingest.py:260-262, 289, 393`） |
 | `bulk_ingest_dir.py` | 导入一个文件夹 | `--root`(必需)、`--glob`、`--no-recursive`、`--limit`、`--via-http`、`--resume`、`--dry-run`、`--max-file-mb`、`--out`、`--timeout`、`--poll-interval` | 否（`--resume` 按相对路径跳过） | **写**：批量导入 | 无 error 且 `failed=0` 且 `rejected=0` → `0`，否则 `1`；root 非目录 / `--limit<=0` → `2`（`bulk_ingest_dir.py:482-484, 503-505, 591`） |

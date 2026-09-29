@@ -24,7 +24,7 @@ useless for the other two. This mirrors the rule ``/health`` follows.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -55,6 +55,12 @@ ISSUE_ORPHAN_INDEX = "orphan_index"
 ISSUE_CHUNK_MISMATCH = "chunk_count_mismatch"
 #: A soft-deleted paper still owns documents and/or objects.
 ISSUE_DELETED_RESIDUE = "deleted_paper_residue"
+#: The parser stamp on ``papers`` and the ``parser_backend`` carried by that
+#: paper's documents disagree, or the documents are split across backends: the
+#: library mixes parsers in a state that was never committed as a whole (plan
+#: §6.1 step 2). A missing stamp on either side counts as ``unknown``, so papers
+#: indexed before the stamp existed are *not* reported.
+ISSUE_PARSER_STAMP_MISMATCH = "parser_stamp_mismatch"
 
 #: Prefixes owned by a paper / by the upload staging area.
 OBJECT_PREFIX = f"{object_storage.ORIGINAL_PREFIX}/"
@@ -70,6 +76,9 @@ DEFAULT_PROBLEM_LIMIT = 200
 AGG_SIZE = 10000
 #: How many orphan keys/ids to spell out in the report (totals stay exact).
 ORPHAN_SAMPLE = 100
+
+#: Census key for rows/documents that carry no parser stamp at all.
+UNKNOWN_BACKEND = "unknown"
 
 
 @dataclass
@@ -87,6 +96,11 @@ class PaperConsistency:
     issues: list[str] = field(default_factory=list)
     missing_objects: list[str] = field(default_factory=list)
     orphan_objects: list[str] = field(default_factory=list)
+    #: What PostgreSQL stamps for the paper (``None`` = indexed before the stamp).
+    parser_backend: str | None = None
+    #: What the paper's index documents carry, sorted. Empty = no documents, or
+    #: documents written before the stamp existed.
+    index_backends: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +115,8 @@ class PaperConsistency:
             "issues": list(self.issues),
             "missing_objects": list(self.missing_objects),
             "orphan_objects": list(self.orphan_objects),
+            "parser_backend": self.parser_backend,
+            "index_backends": list(self.index_backends),
         }
 
 
@@ -124,6 +140,10 @@ class ConsistencyReport:
     orphan_objects_total: int
     orphan_documents: list[str]
     orphan_documents_total: int
+    #: Backend census, keyed by backend name (or ``unknown``): what PostgreSQL
+    #: stamps for its live papers, and what the index documents carry.
+    parser_backends_papers: dict[str, int]
+    parser_backends_documents: dict[str, int]
     errors: list[str]
     truncated: bool
     took_ms: float
@@ -159,6 +179,10 @@ class ConsistencyReport:
                 "orphan_objects": self.orphan_objects_total,
                 "orphan_documents": self.orphan_documents_total,
             },
+            "parser_backends": {
+                "papers": dict(sorted(self.parser_backends_papers.items())),
+                "documents": dict(sorted(self.parser_backends_documents.items())),
+            },
             "problems": [problem.as_dict() for problem in self.problems],
             "orphan_objects": list(self.orphan_objects),
             "orphan_documents": list(self.orphan_documents),
@@ -179,6 +203,8 @@ class _PaperRow:
     title: str | None
     status: str
     deleted: bool
+    parser_backend: str | None = None
+    parser_version: str | None = None
 
 
 def _load_papers(session_factory: Callable[[], Any]) -> tuple[dict[str, _PaperRow], dict[str, list[str]], dict[str, int]]:
@@ -186,14 +212,23 @@ def _load_papers(session_factory: Callable[[], Any]) -> tuple[dict[str, _PaperRo
     session = session_factory()
     try:
         papers: dict[str, _PaperRow] = {}
-        for paper_id, title, status, deleted_at in session.execute(
-            select(Paper.id, Paper.title, Paper.status, Paper.deleted_at)
+        for paper_id, title, status, deleted_at, backend, version in session.execute(
+            select(
+                Paper.id,
+                Paper.title,
+                Paper.status,
+                Paper.deleted_at,
+                Paper.parser_backend,
+                Paper.parser_version,
+            )
         ).all():
             papers[str(paper_id)] = _PaperRow(
                 paper_id=str(paper_id),
                 title=title,
                 status=str(status or ""),
                 deleted=deleted_at is not None,
+                parser_backend=backend,
+                parser_version=version,
             )
         files: dict[str, list[str]] = {}
         for paper_id, object_key in session.execute(
@@ -230,31 +265,79 @@ def _load_objects(storage: Any) -> tuple[dict[str, list[str]], int]:
     return per_paper, staging
 
 
-def _load_documents(client: Any, alias: str) -> tuple[dict[str, int], bool, bool]:
-    """OpenSearch side: documents per ``paper_id``.
+def _load_documents(
+    client: Any, alias: str
+) -> tuple[dict[str, int], dict[str, dict[str, int]], bool, bool]:
+    """OpenSearch side: documents per ``paper_id``, split by parser backend.
 
-    Returns ``(counts, index_exists, truncated)``. One ``terms`` aggregation is
-    enough for the whole corpus, so this stays a single round trip.
+    Returns ``(counts, backends, index_exists, truncated)``. One ``terms``
+    aggregation with a ``parser_backend`` sub-aggregation is enough for the whole
+    corpus, so this stays a single round trip. A paper whose documents predate
+    the stamp comes back with an empty mapping -- "no backend", not "unknown
+    backend of a known kind".
     """
     exists = opensearch.index_exists(client, alias)
     if not exists:
-        return {}, False, False
+        return {}, {}, False, False
     client = client or opensearch.get_client()
     response = client.search(
         index=alias,
         body={
             "size": 0,
-            "aggs": {"by_paper": {"terms": {"field": "paper_id", "size": AGG_SIZE}}},
+            "aggs": {
+                "by_paper": {
+                    "terms": {"field": "paper_id", "size": AGG_SIZE},
+                    "aggs": {"by_backend": {"terms": {"field": "parser_backend"}}},
+                }
+            },
         },
     )
     buckets = response.get("aggregations", {}).get("by_paper", {}).get("buckets", [])
-    counts = {str(bucket["key"]): int(bucket["doc_count"]) for bucket in buckets}
-    return counts, True, len(buckets) >= AGG_SIZE
+    counts: dict[str, int] = {}
+    backends: dict[str, dict[str, int]] = {}
+    for bucket in buckets:
+        paper_id = str(bucket["key"])
+        counts[paper_id] = int(bucket["doc_count"])
+        by_backend = bucket.get("by_backend", {}).get("buckets", [])
+        backends[paper_id] = {
+            str(entry["key"]): int(entry["doc_count"])
+            for entry in by_backend
+            if str(entry["key"])
+        }
+    return counts, backends, True, len(buckets) >= AGG_SIZE
 
 
 # --------------------------------------------------------------------------- #
 # the check
 # --------------------------------------------------------------------------- #
+
+
+def _census(values: Iterable[str | None]) -> dict[str, int]:
+    """Count live papers per parser backend; ``unknown`` covers "no stamp"."""
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value or UNKNOWN_BACKEND)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _document_census(
+    documents: Mapping[str, int], backends: Mapping[str, Mapping[str, int]]
+) -> dict[str, int]:
+    """Count *documents* per backend, not papers: one paper can straddle two."""
+    counts: dict[str, int] = {}
+    for paper_id, total in documents.items():
+        by_backend = dict(backends.get(paper_id) or {})
+        accounted = sum(by_backend.values())
+        if accounted < int(total):
+            # Documents written before the stamp existed, or a sub-aggregation
+            # that came back short: either way the remainder is "unknown".
+            by_backend[UNKNOWN_BACKEND] = by_backend.get(UNKNOWN_BACKEND, 0) + (
+                int(total) - accounted
+            )
+        for backend, doc_count in by_backend.items():
+            counts[backend] = counts.get(backend, 0) + int(doc_count)
+    return counts
 
 
 def _compare_paper(
@@ -264,6 +347,7 @@ def _compare_paper(
     objects: Sequence[str],
     chunks_pg: int,
     chunks_os: int,
+    index_backends: Mapping[str, int] | None = None,
 ) -> PaperConsistency | None:
     """Compare one paper across the three stores; ``None`` when it agrees."""
     expected = set(file_keys)
@@ -290,6 +374,8 @@ def _compare_paper(
             chunks_os=chunks_os,
             issues=issues,
             orphan_objects=sorted(actual),
+            parser_backend=row.parser_backend,
+            index_backends=tuple(sorted(index_backends or {})),
         )
 
     missing_objects = sorted(expected - actual)
@@ -310,6 +396,14 @@ def _compare_paper(
     elif not chunks_pg and row.status == INDEXED_STATUS:
         issues.append(ISSUE_MISSING_CHUNKS)
 
+    # The parser stamp: PostgreSQL is the truth about what produced the chunks,
+    # the documents carry what actually did. Both unknown (a paper indexed before
+    # the stamp existed) is agreement, not drift.
+    index_stamped = sorted(index_backends or {})
+    expected_backends = [row.parser_backend] if row.parser_backend else []
+    if chunks_os and index_stamped != expected_backends:
+        issues.append(ISSUE_PARSER_STAMP_MISMATCH)
+
     if not issues:
         return None
     return PaperConsistency(
@@ -324,6 +418,8 @@ def _compare_paper(
         issues=issues,
         missing_objects=missing_objects,
         orphan_objects=orphan_objects,
+        parser_backend=row.parser_backend,
+        index_backends=tuple(index_stamped),
     )
 
 
@@ -362,10 +458,13 @@ def check_consistency(
         errors.append(f"minio: {type(exc).__name__}: {exc}")
 
     documents: dict[str, int] = {}
+    document_backends: dict[str, dict[str, int]] = {}
     index_exists = False
     truncated = False
     try:
-        documents, index_exists, truncated = _load_documents(client, alias)
+        documents, document_backends, index_exists, truncated = _load_documents(
+            client, alias
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("consistency: could not read OpenSearch: %s", exc)
         errors.append(f"opensearch: {type(exc).__name__}: {exc}")
@@ -383,6 +482,7 @@ def check_consistency(
             objects=objects_per_paper.get(paper_id, []),
             chunks_pg=chunks.get(paper_id, 0),
             chunks_os=documents.get(paper_id, 0),
+            index_backends=document_backends.get(paper_id, {}),
         )
         if problem is not None:
             problems.append(problem)
@@ -417,6 +517,10 @@ def check_consistency(
         orphan_objects_total=len(orphan_objects),
         orphan_documents=orphan_documents[:ORPHAN_SAMPLE],
         orphan_documents_total=len(orphan_documents),
+        parser_backends_papers=_census(
+            row.parser_backend for row in papers.values() if not row.deleted
+        ),
+        parser_backends_documents=_document_census(documents, document_backends),
         errors=errors,
         truncated=truncated,
         took_ms=took_ms,
@@ -430,6 +534,8 @@ def check_consistency(
                 "problems": report.problems_total,
                 "orphan_objects": report.orphan_objects_total,
                 "orphan_documents": report.orphan_documents_total,
+                "parser_backends_papers": report.parser_backends_papers,
+                "parser_backends_documents": report.parser_backends_documents,
                 "errors": len(errors),
                 "took_ms": took_ms,
             }
@@ -447,6 +553,8 @@ __all__ = [
     "ISSUE_MISSING_OBJECT",
     "ISSUE_ORPHAN_INDEX",
     "ISSUE_ORPHAN_OBJECT",
+    "ISSUE_PARSER_STAMP_MISMATCH",
+    "UNKNOWN_BACKEND",
     "ConsistencyReport",
     "PaperConsistency",
     "check_consistency",

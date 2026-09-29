@@ -131,6 +131,11 @@ def build_mapping() -> dict:
         },
         "embedding_model": {"type": "keyword"},
         "embedding_dimension": {"type": "integer"},
+        # Which parser produced the chunk text in this document, and its version
+        # (plan §6.1 step 2). Keyword, so a mixed library is a filterable fact:
+        # ``parser_backend: pypdf`` finds what a backend switch did not reach.
+        "parser_backend": {"type": "keyword"},
+        "parser_version": {"type": "keyword"},
         "created_at": {"type": "date"},
     }
     # Metadata snapshot: these are what POST /api/search filters read.

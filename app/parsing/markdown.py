@@ -37,6 +37,8 @@ from app.parsing.structure import (
     KNOWN_HEADINGS,
     SECTION_BODY,
     PageBlock,
+    Section,
+    _append_paragraphs,
     page_blocks,
 )
 
@@ -231,6 +233,139 @@ def promote_paper_title(
         lines[index] = f"# {title}"
         return "\n".join(lines)
     return markdown
+
+
+# --------------------------------------------------------------------------- #
+# markdown -> structure (the way back)
+# --------------------------------------------------------------------------- #
+
+#: A markdown heading line: one to six ``#``, a space, a non-empty title.
+_HEADING_LINE = re.compile(r"^(#{1,6})\s+(?P<title>\S.*?)\s*$")
+#: Numbered heading in the fallback's own vocabulary: the same tokens
+#: ``structure._NUMBERED_HEADING`` accepts, so a pypdf round trip recovers the
+#: section number the fallback had already found.
+_NUMERIC_HEADING = re.compile(
+    r"^(?P<number>\d+(?:\.\d+)*|[IVXLC]+(?:-[A-Za-z])?)[.)]?\s+(?P<title>\S.*)$"
+)
+#: Sub-section letters ("A. Real-Time Monitor") only exist in docling's inferred
+#: hierarchy; demanding the dot is what keeps "A Survey of X" in one piece.
+_LETTER_HEADING = re.compile(r"^(?P<number>[A-Z])[.)]\s+(?P<title>\S.*)$")
+#: Comment-only lines carry the dialect's structure (page breaks, table
+#: placeholders), never content -- they do not become chunk text.
+_COMMENT_LINE = re.compile(r"^<!--.*-->\s*$")
+
+
+def split_heading_number(title: str) -> tuple[str | None, str]:
+    """Split ``"I. INTRODUCTION"`` into ``("I", "INTRODUCTION")``.
+
+    An unnumbered heading (``Abstract``, ``REFERENCES``) comes back unchanged as
+    ``(None, title)``, and so does a title whose first token is not a numbering
+    token (``A Survey of Loop Filters``) or whose remainder ends in a full stop
+    -- the fallback's own rule (``structure._match_heading``), so section labels
+    survive the round trip through markdown.
+    """
+    cleaned = title.strip()
+    for pattern in (_NUMERIC_HEADING, _LETTER_HEADING):
+        match = pattern.match(cleaned)
+        if match is None:
+            continue
+        rest = match.group("title").strip()
+        if rest and not rest.endswith("."):
+            return match.group("number"), rest
+        return None, cleaned
+    return None, cleaned
+
+
+def pages_and_sections_from_markdown(
+    bundle: ParseBundle, *, page_break: str | None = None
+) -> tuple[list[PageText], list[Section]]:
+    """Rebuild the ``(pages, sections)`` pair ``chunk_document`` expects.
+
+    The dialect carries everything section detection needs -- ``#`` levels for
+    the hierarchy, the page marker for the page grid -- so **both** backends
+    feed the same chunker: switching backends changes the text, not the chunking
+    policy (plan §6.1 step 1). ``pages`` are the markdown's own page slices, so a
+    chunk's ``page_start``/``page_end`` still come from a page span.
+
+    The result mirrors ``structure.detect_sections`` on the fallback's pages:
+    text before the first heading lands in a ``Body`` section, every heading
+    starts a new one, empty sections are dropped (a heading-less document keeps
+    that single ``Body``), a paragraph never spans a page, and paragraphs are
+    split by the same helper, so hard-wrapped lines and dangling hyphens are
+    stitched back together identically.
+    """
+    markdown = bundle.markdown or ""
+    marker = (page_break or PAGE_BREAK_DEFAULT).strip()
+    spans = list(bundle.spans) or page_spans_from_markdown(markdown, page_break=marker)[1]
+    pages = [
+        PageText(page=span.page, text=markdown[span.char_start : span.char_end])
+        for span in spans
+    ]
+    if not pages:
+        return [], []
+
+    sections: list[Section] = []
+    current = Section(title=SECTION_BODY, page_start=pages[0].page, page_end=pages[0].page)
+    buffer: list[str] = []
+    buffer_page: int | None = None
+    touched = False
+
+    def flush() -> None:
+        """Give the buffered block to the current section, with its own page."""
+        nonlocal buffer, buffer_page, touched
+        if buffer and buffer_page is not None:
+            _append_paragraphs(current, buffer_page, "\n".join(buffer).strip("\n"))
+            touched = True
+            current.page_end = max(current.page_end, buffer_page)
+        buffer = []
+        buffer_page = None
+
+    span_index = 0
+    offset = 0
+    for raw_line in markdown.split("\n"):
+        line_start = offset
+        offset += len(raw_line) + 1  # +1 for the newline that split() consumed
+        while span_index + 1 < len(spans) and line_start >= spans[span_index].char_end:
+            span_index += 1
+        page_number = spans[span_index].page
+        stripped = raw_line.strip()
+        if not stripped or stripped == marker:
+            # A blank line or a page boundary closes the block; the block keeps
+            # the page it started on, so a paragraph never spans two pages.
+            flush()
+            continue
+        if _COMMENT_LINE.match(stripped):
+            continue
+        heading = _HEADING_LINE.match(stripped)
+        if heading is None:
+            if buffer_page is None:
+                buffer_page = page_number
+            elif buffer_page != page_number:
+                flush()
+                buffer_page = page_number
+            buffer.append(raw_line)
+            continue
+        flush()
+        if touched:
+            current.page_end = max(current.page_end, page_number)
+        sections.append(current)
+        number, title = split_heading_number(heading.group("title"))
+        current = Section(
+            title=title,
+            number=number,
+            page_start=page_number,
+            page_end=page_number,
+        )
+        touched = False
+    flush()
+    sections.append(current)
+
+    for section in sections:
+        section.paragraphs = [(page, text) for page, text in section.paragraphs if text]
+    # Same rule as ``detect_sections``: drop the placeholder that only exists
+    # because the document opens with a heading, keep it when nothing is left.
+    populated = [section for section in sections if section.paragraphs]
+    return pages, (populated or sections[:1])
 
 
 def prepare_docling_markdown(

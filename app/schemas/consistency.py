@@ -21,6 +21,9 @@ class PaperConsistencyOut(BaseModel):
     issues: list[str] = Field(default_factory=list)
     missing_objects: list[str] = Field(default_factory=list)
     orphan_objects: list[str] = Field(default_factory=list)
+    #: Parser provenance: what PostgreSQL stamps vs what the documents carry.
+    parser_backend: str | None = None
+    index_backends: list[str] = Field(default_factory=list)
 
 
 class ConsistencyTotalsOut(BaseModel):
@@ -41,6 +44,21 @@ class ConsistencyTotalsOut(BaseModel):
     orphan_documents: int = 0
 
 
+class ParserBackendsOut(BaseModel):
+    """Which parser produced the chunks, counted on both sides.
+
+    ``papers`` counts live paper rows by their stamp; ``documents`` counts index
+    documents, so a half-applied backend switch shows up as a paper counted under
+    one backend and its documents under another. ``unknown`` means "no stamp"
+    (rows written before the stamp existed).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    papers: dict[str, int] = Field(default_factory=dict)
+    documents: dict[str, int] = Field(default_factory=dict)
+
+
 class ConsistencyOut(BaseModel):
     """The full report: totals, per-paper problems, store-level orphans, errors."""
 
@@ -51,6 +69,7 @@ class ConsistencyOut(BaseModel):
     index: str
     index_exists: bool
     totals: ConsistencyTotalsOut
+    parser_backends: ParserBackendsOut = Field(default_factory=ParserBackendsOut)
     problems: list[PaperConsistencyOut] = Field(default_factory=list)
     orphan_objects: list[str] = Field(default_factory=list)
     orphan_documents: list[str] = Field(default_factory=list)

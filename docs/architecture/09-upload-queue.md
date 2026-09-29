@@ -125,7 +125,7 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 9. **嵌套压缩包不递归**（304-306，计入 `entries_ignored`）；`.pdf` 后缀只是候选，最终靠 `%PDF` 魔数（前 1 KiB，`PDF_MAGIC_WINDOW=1024`，173-180），无魔数即 `UNSUPPORTED_TYPE` 拒收并删文件（697-707）。
 10. **GC 只删文件、不碰作业行**：`run_gc` 只对作业表做 `select`（85-115），测试用真实作业行验证 stage 与 `error_code` 不变（`tests/test_upload_gc.py:270-287`）；失败只进 `GcReport.errors`，绝不抛（156-159、215-222）。
 11. **staging 没有宽限期**：GC 判据只有 liveness（174-181），没有年龄检查；孤立即刻被删。历史事故：staging 只写不删，13 个作业留下 9 个对象 49.8 MB（`housekeeping.py:5-10`，该数字来自代码注释，本会话未复测）。
-12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md:224`），存储成功后才 `_cleanup_source`（`tasks.py:274-284`）。
+12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md:224`），存储成功后才 `_cleanup_source`（`tasks.py:273-283`）。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
 
@@ -142,7 +142,7 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 | `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:157-159`；`archive_service.py:281-286` |
 | `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:161`；`archive_service.py:287-293` |
 | `INGEST_ARCHIVE_TMP_DIR` | 空 | 解包目录（空 = 系统 temp） | `config.py:163`；`archive_service.py:127-135` |
-| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:165`；`housekeeping.py:198`、`:231-249` |
+| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:165`；`housekeeping.py:198`、`:232-250` |
 | `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:169`；`housekeeping.py:307`、`323-334` |
 | `INGEST_CONCURRENCY` | 2 | 并发流水线数（处理腿，本文只引用） | `config.py:125`；见 `02-ingestion-pipeline.md` |
 
