@@ -640,7 +640,9 @@ def chunk_markdown(
     Returns ``[]`` for an empty bundle, exactly like an empty ``pages`` list;
     the pipeline turns that into the ``NO_TEXT_LAYER`` failure.
     """
-    pages, sections = pages_and_sections_from_markdown(bundle, page_break=page_break)
+    pages, sections = pages_and_sections_from_markdown(
+        bundle, page_break=page_break, on_degrade=on_degrade
+    )
     return chunk_document(
         pages,
         merge_short_sections(sections),
