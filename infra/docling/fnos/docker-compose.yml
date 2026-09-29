@@ -1,0 +1,54 @@
+# paperbox 的 docling-serve 在 fnOS NAS 上的运行编排（2026-09-29 起）。
+#
+# 放在 fnOS 的 /vol1/docker/docling-build/ 下，与 Dockerfile.offline、模型目录
+# docling-project--CodeFormulaV2/ 同级，然后：
+#   cd /vol1/docker/docling-build && docker compose build && docker compose up -d
+#
+# 与本机 infra/docker-compose.yml 的 docling 服务差异（其余 env 逐条对齐）：
+#   mem_limit 3000m → 8g（NAS 15.6GB，本机 WSL 只有 9GB 是搬家的原因）
+#   cpus 4 → 6 / DOCLING_NUM_THREADS 4 → 6（NAS 8 核，且同机只有 qBittorrent/minio 等轻负载）
+#   数据卷路径换成 /vol1/docker/docling-data
+services:
+  docling:
+    image: paperbox-docling-cpu:v1.35.0-formula
+    build:
+      context: .
+      dockerfile: Dockerfile.offline
+    container_name: paperbox-docling
+    restart: unless-stopped
+    environment:
+      UVICORN_WORKERS: "1"
+      DOCLING_SERVE_LOG_LEVEL: "WARNING"
+      # 懒加载：冷请求付一次模型加载，平时只占几百 MB（与本机取值一致，便于对照）
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "false"
+      # 每个 options 组合一份 DocumentConverter（含模型），默认缓存 2 份 → 内存翻倍
+      DOCLING_SERVE_OPTIONS_CACHE_SIZE: "1"
+      # 同步端点默认只等 120s 就 504；真正兜底的是请求级 document_timeout（app 会带）。
+      # 2026-09-29 实测：公式密集的 7 页论文（2404.05260）在 NAS 上要 **252s** 才出结果，
+      # 按本机那套 150s 兜底会直接白跑 ⇒ 这里放宽到 900s，让 app 侧能用 document_timeout≈600。
+      # 代价：一条超长请求会占住唯一的 worker 最多 15 分钟（app 侧必须有超时 + 降级重试）。
+      DOCLING_SERVE_MAX_SYNC_WAIT: "900"
+      # 内存统计端点（默认 false 会 403）：GET /v1/memory/stats、/v1/memory/counts
+      DOCLING_SERVE_ENABLE_MANAGEMENT_ENDPOINTS: "true"
+      # docling 内部 torch/onnxruntime 线程数；不设会按全机线程跑满
+      DOCLING_NUM_THREADS: "6"
+      DOCLING_DEVICE: "cpu"
+      # 本地引擎默认 2 个 worker 进程 → 模型加载两遍，白吃一份内存
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      # OCR 保持关闭（语料是电子版 PDF）：请求级字段 do_ocr 由 app/探针显式传 false
+    ports:
+      # 绑 0.0.0.0：应用在别的机器（Windows 宿主）上跑，必须能从局域网连
+      - "8091:5001"
+    mem_limit: 8g
+    # memswap_limit == mem_limit：不许用 swap。宁可容器失败（app 侧降级 pypdf），
+    # 也不许把 NAS 拖进 swap 抖动。
+    memswap_limit: 8g
+    cpus: 6
+    volumes:
+      - /vol1/docker/docling-data:/var/lib/docling
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:5001/health', timeout=5).status==200 else sys.exit(1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
