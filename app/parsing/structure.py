@@ -186,6 +186,93 @@ def detect_sections(pages: list[PageText]) -> list[Section]:
     return populated or sections[:1]
 
 
+@dataclass(slots=True)
+class PageBlock:
+    """One block of a single page, in reading order.
+
+    ``kind`` is ``heading`` / ``paragraph`` / ``table``. ``lines`` holds the raw
+    text lines for a table (their structure is what makes the fallback rendering
+    recognisable) and ``number``/``title`` are set for headings so the renderer
+    can reuse :func:`app.parsing.markdown.heading_level`.
+    """
+
+    kind: str
+    page: int
+    text: str = ""
+    lines: list[str] = field(default_factory=list)
+    number: str | None = None
+    title: str | None = None
+
+
+def page_blocks(page: PageText, *, min_table_rows: int = 2) -> list[PageBlock]:
+    """Split one page's text into headings, paragraphs and tables, in order.
+
+    ``detect_sections`` throws the line structure away (it joins wrapped lines
+    into paragraphs), which is fine for chunking but loses exactly what the
+    markdown renderer needs: where a heading sits relative to the surrounding
+    text, and which lines were table rows. This function keeps it.
+
+    A *new* function on purpose: the ingestion path keeps using
+    ``detect_sections`` unchanged (decision 11), so ``pdf_heuristic`` metadata
+    cannot move because of a parser change.
+    """
+    lines = page.text.split("\n") if page.text else []
+    blocks: list[PageBlock] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        text = _join_wrapped_lines("\n".join(buffer))
+        buffer.clear()
+        if text:
+            blocks.append(PageBlock(kind="paragraph", page=page.page, text=text))
+
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            flush()
+            index += 1
+            continue
+
+        # A run of table-like lines: their structure is only visible while the
+        # lines are still separate, so it has to be captured here.
+        run: list[str] = []
+        cursor = index
+        while cursor < len(lines) and lines[cursor].strip():
+            if not _looks_like_table_row(_clean_line(lines[cursor])):
+                break
+            run.append(_clean_line(lines[cursor]))
+            cursor += 1
+        if len(run) >= min_table_rows:
+            flush()
+            blocks.append(PageBlock(kind="table", page=page.page, lines=run))
+            index = cursor
+            continue
+
+        heading = _match_heading(line)
+        if heading is not None:
+            flush()
+            number, title = heading
+            blocks.append(
+                PageBlock(
+                    kind="heading",
+                    page=page.page,
+                    text=f"{number} {title}".strip() if number else title,
+                    number=number,
+                    title=title,
+                )
+            )
+            index += 1
+            continue
+
+        buffer.append(line)
+        index += 1
+    flush()
+    return blocks
+
+
 def _append_paragraphs(section: Section, page_number: int, body: str) -> None:
     if not body:
         return
