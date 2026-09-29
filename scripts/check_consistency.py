@@ -58,7 +58,9 @@ def print_report(report) -> None:
         "consistent: "
         + ("yes" if data["consistent"] else "NO")
         + f"  (problems={totals['problems']}, orphan objects={totals['orphan_objects']}, "
-        f"orphan documents={totals['orphan_documents']}, errors={len(data['errors'])}, "
+        f"orphan documents={totals['orphan_documents']}, "
+        f"cache objects={totals.get('cache_objects', 0)} (parse cache, not drift), "
+        f"errors={len(data['errors'])}, "
         f"took {data['took_ms']}ms)"
     )
 
