@@ -8,9 +8,13 @@ Rerank 模型: 由 RERANK_MODEL 指定, 默认 Xenova/ms-marco-MiniLM-L-6-v2
 
 API:
   GET  /health                     -> {"status":"ok","model":...,"dimension":...,
-                                       "rerank_model":...}
+                                       "rerank_model":...,"queue":{...}}
   GET  /info                       -> {"model":...,"dimension":...,"max_batch":...,
-                                       "rerank_model":...}
+                                       "rerank_model":...,"inference":{...}}
+
+并发: 所有推理（embed / rerank）都排进一个 FIFO 队列，由 INFERENCE_WORKERS 个
+  工作线程串行执行；队列积压超过 INFERENCE_QUEUE_DEPTH 直接 503 + Retry-After，
+  而不是无限排队。见 InferenceQueue 的注释。
   POST /rerank                     -> {"results":[{"index":int,"score":float}],
                                        "model":...,"took_ms":int}
        {"query": "...", "documents": ["..."], "top_n": int|null}
@@ -19,7 +23,10 @@ API:
   POST /v1/embeddings (OpenAI 兼容) -> OpenAI 风格响应
 """
 import os
+import queue
+import threading
 import time
+from concurrent.futures import Future
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
@@ -35,6 +42,100 @@ MAX_BATCH = int(os.environ.get("MAX_BATCH", "64"))
 # MAX_BATCH -- sharing one knob would either OOM rerank or 422 normal ingests.
 RERANK_MAX_BATCH = int(os.environ.get("RERANK_MAX_BATCH", str(MAX_BATCH)))
 THREADS = int(os.environ.get("ORT_THREADS", "2"))
+# 一个容器里同时跑几次 ONNX 推理。ONNX Runtime 自己就有 ORT_THREADS 条 lane，
+# 再叠上 N 个并发请求，CPU 只会互相抢（本机 6 vCPU；精排模型单次峰值已 2.4GB）。
+INFERENCE_WORKERS = max(1, int(os.environ.get("INFERENCE_WORKERS", "1")))
+# 允许排队等待的请求数上限（不含正在跑的）。满了就 503，让客户端退避重试——
+# 无界排队只会把等待时间推到客户端超时之后，那时两边都拿不到可用的错误。
+INFERENCE_QUEUE_DEPTH = max(1, int(os.environ.get("INFERENCE_QUEUE_DEPTH", "32")))
+
+
+class QueueFull(RuntimeError):
+    """队列已满：调用方应回 503 + Retry-After，而不是继续等。"""
+
+
+class InferenceQueue:
+    """FIFO 队列 + 固定工作线程，所有推理调用都必须经过它。
+
+    目的不是吞吐，而是“不抢”：embed 与 rerank 共用同一个 ONNX 会话，多个请求
+    并发时 CPU/内存互相挤（历史上 uvicorn 被 oom-killer 杀掉就是这条路）。
+    排队后每个请求仍然能拿到正确结果，只是排在前面的人后面。
+
+    权衡：延迟变成“排队时间 + 推理时间”。客户端超时必须大于最坏等待时间，
+    应用侧 EMBEDDING_TIMEOUT 已按此上调。
+    """
+
+    def __init__(self, workers: int, depth: int) -> None:
+        self.workers = workers
+        self.depth = depth
+        self._queue: queue.Queue = queue.Queue(maxsize=depth)
+        self._lock = threading.Lock()
+        self._running = 0
+        self._completed = 0
+        self._rejected = 0
+        self._started = False
+
+    def start(self) -> None:
+        """启动工作线程（幂等；导入时启动会让健康检查也依赖线程）。"""
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+            for index in range(self.workers):
+                threading.Thread(
+                    target=self._run, name=f"inference-{index}", daemon=True
+                ).start()
+
+    def _run(self) -> None:
+        while True:
+            fn, args, kwargs, future = self._queue.get()
+            with self._lock:
+                self._running += 1
+            try:
+                if not future.set_running_or_notify_cancel():
+                    continue
+                try:
+                    future.set_result(fn(*args, **kwargs))
+                except BaseException as exc:  # noqa: BLE001 - 交给提交方
+                    future.set_exception(exc)
+            finally:
+                with self._lock:
+                    self._running -= 1
+                    self._completed += 1
+                self._queue.task_done()
+
+    def submit(self, fn, *args, **kwargs):
+        """按 FIFO 执行 ``fn``；队列满时抛 :class:`QueueFull`。"""
+        self.start()
+        future: Future = Future()
+        try:
+            self._queue.put_nowait((fn, args, kwargs, future))
+        except queue.Full as exc:
+            with self._lock:
+                self._rejected += 1
+            raise QueueFull(
+                f"inference queue full (depth={self.depth}, workers={self.workers})"
+            ) from exc
+        return future.result()
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "workers": self.workers,
+                "queue_depth": self.depth,
+                "waiting": self._queue.qsize(),
+                "running": self._running,
+                "completed": self._completed,
+                "rejected": self._rejected,
+            }
+
+
+QUEUE = InferenceQueue(INFERENCE_WORKERS, INFERENCE_QUEUE_DEPTH)
+
+
+def _busy(exc: QueueFull) -> HTTPException:
+    """队列满 -> 503（与 rerank 不可用同一口径），带 Retry-After。"""
+    return HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"})
 
 app = FastAPI(title="paperbox embedding server", version="0.1.0")
 
@@ -93,6 +194,7 @@ def health():
         "loaded": _model is not None,
         "rerank_model": RERANK_MODEL,
         "rerank_loaded": _reranker is not None,
+        "queue": QUEUE.stats(),
     }
 
 
@@ -104,6 +206,7 @@ def info():
         "max_batch": MAX_BATCH,
         "rerank_model": RERANK_MODEL,
         "rerank_max_batch": RERANK_MAX_BATCH,
+        "inference": QUEUE.stats(),
     }
 
 
@@ -111,7 +214,9 @@ def info():
 def embed(req: EmbedRequest):
     t0 = time.time()
     try:
-        vecs = list(get_model().embed(req.texts))
+        vecs = QUEUE.submit(lambda: list(get_model().embed(req.texts)))
+    except QueueFull as e:
+        raise _busy(e) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"embedding failed: {e}") from e
     dim = len(vecs[0]) if vecs else 0
@@ -132,9 +237,9 @@ def rerank(req: RerankRequest):
     if not documents:
         return {"results": [], "model": RERANK_MODEL, "took_ms": 0}
 
-    try:
+    def run_rerank() -> list[float]:
         reranker = get_reranker()
-        scores: list[float] = []
+        produced_scores: list[float] = []
         # RERANK_MAX_BATCH bounds one inference call, so long candidate lists are
         # split and the original document indices are restored afterwards.
         for start in range(0, len(documents), RERANK_MAX_BATCH):
@@ -145,7 +250,13 @@ def rerank(req: RerankRequest):
                     f"reranker returned {len(produced)} scores "
                     f"for {len(batch)} documents"
                 )
-            scores.extend(float(score) for score in produced)
+            produced_scores.extend(float(score) for score in produced)
+        return produced_scores
+
+    try:
+        scores = QUEUE.submit(run_rerank)
+    except QueueFull as e:
+        raise _busy(e) from e
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001 - the app side degrades on 503
@@ -169,7 +280,10 @@ def rerank(req: RerankRequest):
 def openai_compat(req: OpenAIEmbedRequest):
     texts = req.input if isinstance(req.input, list) else [req.input]
     t0 = time.time()
-    vecs = list(get_model().embed(texts))
+    try:
+        vecs = QUEUE.submit(lambda: list(get_model().embed(texts)))
+    except QueueFull as e:
+        raise _busy(e) from e
     data = [
         {"object": "embedding", "index": i, "embedding": [float(x) for x in v]}
         for i, v in enumerate(vecs)

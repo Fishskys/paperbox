@@ -159,6 +159,10 @@ class Paper(TimestampMixin, Base):
     chunks: Mapped[list["PaperChunk"]] = relationship(
         back_populates="paper", cascade="all, delete-orphan"
     )
+    #: Degraded-but-usable results per stage (T7.3); ``paper_degradations``.
+    degradations: Mapped[list["PaperDegradation"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
     ingestion_jobs: Mapped[list["IngestionJob"]] = relationship(
         back_populates="paper", cascade="all, delete-orphan"
     )
@@ -636,6 +640,74 @@ class PaperFieldProvenance(Base):
         return (
             f"<PaperFieldProvenance field={self.field} current={self.is_current} "
             f"by={self.decided_by}>"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# paper_degradations (a stage that gave up on something, but the paper is usable)
+# --------------------------------------------------------------------------- #
+class PaperDegradation(TimestampMixin, Base):
+    """One reason a stage produced a thinner result than it could have.
+
+    Degrading is never an error: a docling outage falls back to pypdf, a failed
+    embedding call falls back to length chunking, and the paper is indexed
+    anyway. Without a row here that decision would exist only in the log, so
+    nobody could tell which papers deserve a re-run once the missing service is
+    back (plan T7.3).
+
+    ``(paper_id, stage, code)`` is unique: re-running the pipeline bumps
+    ``occurrences``/``last_seen_at`` instead of piling up rows, and a stage that
+    comes back clean stamps ``resolved_at`` -- the row stays as the audit trail,
+    the paper stops being selected by ``reindex --degraded``.
+    """
+
+    __tablename__ = "paper_degradations"
+    __table_args__ = (
+        UniqueConstraint(
+            "paper_id", "stage", "code", name="uq_paper_degradations_paper_stage_code"
+        ),
+        Index("ix_paper_degradations_paper_id", "paper_id"),
+        Index("ix_paper_degradations_stage", "stage"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=new_uuid
+    )
+    paper_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``parsing`` / ``chunking`` / ``embedding`` / ``indexing`` -- the stage
+    #: vocabulary lives in ``app.services.degradation_service``.
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Machine-readable cause, e.g. ``docling_unavailable`` / ``semantic_fallback``.
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Whatever the stage knows: section label, error text, counts, backend.
+    detail: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    occurrences: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    #: ``NULL`` = still true of the current chunks; set when a later run of the
+    #: same stage no longer reported this code.
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The job that last reported it (``NULL`` for reindex/backfill scripts).
+    job_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("ingestion_jobs.id", ondelete="SET NULL")
+    )
+
+    paper: Mapped["Paper"] = relationship(back_populates="degradations")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<PaperDegradation paper_id={self.paper_id} stage={self.stage} "
+            f"code={self.code} open={self.resolved_at is None}>"
         )
 
 

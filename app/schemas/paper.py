@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -82,6 +84,36 @@ class PaperChunkList(BaseModel):
     paper_id: str
     total: int = 0
     chunks: list[PaperChunkOut] = Field(default_factory=list)
+
+
+class PaperDegradationOut(BaseModel):
+    """One entry of the degradation ledger (plan T7.3).
+
+    A degraded result is usable but thinner than it could have been -- docling
+    was unreachable and pypdf took over, a section's sentences could not be
+    embedded and the length policy cut it instead. ``resolved_at`` is set once a
+    later run of the same stage no longer reported the cause.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    stage: str
+    code: str
+    detail: dict = Field(default_factory=dict)
+    occurrences: int = 1
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    resolved_at: datetime | None = None
+    job_id: str | None = None
+
+
+class PaperDegradationList(BaseModel):
+    """Response body of ``GET /api/papers/{paper_id}/degradations``."""
+
+    paper_id: str
+    total: int = 0
+    degraded: bool = False
+    degradations: list[PaperDegradationOut] = Field(default_factory=list)
 
 
 __all__ = ["PaperChunkList", "PaperChunkOut", "PaperFileOut", "PaperOut"]

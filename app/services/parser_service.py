@@ -26,12 +26,13 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from app.core.config import PARSER_BACKENDS, settings
 from app.core.logging import get_logger
 from app.parsing import markdown as markdown_dialect
 from app.parsing.docling_client import (
+    FORMULA_FALLBACK_REASON,
     DoclingError,
     DoclingResult,
     version_from_server,
@@ -39,6 +40,9 @@ from app.parsing.docling_client import (
 from app.parsing.markdown import ParseBundle
 from app.parsing.pdf import extract_pages
 from app.services.object_storage import ObjectNotFound, ObjectStorageError
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.services.degradation_service import DegradeSink
 
 logger = get_logger(__name__)
 
@@ -55,6 +59,53 @@ PARSE_CACHE_VERSION = 1
 PARSE_MARKDOWN_ARTIFACT = "document.md"
 PARSE_JSON_ARTIFACT = "document.json"
 PARSE_META_ARTIFACT = "parse-meta.json"
+
+# --- degradation ledger (plan T7.3) --------------------------------------- #
+#: Stage vocabulary for this module; ``degradation_service.record`` validates it.
+DEGRADE_STAGE = "parsing"
+#: One code per cause a parse is thinner than docling alone would produce.
+CODE_DOCLING_UNAVAILABLE = "docling_unavailable"
+CODE_FORMULAS_AS_TEXT = "formulas_as_text"
+CODE_TABLE_STRUCTURE = "table_structure_lost"
+CODE_READING_ORDER = "reading_order_unverified"
+#: Fallback so an unrecognised reason is never lost silently.
+CODE_PARSE_DEGRADED = "parse_degraded"
+
+#: ``degraded_reason`` fragment -> ledger code. The fragments are produced by
+#: ``app.parsing.markdown``; the parse layer still carries them as one joined
+#: string (T8 can report structured reasons directly, at which point this table
+#: becomes the compatibility shim for old cached/queued bundles).
+_REASON_CODES: tuple[tuple[str, str], ...] = (
+    (FORMULA_FALLBACK_REASON, CODE_FORMULAS_AS_TEXT),
+    (markdown_dialect.DEGRADED_NO_FORMULA, CODE_FORMULAS_AS_TEXT),
+    (markdown_dialect.DEGRADED_TABLE, CODE_TABLE_STRUCTURE),
+    (markdown_dialect.DEGRADED_ORDER, CODE_READING_ORDER),
+    (DOCLING_FALLBACK_PREFIX, CODE_DOCLING_UNAVAILABLE),
+)
+
+
+def degradation_codes(reason: str) -> list[str]:
+    """Ledger codes for a ``degraded_reason`` string (never empty).
+
+    ``parse_degraded`` is the fallback: a new reason still produces a row
+    instead of disappearing.
+    """
+    text = (reason or "").lower()
+    codes = [code for fragment, code in _REASON_CODES if fragment.lower() in text]
+    return codes or [CODE_PARSE_DEGRADED]
+
+
+def _report_degradation(bundle: ParseBundle, on_degrade: "DegradeSink | None") -> None:
+    """Put every cause in ``bundle.degraded_reason`` into the ledger."""
+    if on_degrade is None or not bundle.degraded_reason:
+        return
+    detail = {
+        "backend": bundle.backend,
+        "parser_version": bundle.parser_version,
+        "reason": bundle.degraded_reason,
+    }
+    for code in degradation_codes(bundle.degraded_reason):
+        on_degrade(DEGRADE_STAGE, code, detail)
 
 
 class ArtifactStore(Protocol):
@@ -80,6 +131,7 @@ def parse_pdf(
     backend: str | None = None,
     converter: Callable[..., DoclingResult] | None = None,
     page_range: str | None = None,
+    on_degrade: "DegradeSink | None" = None,
 ) -> ParseBundle:
     """Parse ``data`` with the chosen backend, degrading to pypdf on failure.
 
@@ -90,6 +142,8 @@ def parse_pdf(
         converter: test seam replacing :func:`docling_client.convert_markdown`.
             The docling path still runs under the concurrency semaphore.
         page_range: passed through to docling (e.g. ``"1-3"``); None = whole file.
+        on_degrade: optional degradation sink (plan T7.3), called as
+            ``(stage, code, detail)`` once per cause in ``degraded_reason``.
 
     Returns:
         A :class:`ParseBundle` whose ``degraded_reason`` says why the result is
@@ -103,9 +157,11 @@ def parse_pdf(
     resolved = _resolve_backend(backend)
     if resolved == "docling":
         try:
-            return _parse_with_docling(
+            bundle = _parse_with_docling(
                 data, filename=filename, converter=converter, page_range=page_range
             )
+            _report_degradation(bundle, on_degrade)
+            return bundle
         except DoclingError as exc:
             reason = f"{DOCLING_FALLBACK_PREFIX} {exc.__class__.__name__}: {exc}"
             logger.warning(
@@ -114,8 +170,11 @@ def parse_pdf(
             )
             bundle = _parse_with_pypdf(data)
             bundle.degraded_reason = _merge_reasons(reason, bundle.degraded_reason)
+            _report_degradation(bundle, on_degrade)
             return bundle
-    return _parse_with_pypdf(data)
+    bundle = _parse_with_pypdf(data)
+    _report_degradation(bundle, on_degrade)
+    return bundle
 
 
 def _resolve_backend(backend: str | None) -> str:
@@ -202,6 +261,7 @@ def parse_paper_file(
     cache: bool | None = None,
     version_probe: Callable[[], str | None] | None = None,
     now: datetime | None = None,
+    on_degrade: "DegradeSink | None" = None,
 ) -> ParseBundle:
     """Parse ``data`` for ``paper_id``, replaying stored artifacts if possible.
 
@@ -234,6 +294,9 @@ def parse_paper_file(
         cache: override ``PARSER_CACHE`` for this call.
         version_probe: test seam for the docling version check.
         now: injectable clock for the metadata timestamp.
+        on_degrade: degradation sink (plan T7.3) handed to :func:`parse_pdf`;
+            a replayed cache entry reports nothing because a degraded parse is
+            never replayed in the first place.
 
     Returns:
         The parsed bundle; ``cache_hit`` is ``True`` when it came from storage.
@@ -258,6 +321,7 @@ def parse_paper_file(
         backend=resolved,
         converter=converter,
         page_range=page_range,
+        on_degrade=on_degrade,
     )
     if enabled:
         _store_bundle(

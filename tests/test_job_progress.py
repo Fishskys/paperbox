@@ -30,6 +30,7 @@ from app.db.models import (
     Paper,
     PaperAuthor,
     PaperChunk,
+    PaperDegradation,
     PaperFieldProvenance,
     PaperFile,
     PaperIdentifier,
@@ -42,6 +43,7 @@ from app.db.models import (
 )
 from app.core.config import settings
 from app.parsing.chunking import CHUNK_MODE_SEMANTIC, Chunk
+from app.services import degradation_service
 from app.workers import tasks
 
 
@@ -71,6 +73,7 @@ def factory():
         PaperAuthor.__table__,
         PaperChunk.__table__,
         PaperFile.__table__,
+        PaperDegradation.__table__,
         IngestionJob.__table__,
         # The metadata layer: the pipeline records a source row and a provenance
         # row per field (title/abstract/year/venue/identifiers/tags).
@@ -500,6 +503,68 @@ def test_serialize_job_exposes_the_progress_fields(factory):
 # --------------------------------------------------------------------------- #
 # CHUNK_MODE wiring (plan 2026-09-28_160551 section 2 T7.2)
 # --------------------------------------------------------------------------- #
+def test_pipeline_records_and_resolves_a_chunking_degradation(
+    factory, stubbed_pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fallback the chunker reports must outlive the job that hit it (T7.3)."""
+    degraded = {"value": True}
+
+    def chunker(pages, sections, embed_fn=None, on_degrade=None, **kwargs):
+        if degraded["value"] and on_degrade is not None:
+            on_degrade("chunking", "semantic_fallback", {"section": "body"})
+        return [
+            Chunk(
+                chunk_index=0,
+                text="some chunk text",
+                page_start=1,
+                page_end=1,
+                section="body",
+                section_title="body",
+                token_count=3,
+                char_count=15,
+            )
+        ]
+
+    monkeypatch.setattr(tasks, "chunk_document", chunker)
+    paper_id = make_paper(factory)
+    job_id = make_job(factory, paper_id)
+    session = factory()
+    try:
+        job = session.get(IngestionJob, job_id)
+        paper = session.get(Paper, paper_id)
+        tasks._run_pipeline(session, job, paper, "papers/x/original.pdf", dedupe=False)
+        rows = (
+            session.query(PaperDegradation)
+            .filter(PaperDegradation.paper_id == paper_id)
+            .all()
+        )
+        assert [(row.stage, row.code, row.job_id) for row in rows] == [
+            ("chunking", "semantic_fallback", job_id)
+        ]
+        assert rows[0].detail == {"section": "body"}
+    finally:
+        session.close()
+
+    # A later run that reports nothing closes the row: the chunks in place now
+    # are not the degraded ones, so the paper leaves `reindex --degraded`.
+    degraded["value"] = False
+    reindex_job = make_job(factory, paper_id)
+    session = factory()
+    try:
+        job = session.get(IngestionJob, reindex_job)
+        paper = session.get(Paper, paper_id)
+        tasks._run_pipeline(session, job, paper, "papers/x/original.pdf", dedupe=False)
+        rows = (
+            session.query(PaperDegradation)
+            .filter(PaperDegradation.paper_id == paper_id)
+            .all()
+        )
+        assert [row.resolved_at for row in rows] != [None]
+        assert rows[0].resolved_at is not None
+    finally:
+        session.close()
+
+
 def test_chunk_mode_decides_whether_the_chunker_gets_the_embedder(
     factory, stubbed_pipeline, monkeypatch
 ):
@@ -559,4 +624,8 @@ def test_chunk_mode_decides_whether_the_chunker_gets_the_embedder(
         "semantic_threshold": settings.chunk_semantic_threshold,
         "semantic_min_tokens": settings.chunk_semantic_min_tokens,
     }
-    assert [kwargs for _, kwargs in recorded] == [expected_tuning, expected_tuning]
+    for kwargs in (kwargs for _, kwargs in recorded):
+        assert {key: kwargs[key] for key in expected_tuning} == expected_tuning
+        # ``on_degrade`` rides along (T7.3): the chunker reports a fallback
+        # through the recorder, which puts it in the ledger.
+        assert isinstance(kwargs["on_degrade"], degradation_service.Recorder)

@@ -72,7 +72,11 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="BAAI/bge-m3", alias="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=1024, alias="EMBEDDING_DIMENSION")
     embedding_batch_size: int = Field(default=32, alias="EMBEDDING_BATCH_SIZE")
-    embedding_timeout: float = Field(default=120.0, alias="EMBEDDING_TIMEOUT")
+    #: Per-batch HTTP timeout. The embedding container serializes inference
+    #: behind a FIFO queue (T7.3), so a request can legitimately wait for the
+    #: ones ahead of it: the timeout must exceed the worst-case queue wait,
+    #: otherwise normal backpressure shows up as a failed batch.
+    embedding_timeout: float = Field(default=300.0, alias="EMBEDDING_TIMEOUT")
     embedding_max_retries: int = Field(default=2, alias="EMBEDDING_MAX_RETRIES")
 
     # --- HTTP API ---
