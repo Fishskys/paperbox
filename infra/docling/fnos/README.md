@@ -68,4 +68,5 @@ uv run python scripts/probe_docling_markdown.py logs/eval/docling/corpus/2404.05
   只是模型是 COPY 进去而不是 download 进去的，解析行为应逐字节一致 —— 换机后必须
   用 `probe-T2` 那 6 篇重跑一遍做**对照**（heading 层级 / 页标记数 / 表格数 / 字符数）。
 - fnOS 上没有代理，`docker compose build` 若哪天需要下载东西会失败；保持"离线可构建"。
-- 局域网实测带宽 ~9MB/s（本机走 Wi-Fi 到 31 网段），611MB 模型约 1–10 分钟，别指望秒传。
+- 局域网实测：`dd` 裸测 ~9MB/s，但 611MB 模型用 `tar-over-ssh` 实传 **4m04s（≈2.5MB/s）**
+  —— tar + ssh 加密有开销，别按裸带宽估时间。
