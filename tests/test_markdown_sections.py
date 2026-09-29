@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from app.parsing.chunking import MAX_TOKENS, chunk_markdown
 from app.parsing.markdown import (
+    DEGRADE_HEADING_TOO_LONG,
+    MAX_SECTION_TITLE_CHARS,
     PAGE_BREAK_DEFAULT,
     ParseBundle,
     page_spans_from_markdown,
@@ -273,3 +275,77 @@ def test_chunk_markdown_rebuilds_spans_when_the_bundle_has_none() -> None:
     chunks = chunk_markdown(bundle)
     assert chunks
     assert max(chunk.page_end for chunk in chunks) == 2
+
+
+# --------------------------------------------------------------------------- #
+# an over-long heading is a parser artifact, not a section (2026-09-30)
+# --------------------------------------------------------------------------- #
+
+
+class Sink:
+    """A ``DegradeSink`` that keeps everything."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def __call__(self, stage: str, code: str, detail: dict | None = None) -> None:
+        self.calls.append((stage, code, detail or {}))
+
+
+def test_an_over_long_heading_becomes_body_text() -> None:
+    """docling merges the title with the author block into one H1.
+
+    That line measured 356 characters on 2205.00360 and used to overflow
+    ``paper_chunks.section`` (varchar(255)), failing the paper's whole import.
+    It must land in the body -- the title and authors are corpus content.
+    """
+    long_title = "A Gate-All-Around Single-Channel In2O3 Nanoribbon FET " + "Author " * 60
+    markdown = (
+        f"# {long_title}\n\n"
+        "Abstract text follows here.\n\n"
+        "## 1. INTRODUCTION\n\n"
+        "Body text of the introduction.\n"
+    )
+    pages, sections = pages_and_sections_from_markdown(bundle_for(markdown))
+    titles = [section.title for section in sections]
+    assert long_title not in titles
+    assert all(len(title) <= MAX_SECTION_TITLE_CHARS for title in titles)
+    assert [section.title for section in sections] == [SECTION_BODY, "INTRODUCTION"]
+    intro = next(section for section in sections if section.title == "INTRODUCTION")
+    assert intro.number == "1"
+    body = next(section for section in sections if section.title == SECTION_BODY)
+    assert any(long_title[:40] in text for _page, text in body.paragraphs)
+    assert pages, "the page grid must survive the demotion"
+
+
+def test_a_normal_heading_is_untouched_by_the_guard() -> None:
+    markdown = "# 1. INTRODUCTION\n\nBody text.\n\n## A. Sub Section\n\nMore text.\n"
+    _pages, sections = pages_and_sections_from_markdown(bundle_for(markdown))
+    assert [section.title for section in sections if section.title != SECTION_BODY] == [
+        "INTRODUCTION",
+        "Sub Section",
+    ]
+
+
+def test_an_over_long_heading_is_reported_through_the_sink() -> None:
+    sink = Sink()
+    long_title = "T" * (MAX_SECTION_TITLE_CHARS + 50)
+    markdown = f"# {long_title}\n\nBody.\n\n## 1. INTRODUCTION\n\nMore text.\n"
+    pages_and_sections_from_markdown(bundle_for(markdown), on_degrade=sink)
+    assert sink.calls, "the demotion must leave a trace"
+    stage, code, detail = sink.calls[0]
+    assert (stage, code) == ("chunking", DEGRADE_HEADING_TOO_LONG)
+    assert detail["title_chars"] == len(long_title)
+    assert detail["limit"] == MAX_SECTION_TITLE_CHARS
+
+
+def test_chunk_markdown_hands_the_sink_to_the_markdown_adapter() -> None:
+    """The plumbing end to end: ``chunk_markdown`` -> adapter -> sink."""
+    sink = Sink()
+    long_title = "T" * (MAX_SECTION_TITLE_CHARS + 50)
+    chunks = chunk_markdown(
+        bundle_for(f"# {long_title}\n\nThis body text is long enough to chunk.\n"),
+        on_degrade=sink,
+    )
+    assert chunks, "the paper must still chunk"
+    assert sink.calls[0][:2] == ("chunking", DEGRADE_HEADING_TOO_LONG)

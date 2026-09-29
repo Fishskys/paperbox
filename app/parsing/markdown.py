@@ -25,7 +25,7 @@ import html
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from app.core.logging import get_logger
 from app.parsing.pdf import PageText
@@ -58,6 +58,20 @@ DEGRADED_ORDER = ORDER_UNVERIFIED_REASON
 
 _MAX_HEADING_LEVEL = 6
 _NUMBERED_TITLE = re.compile(r"^(?:[IVX]+|\d+)(?:[.)]|\s)")
+
+#: A heading longer than this is not a section title: parsers hand over the
+#: paper title *plus* the author block as one H1 (docling does), and such a line
+#: must land in the body text instead of becoming a chunk's ``section`` (which
+#: also used to overflow the column and fail the import -- 2026-09-30).
+MAX_SECTION_TITLE_CHARS = 200
+#: Degradation code reported when such a line is demoted to body text.
+DEGRADE_HEADING_TOO_LONG = "section_title_too_long"
+#: Stage name for the sink. ``chunking`` is the stage this adapter runs in
+#: (``chunking.DEGRADE_STAGE``); kept as a literal so the parsing layer does not
+#: have to import the chunker that imports it.
+DEGRADE_STAGE_CHUNKING = "chunking"
+#: ``(stage, code, detail) -> None`` -- same shape as ``chunking.DegradeSink``.
+DegradeSink = Callable[[str, str, dict[str, Any]], None]
 
 
 @dataclass(slots=True)
@@ -276,8 +290,29 @@ def split_heading_number(title: str) -> tuple[str | None, str]:
     return None, cleaned
 
 
+def _report_long_heading(
+    on_degrade: DegradeSink | None, *, page: int, title: str
+) -> None:
+    """Tell the sink that an over-long "heading" was kept as body text."""
+    if on_degrade is None:
+        return
+    on_degrade(
+        DEGRADE_STAGE_CHUNKING,
+        DEGRADE_HEADING_TOO_LONG,
+        {
+            "page": page,
+            "title_chars": len(title),
+            "limit": MAX_SECTION_TITLE_CHARS,
+            "preview": title[:80],
+        },
+    )
+
+
 def pages_and_sections_from_markdown(
-    bundle: ParseBundle, *, page_break: str | None = None
+    bundle: ParseBundle,
+    *,
+    page_break: str | None = None,
+    on_degrade: DegradeSink | None = None,
 ) -> tuple[list[PageText], list[Section]]:
     """Rebuild the ``(pages, sections)`` pair ``chunk_document`` expects.
 
@@ -337,7 +372,17 @@ def pages_and_sections_from_markdown(
         if _COMMENT_LINE.match(stripped):
             continue
         heading = _HEADING_LINE.match(stripped)
-        if heading is None:
+        parts = split_heading_number(heading.group("title")) if heading else None
+        if parts is not None and len(parts[1]) > MAX_SECTION_TITLE_CHARS:
+            # Not a section heading. docling merges the paper title with the
+            # author block into the first H1 (observed: 356 chars), which is far
+            # longer than any real section title -- and it used to overflow
+            # ``paper_chunks.section`` (varchar(255)) and fail the whole import
+            # (2026-09-30). Demote the line to body text (the title and authors
+            # must stay in the corpus) and report it through the sink.
+            _report_long_heading(on_degrade, page=page_number, title=parts[1])
+            parts = None
+        if parts is None:
             if buffer_page is None:
                 buffer_page = page_number
             elif buffer_page != page_number:
@@ -349,7 +394,7 @@ def pages_and_sections_from_markdown(
         if touched:
             current.page_end = max(current.page_end, page_number)
         sections.append(current)
-        number, title = split_heading_number(heading.group("title"))
+        number, title = parts
         current = Section(
             title=title,
             number=number,

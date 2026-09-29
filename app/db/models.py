@@ -403,8 +403,14 @@ class PaperChunk(TimestampMixin, Base):
 
     page_start: Mapped[int | None] = mapped_column(Integer)
     page_end: Mapped[int | None] = mapped_column(Integer)
-    section: Mapped[str | None] = mapped_column(String(255))
-    subsection: Mapped[str | None] = mapped_column(String(255))
+    #: ``Text``, not ``String(255)``: a section title comes from the PDF, and a
+    #: parser can emit a "heading" that is really the title *plus* the author
+    #: block (docling does this for the first H1). 2026-09-30: two papers failed
+    #: their whole import on ``value too long for type character varying(255)``
+    #: before this was widened; the markdown adapter now also refuses to treat
+    #: such a line as a heading (``markdown.MAX_SECTION_TITLE_CHARS``).
+    section: Mapped[str | None] = mapped_column(Text)
+    subsection: Mapped[str | None] = mapped_column(Text)
 
     text: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int | None] = mapped_column(Integer)
@@ -783,6 +789,8 @@ class SearchQuery(Base):
         Boolean, nullable=False, server_default=text("false")
     )
     filters: Mapped[dict | None] = mapped_column(JSONB)
+    #: 喂给论文聚合的 chunk 数（2026-09-30 前记的是「请求时的估算池」= top_k×5，
+    #: 那是请求值而非实际值；现在记 ``SearchOutcome.candidates``）。
     candidates: Mapped[int | None] = mapped_column(Integer)
     returned: Mapped[int] = mapped_column(Integer, nullable=False)
     took_ms: Mapped[int | None] = mapped_column(Integer)
