@@ -47,3 +47,6 @@ tmp_probe.txt
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 本地临时脚本 / 探针（不进版：remap 文档引用、一次性清理等）
+/tmp/
