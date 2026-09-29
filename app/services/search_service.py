@@ -24,6 +24,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.logging import get_logger
 from app.search.hybrid import ChunkHit, SearchError
 
 #: Maximum number of evidence chunks kept per paper.
@@ -37,6 +38,8 @@ MIN_EVIDENCE_CHARS = 200
 NOISE_SECTION = re.compile(
     r"^(references?|bibliography|acknowledg|appendix)", re.IGNORECASE
 )
+logger = get_logger(__name__)
+
 #: Relevance thresholds (spec: high >= 0.9, medium >= 0.6, else low).
 HIGH_THRESHOLD = 0.9
 MEDIUM_THRESHOLD = 0.6
@@ -293,6 +296,26 @@ def normalize_scores(results: list[PaperResult]) -> list[PaperResult]:
     return results
 
 
+@dataclass(frozen=True, slots=True)
+class SearchOutcome:
+    """What one search call produced.
+
+    ``results`` are the aggregated papers (bounded by ``top_k``); ``total`` is the
+    engine's count of **papers** matching this query under these filters
+    (``cardinality(paper_id)``, :func:`app.search.hybrid.count_papers`) and
+    ``candidates`` is the chunk candidate pool the aggregation actually ran on.
+
+    Before 2026-09-30 the response reported ``len(results)`` as ``total`` -- the
+    page size dressed up as a match count. The two numbers are now separate
+    because they answer different questions ("how many papers can I page
+    through" vs. "how many chunks fed this page").
+    """
+
+    results: list[PaperResult]
+    total: int
+    candidates: int
+
+
 def search_papers(
     query: str,
     mode: str = "hybrid",
@@ -303,8 +326,9 @@ def search_papers(
     telemetry: dict[str, Any] | None = None,
     client: Any = None,
     index: str | None = None,
+    count_total: bool = True,
     **search_kwargs: Any,
-) -> tuple[list[PaperResult], int]:
+) -> SearchOutcome:
     """Run the chunk search and aggregate it into paper-level results.
 
     ``rerank=True`` switches the chunk retrieval to two stages: the first stage
@@ -315,10 +339,14 @@ def search_papers(
     the reranker actually did -- ``rerank_took_ms``, ``reranked``, ``candidates``
     -- so the API can expose the ``rerank`` block without a second call.
 
-    Returns ``(results, total_hits)`` where ``total_hits`` is the size of the
-    chunk candidate pool (what the API reports as ``total``).
+    Returns a :class:`SearchOutcome`: ``total`` is the number of *papers* the
+    engine matches under the same query and filters (a second, ``size: 0``
+    aggregation -- see :func:`app.search.hybrid.count_papers`), ``candidates`` is
+    how many chunks fed the aggregation. ``count_total=False`` skips the extra
+    engine round trip and reports the candidate pool's paper count as ``total``
+    (used by callers that only want the page).
     """
-    from app.search.hybrid import ALIAS, search_chunks
+    from app.search.hybrid import ALIAS, count_papers, search_chunks
 
     hits = search_chunks(
         query,
@@ -332,7 +360,16 @@ def search_papers(
         **search_kwargs,
     )
     results = normalize_scores(aggregate_papers(hits, top_k=top_k))
-    return results, len(results)
+    if not count_total:
+        return SearchOutcome(results, len({hit.paper_id for hit in hits}), len(hits))
+    try:
+        total = count_papers(query, mode, filters, client=client, index=index or ALIAS)
+    except SearchError as exc:
+        # Counting is an extra courtesy query: a failure there must not turn a
+        # working search into an error. Fall back to the pool and say so.
+        logger.warning("paper count failed, reporting the candidate pool: %s", exc)
+        total = len({hit.paper_id for hit in hits})
+    return SearchOutcome(results, int(total), len(hits))
 
 
 def results_to_payload(results: Sequence[PaperResult]) -> list[dict[str, Any]]:
@@ -351,6 +388,7 @@ __all__ = [
     "Evidence",
     "PaperResult",
     "SearchError",
+    "SearchOutcome",
     "aggregate_papers",
     "classify_relevance",
     "results_to_payload",

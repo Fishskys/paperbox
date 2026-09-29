@@ -327,7 +327,9 @@ def test_search_result_scores_default_to_none() -> None:
 
 
 def test_response_has_a_rerank_block() -> None:
-    response = SearchResponse(query="q", mode="hybrid", total=1, took_ms=1.5)
+    response = SearchResponse(
+        query="q", mode="hybrid", total=1, candidates=3, took_ms=1.5
+    )
 
     payload = response.model_dump()
 
@@ -337,6 +339,7 @@ def test_response_has_a_rerank_block() -> None:
         "rewritten_query",
         "mode",
         "total",
+        "candidates",
         "took_ms",
         "rerank",
         "rewrite",
@@ -351,6 +354,7 @@ def test_response_rerank_block_can_report_a_model() -> None:
         query="q",
         mode="hybrid",
         total=1,
+        candidates=3,
         took_ms=2.0,
         rerank=SearchRerankInfo(
             enabled=True, model="Xenova/ms-marco-MiniLM-L-6-v2", took_ms=37

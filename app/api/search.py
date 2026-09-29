@@ -43,7 +43,6 @@ router = APIRouter(
 )
 
 #: Paper aggregation over-fetches chunks: ``top_k`` papers need a wider pool.
-CANDIDATE_FACTOR = 5
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -61,8 +60,6 @@ async def search(request: SearchRequest) -> SearchResponse:
     """
     started = time.perf_counter()
     filters = request.filters.to_query_filters() if request.filters else None
-    #: Chunks pulled before paper aggregation (``top_k`` papers need a wide pool).
-    candidates = request.top_k * CANDIDATE_FACTOR
 
     rewrite_outcome = await asyncio.to_thread(_maybe_rewrite, request.query)
     retrieval_query = (
@@ -77,7 +74,7 @@ async def search(request: SearchRequest) -> SearchResponse:
 
     telemetry: dict[str, Any] = {}
     try:
-        results, total = await asyncio.to_thread(
+        outcome = await asyncio.to_thread(
             search_service.search_papers,
             retrieval_query,
             request.mode,
@@ -97,6 +94,7 @@ async def search(request: SearchRequest) -> SearchResponse:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
 
+    results, total, candidates = outcome.results, outcome.total, outcome.candidates
     took_ms = round((time.perf_counter() - started) * 1000, 3)
     # The reranker "did something" only when a paper actually carries a score.
     reranked = any(item.rerank_score is not None for item in results)
@@ -150,6 +148,7 @@ async def search(request: SearchRequest) -> SearchResponse:
         rewritten_query=retrieval_query if rewrite_outcome.applied else None,
         mode=request.mode,
         total=total,
+        candidates=candidates,
         took_ms=took_ms,
         rerank=rerank_info,
         rewrite=rewrite_info,
