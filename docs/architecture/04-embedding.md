@@ -40,7 +40,7 @@
 | | `_index_rows()` :1031 | 构造待索引文档（含 `embedding`） |
 | | `_record_failure()` :1091 | FAILED 簿记（`classify_failure` → `error_code`） |
 | `app/search/hybrid.py` | `_semantic_hits()` :407 | 查询侧 `embed_text(query)`，把 `EmbeddingError` 转 `SearchError` |
-| `app/core/errors.py` | `classify_failure()` :116；`EmbeddingError` 分支 :155 | `EMBEDDING_FAILED` 归类 |
+| `app/core/errors.py` | `classify_failure()` :127；`EmbeddingError` 分支 :179 | `EMBEDDING_FAILED` 归类 |
 | `app/services/degradation_service.py` | `record()` :81 / `resolve_stage()` :133 / `Recorder` :226 | **T7.3 降级账本**：`(stage, code, detail)` 落 `paper_degradations` |
 
 ## 3. 数据结构（表/字段/索引，或内存结构）
@@ -115,7 +115,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 5 | 维度在三处各说各话：应用 `validate_dimension`（settings 1024）、mapping `dimension`（settings 1024）、容器返回实际长度；无启动期一致性校验 | `embedding_service.py:67-74`、`mappings.py:124`、`server.py:217` |
 | 6 | 容器失败码：推理本身出错 `/embed` = **500**、`/rerank` = **503**；T7.3 起**队满一侧统一 503**（带 `Retry-After: 5`）——`AGENTS.md` §3.3 的“未就绪返回 503”只对精排与“队满”成立 | `server.py:220-221`（500） vs :115-119 + :136-142（队满 503）、:274-275（精排 503） |
 | 7 | `/v1/embeddings` 不受 `MAX_BATCH` 限制，且应用侧不使用它（应用只走 `/embed`）；它同样排在队列后面 | `server.py:174-177`、:279-283；`embedding_service.py:21`（`EMBED_PATH="/embed"`） |
-| 8 | 向量条数不匹配（第 8 跳）落 `IngestionError`，不在 `EmbeddingError` 分支 → `error_code=INTERNAL`，不是 `EMBEDDING_FAILED` | `tasks.py:512-515`；`errors.py:141-173`（`EmbeddingError` 分支 :155，尾部兜底 :173） |
+| 8 | 向量条数不匹配（第 8 跳）落 `IngestionError`，不在 `EmbeddingError` 分支 → `error_code=INTERNAL`，不是 `EMBEDDING_FAILED` | `tasks.py:512-515`；`errors.py:152-197`（`EmbeddingError` 分支 :179，尾部兜底 :197） |
 | 9 | 失败保留现场：`_advance_stage` 已 COMMIT，`EMBEDDING/80` 是可读的失败点；`_record_failure` 只改 job 与 paper.status。降级账本骑在同一个事务上：作业回滚则降级行一并回滚（不是漏记——那次运行没留下产物） | `tasks.py:191-207`、:1091-1110；`degradation_service.py:226-283` |
 | 9b | **T7.3 服务端队列**：`/embed`、`/v1/embeddings`、`/rerank` 共用一条 FIFO，由 `INFERENCE_WORKERS`(1) 个工作线程串行执行；积压 > `INFERENCE_QUEUE_DEPTH`(32) 直接 503，而不是无限排队（无界排队只会把等待推到客户端超时之后） | `server.py:47-50`、:57-131、:133 |
 | 10 | 模型惰性加载：首个请求才下载/加载（`/health` 在加载前也 200）；healthcheck 15s×30 次容错下载窗口；**首次加载发生在队列工作线程里**，所以冷启动期间其余请求都在排队等待 | `server.py:146-165`；`docker-compose.yml:110-114` |
@@ -153,7 +153,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 
 | 测试文件 | 覆盖内容 |
 |---|---|
-| `tests/test_failure_classification.py:120-126` | `EmbeddingError` → `EMBEDDING_FAILED`；:33 断言 `FAILURE_CODES` 含该码 |
+| `tests/test_failure_classification.py:151-157` | `EmbeddingError` → `EMBEDDING_FAILED`；:39 断言 `FAILURE_CODES` 含该码 |
 | `tests/test_job_progress.py:228-234` | 打桩 `embed_texts`，返回 `settings.embedding_dimension` 长度的向量（下游依赖该长度） |
 | `tests/test_job_progress.py:304-324` | 阶段序列含 `EMBEDDING/80.0`，且另一会话可读 |
 | `tests/test_job_progress.py:424-449` | `embed_texts` 抛错 → `stage=FAILED` 且 `progress=80.0`（失败点保留） |
@@ -178,6 +178,6 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 7 | `/v1/embeddings` 无 `MAX_BATCH` 校验、`usage` token 恒 0 —— 未确认是否有外部消费者（应用不使用该端点） | `server.py:174-177`、:284-287 |
 | 8 | 容器无内存上限与资源声明；OOM 风险靠 `MAX_BATCH`/`RERANK_MAX_BATCH`/`ORT_THREADS`/`INFERENCE_WORKERS` 四个环境变量兜住 —— 是否还有宿主 cgroup 限制未确认 | `docker-compose.yml:80-118` |
 | 9 | 服务端异常返回码仍不完全统一（推理失败时 `/embed` 500、`/rerank` 503），与 `AGENTS.md` §3.3 的表述不完全一致；**队满一侧已是统一 503** | `server.py:220-221`、:136-142、:274-275 |
-| 10 | 向量只存在于 OpenSearch：PG 与索引无一致性校验（PG 有文档、索引缺向量的状态可能长期存在） | `_write_embeddings` 不写向量（`tasks.py:995-1030`）；索引失败另走 `INDEX_FAILED`（`errors.py:158`） |
+| 10 | 向量只存在于 OpenSearch：PG 与索引无一致性校验（PG 有文档、索引缺向量的状态可能长期存在） | `_write_embeddings` 不写向量（`tasks.py:995-1030`）；索引失败另走 `INDEX_FAILED`（`errors.py:182`） |
 | 11 | **同一段文字被嵌两遍（T7.3 留档，未优化）**：`CHUNK_MODE=semantic` 时 `chunk_document` 先用同一个 `/embed` 给**句子**打分，紧接着 EMBEDDING 阶段又给**chunk**（= 同一批句子的拼接）嵌一次；两者没有缓存或复用，等于把这篇论文的文字嵌了近两遍 | `tasks.py:528`（chunking 侧 `embed_fn`）与 :539（EMBEDDING 侧 `embed_texts`）打到同一个 `EMBEDDING_URL`；`chunking.py:278-345` 的句级批调用；探针的磁盘向量缓存只存在于 `scripts/probe_chunk_semantic.py`，生产路径没有 |
 | 12 | 服务端队列的**等待时间不可观测**：`/info` 只有计数（`waiting`/`running`/`completed`/`rejected`），没有排队时长直方图；`Retry-After: 5` 是写死的，应用侧的重试退避（0.5s/1.0s）也不读它 —— 队满时三次尝试可能全部撞墙 | `server.py:121-131`、:139；`embedding_service.py:111`、:129 |

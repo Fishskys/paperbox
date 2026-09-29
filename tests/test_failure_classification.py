@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import FAILURE_CODES, Failure, classify_failure
+from app.parsing.docling_client import DoclingFailed, DoclingUnavailable
 from app.parsing.pdf import PdfParseError
 from app.search.opensearch import SearchIndexError
 from app.services import embedding_service
@@ -30,6 +31,11 @@ EXPECTED_CODES = {
     "OVERSIZED",
     "UNSUPPORTED_TYPE",
     "DUPLICATE_FINGERPRINT",
+    # Produced only when the docling backend is demanded *without* a fallback
+    # (probes, and any future strict-parse caller): the pipeline itself degrades
+    # to pypdf and records degraded_reason + a paper_degradations row instead.
+    "PARSE_BACKEND_UNAVAILABLE",
+    "PARSE_FAILED",
     "EMBEDDING_FAILED",
     "INDEX_FAILED",
     "STORAGE_FAILED",
@@ -74,6 +80,30 @@ def test_corrupt_pdf() -> None:
     failure = classify_failure(PdfParseError("invalid PDF: EOF marker not found"))
     assert failure.code == "CORRUPT_PDF"
     assert "PdfParseError" in failure.message
+
+
+def test_docling_unreachable_without_a_fallback() -> None:
+    failure = classify_failure(DoclingUnavailable("connection refused after 3 attempts"))
+    assert failure.code == "PARSE_BACKEND_UNAVAILABLE"
+    assert failure.message.startswith("PARSE_BACKEND_UNAVAILABLE: ")
+    assert "connection refused" in failure.message
+    assert "DoclingUnavailable" in failure.message
+
+
+def test_docling_rejected_the_document() -> None:
+    failure = classify_failure(DoclingFailed("HTTP 422: unsupported document"))
+    assert failure.code == "PARSE_FAILED"
+    assert failure.message.startswith("PARSE_FAILED: ")
+    assert "422" in failure.message
+
+
+def test_parse_failure_keeps_the_cause_chain() -> None:
+    """The transport detail is all an operator gets: it must survive."""
+    error = DoclingFailed("HTTP 502 bad gateway")
+    error.__cause__ = httpx.ConnectError("all connection attempts failed")
+    failure = classify_failure(error)
+    assert failure.code == "PARSE_FAILED"
+    assert "ConnectError" in failure.message
 
 
 def test_download_failed_from_httpx() -> None:

@@ -357,7 +357,8 @@ curl -X POST http://127.0.0.1:8077/api/papers/ingest \
 # QUEUED = 在队列里等流水线空位（受 INGEST_CONCURRENCY 限制，见 §3.2）；
 # 失败时 stage/progress 保留在失败发生的那一步，error_code 给出结构化归因
 # （NO_TEXT_LAYER / ENCRYPTED_PDF / CORRUPT_PDF / DOWNLOAD_FAILED / OVERSIZED /
-#  UNSUPPORTED_TYPE / DUPLICATE_FINGERPRINT / EMBEDDING_FAILED / INDEX_FAILED /
+#  UNSUPPORTED_TYPE / DUPLICATE_FINGERPRINT / PARSE_BACKEND_UNAVAILABLE / PARSE_FAILED /
+#  EMBEDDING_FAILED / INDEX_FAILED /
 #  STORAGE_FAILED / INTERRUPTED / INTERNAL）。
 curl http://127.0.0.1:8077/api/jobs/<job_id> -H "Authorization: Bearer $API_KEY"
 # -> {"job_id":"...","paper_id":"...","stage":"EMBEDDING","progress":80.0,"duplicate":false,
@@ -500,7 +501,7 @@ uv run pytest            # 或 uv run pytest tests -q
 | `tests/test_job_progress.py` | 阶段进度落库：中间态对其它会话可见、失败保留失败阶段 |
 | `tests/test_job_retry.py` | 手动重试：原子 FAILED→RECEIVED 认领（防重复触发）、按 paper_id 路由 reindex/整体重跑、成功清错误字段、再失败落新归因 |
 | `tests/test_search_log.py` | 检索日志：结果压缩/截断、写入降级、行序列化 |
-| `tests/test_failure_classification.py` | 失败归因：11 个 error_code + 无文本层 PDF |
+| `tests/test_failure_classification.py` | 失败归因：14 个 error_code + 无文本层 PDF |
 | `tests/test_ingest_queue.py` | 队列并发上限、FIFO、重启恢复（`mark_queued`/`recover_jobs`） |
 | `tests/test_queue_priority.py` | 优先级：交互式插队、同类 FIFO、`queued_high/low`、`depth()` |
 | `tests/test_upload_admission.py` | 上传准入：在途上限（含多线程竞争）、水位谓词、快照 |
@@ -527,7 +528,13 @@ uv run pytest            # 或 uv run pytest tests -q
 
 失败作业的 `error_code` 取值固定为：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、
 `DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、
-`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERNAL`（见 `app/core/errors.py`）。
+`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、
+`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（见 `app/core/errors.py`）。
+
+其中 `INTERRUPTED` 由队列的启动恢复盖章（进程重启时正在跑的作业），
+`PARSE_BACKEND_UNAVAILABLE` / `PARSE_FAILED` 只在**明确要求 docling 且不允许降级**时才出现
+（探针、以及将来的 strict-parse 调用方）—— 正常流水线遇到 docling 不可达是**降级到 pypdf** 并记
+`degraded_reason` + `paper_degradations` 一行，不是失败（见 §3.6）。
 
 ## 8. 目录结构
 
