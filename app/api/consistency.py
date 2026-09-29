@@ -42,8 +42,15 @@ def get_consistency(
         le=1000,
         description="how many problem papers to list (totals are always exact)",
     ),
+    parser_papers: bool = Query(
+        False,
+        description=(
+            "include the live paper ids behind each parser stamp -- the worklist "
+            "for re-parsing what a backend switch did not reach"
+        ),
+    ),
     checker: Callable[..., Any] = Depends(get_checker),
 ) -> ConsistencyOut:
     """Report every paper whose copies disagree across the three stores."""
-    report = checker(limit=limit)
+    report = checker(limit=limit, with_parser_papers=parser_papers)
     return ConsistencyOut.model_validate(report.as_dict())

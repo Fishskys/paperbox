@@ -13,7 +13,7 @@
 - PostgreSQL 是元数据的事实源（`app/db/session.py:3-5`），承载 14 张表（`app/db/models.py`），软删除只改 `deleted_at`；
 - MinIO 存原文 PDF 与上传暂存对象，键布局由 `app/services/object_storage.py` 统一构造，API 只经 `GET /api/papers/{id}/file` 转发（`app/services/object_storage.py:11-12`）；
 - OpenSearch 存 chunk 级文档（含 1024 维向量），全部读写走别名 `paper_chunks_current`（`app/search/opensearch.py:4-5`、`:24-27`）；
-- **三端一致性对账（只读）**：`GET /api/consistency` + `scripts/check_consistency.py` 逐篇核对「`paper_files.object_key` ↔ MinIO 对象」与「chunk 行 ↔ 索引文档」，报出缺失/孤儿/删除残留；不写任何一端，某个 store 连不上只记进 `errors` 并继续回答另外两端（`app/services/consistency_service.py:426`，2026-09-22）。
+- **三端一致性对账（只读）**：`GET /api/consistency` + `scripts/check_consistency.py` 逐篇核对「`paper_files.object_key` ↔ MinIO 对象」与「chunk 行 ↔ 索引文档」，报出缺失/孤儿/删除残留；不写任何一端，某个 store 连不上只记进 `errors` 并继续回答另外两端（`app/services/consistency_service.py:460`，2026-09-22）。加 `?parser_papers=true`（或 `check_consistency.py --parser-papers`）时另外按解析戳给出**存活论文 id 清单**（`:338` `_census_ids`，上限 `:85` `PARSER_PAPER_ID_LIMIT`）——那是 `scripts/reindex.py --parser-backend <name>` 的工作清单，默认报告仍是摘要（2026-09-30）。
 - 清理职责：`DELETE /api/papers/{id}` 先删索引文档与对象再置 `deleted_at`（`app/api/papers.py:302-331`）；`app/workers/housekeeping.py` 回收 `uploads/` 残留与解包目录；`scripts/purge_deleted.py` 补历史遗留。
 
 不做：

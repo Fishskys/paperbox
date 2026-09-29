@@ -415,7 +415,7 @@ def test_the_endpoint_serves_the_report(client, factory) -> None:  # noqa: F811
     fake_os = FakeClient({paper_id: 2})
 
     def checker():
-        return lambda limit: consistency_service.check_consistency(
+        return lambda limit, **kwargs: consistency_service.check_consistency(
             factory, storage=storage, client=fake_os, limit=limit
         )
 
@@ -437,7 +437,7 @@ def test_the_endpoint_lists_a_drifted_paper(client, factory) -> None:  # noqa: F
     fake_os = FakeClient({})
 
     def checker():
-        return lambda limit: consistency_service.check_consistency(
+        return lambda limit, **kwargs: consistency_service.check_consistency(
             factory, storage=storage, client=fake_os, limit=limit
         )
 
@@ -480,6 +480,8 @@ def test_a_paper_stamped_like_its_documents_is_not_reported(factory) -> None:  #
     assert backend_census(report) == {
         "papers": {"docling": 1},
         "documents": {"docling": 2},
+        "paper_ids": {},
+        "paper_ids_truncated": False,
     }
 
 
@@ -533,6 +535,8 @@ def test_rows_indexed_before_the_stamp_existed_are_not_drift(factory) -> None:  
     assert backend_census(report) == {
         "papers": {consistency_service.UNKNOWN_BACKEND: 1},
         "documents": {consistency_service.UNKNOWN_BACKEND: 2},
+        "paper_ids": {},
+        "paper_ids_truncated": False,
     }
 
 
@@ -569,3 +573,72 @@ def test_deleted_papers_stay_out_of_the_backend_census(factory) -> None:  # noqa
         FakeClient({live_id: 1}, backends={live_id: {"docling": 1}}),
     )
     assert backend_census(report)["papers"] == {"docling": 1}
+
+
+# --------------------------------------------------------------------------- #
+# the opt-in worklist: which live paper sits behind which stamp
+# --------------------------------------------------------------------------- #
+
+
+def test_the_parser_paper_ids_are_opt_in(factory) -> None:  # noqa: F811
+    """The default report stays a summary; ids only appear when asked for."""
+    docling = add_paper(factory, chunks=1, parser_backend="docling")
+    fallback = add_paper(factory, chunks=1, parser_backend="pypdf")
+    legacy = add_paper(factory, chunks=1)  # indexed before the stamp existed
+    add_paper(factory, chunks=0, parser_backend="pypdf", deleted=True)
+    storage = FakeStorage([object_key(docling), object_key(fallback), object_key(legacy)])
+    fake_os = FakeClient({docling: 1, fallback: 1, legacy: 1})
+
+    plain = run(factory, storage, fake_os)
+    assert backend_census(plain)["paper_ids"] == {}
+    assert backend_census(plain)["paper_ids_truncated"] is False
+
+    report = run(factory, storage, fake_os, with_parser_papers=True)
+    census = backend_census(report)
+    assert census["paper_ids"] == {
+        "docling": [docling],
+        "pypdf": [fallback],
+        consistency_service.UNKNOWN_BACKEND: [legacy],
+    }
+    assert census["papers"] == {"docling": 1, "pypdf": 1, consistency_service.UNKNOWN_BACKEND: 1}
+
+
+def test_a_paper_id_list_longer_than_the_cap_is_marked_truncated(
+    factory, monkeypatch
+) -> None:  # noqa: F811
+    """A capped worklist must say so instead of looking complete."""
+    monkeypatch.setattr(consistency_service, "PARSER_PAPER_ID_LIMIT", 1)
+    first = add_paper(factory, chunks=1, parser_backend="pypdf")
+    second = add_paper(factory, chunks=1, parser_backend="pypdf")
+    storage = FakeStorage([object_key(first), object_key(second)])
+    report = run(
+        factory, storage, FakeClient({first: 1, second: 1}), with_parser_papers=True
+    )
+    census = backend_census(report)
+    assert len(census["paper_ids"]["pypdf"]) == 1
+    assert census["paper_ids_truncated"] is True
+
+
+def test_the_endpoint_passes_the_paper_id_flag_through(client, factory) -> None:  # noqa: F811
+    """``?parser_papers=true`` reaches the checker and comes back in the body."""
+    seen: dict[str, object] = {}
+    paper_id = add_paper(factory, chunks=1, parser_backend="pypdf")
+    storage = FakeStorage([object_key(paper_id)])
+    fake_os = FakeClient({paper_id: 1})
+
+    def checker():
+        def run_check(limit, **kwargs):
+            seen.update(kwargs)
+            return consistency_service.check_consistency(
+                factory, storage=storage, client=fake_os, limit=limit, **kwargs
+            )
+
+        return run_check
+
+    app.dependency_overrides[consistency_api.get_checker] = checker
+    response = client.get("/api/consistency", params={"parser_papers": "true"})
+    assert response.status_code == 200
+    assert seen == {"with_parser_papers": True}
+    assert response.json()["parser_backends"]["paper_ids"] == {"pypdf": [paper_id]}
+
+    assert client.get("/api/consistency").json()["parser_backends"]["paper_ids"] == {}

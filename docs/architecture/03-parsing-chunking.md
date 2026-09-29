@@ -341,7 +341,7 @@ run_ingestion_job(tasks.py:137) / run_reindex_job(:117)
 32. **markdown → 结构的反推必须与写出侧对称**（`markdown.py:279`；写出侧 `:396`）：`pages_and_sections_from_markdown` 只读页标记、`#` 层级与注释行，产出 `PageText` 与 `Section` 后交给**同一个** `chunk_document`。往方言里加新语法（新注释占位、新层级记号）必须同时改写出侧与反推侧，否则 chunk 页码/章节会静默偏移（`tests/test_markdown_sections.py` 是回归网）。
 33. **两侧都自报版本**：docling 报 `docling-serve <ver> / docling <ver>`（`GET /version`，回落镜像 tag），pypdf 报 `pypdf <ver>`（`parser_service.py:260`）。空版本落 NULL 而不是空串（`:531`）—— 混库排查靠这个字段，别让「未知」和「没有」混在一起。
 34. **同一份 PDF 换后端不能靠重导入**：指纹阶梯里 DOI/arXiv 是**身份**不是字节（`AGENTS.md` §3.9），同一篇论文再导一次会被判重复、**不会**换后端；换后端只有 `POST /api/papers/{id}/reindex`（产物缓存按 backend 分目录，换后端必然未命中 = 真解析）。2026-09-30 真机：docling 重索引用缓存重放 61.11 s，pypdf 重索引真跑 56.11 s。
-35. **`PARSER_BACKEND` 只影响新解析与 reindex**：存量 chunk 的后端戳不会因改配置而变化（`GET /api/consistency` 的 `parser_backends` 就是拿来看这种混合状态的；它只报不修）。
+35. **`PARSER_BACKEND` 只影响新解析与 reindex**：存量 chunk 的后端戳不会因改配置而变化（`GET /api/consistency` 的 `parser_backends` 就是拿来看这种混合状态的；它只报不修）。批量换后端的入口是**按戳选**：`scripts/reindex.py --parser-backend pypdf|docling|unknown`（`unknown` = 无戳，即 `refresh_index_metadata.py` 故意不写的存量论文），先 `--dry-run` 看清单；`GET /api/consistency?parser_papers=true` / `check_consistency.py --parser-papers` 给同一份论文 id 清单（`with_parser_papers`，`app/services/consistency_service.py:467`）。
 36. **解析耗时算进 `chunking` 阶段**：`_advance_stage(STAGE_CHUNKING)` 之后才解析（`tasks.py:514` `:520`）—— 看作业进度时别把 docling 的几百秒当成切块慢。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
@@ -420,7 +420,7 @@ docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `READ
 相邻但直接相关的测试：
 
 - `tests/test_failure_classification.py:221-244`：空白 PDF → 全 `is_blank` → `chunk_document == []` → `NO_TEXT_LAYER`（含 "OCR" 字样）；`tests/test_job_progress.py:178`：monkeypatch `chunk_document` 验证 `PARSING`/`CHUNKING` 阶段与进度顺序。
-- `tests/test_degradations.py`（35 例，**T7.3**）：账本读写（幂等 upsert / 计数 / resolve / 复发重开 / stage 词表校验 / 级联删除）、`Recorder` 的 sink 语义与「记账失败不影响作业」、`chunk_document` 的 `on_degrade` 契约（长度模式不报、失败才报、无 sink 照常切块）、`parser_service.degradation_codes` 映射、`GET /api/papers/{id}/degradations`、`scripts/reindex.py --degraded` 的筛选。
+- `tests/test_degradations.py`（**T7.3**）：账本读写（幂等 upsert / 计数 / resolve / 复发重开 / stage 词表校验 / 级联删除）、`Recorder` 的 sink 语义与「记账失败不影响作业」、`chunk_document` 的 `on_degrade` 契约（长度模式不报、失败才报、无 sink 照常切块）、`parser_service.degradation_codes` 映射、`GET /api/papers/{id}/degradations`、`scripts/reindex.py` 的三种筛选（`--degraded`、`--parser-backend` 按戳、两者 AND）与 `--dry-run` 只列不写（`ensure_index`/`reindex_paper` 断言未被调用）。
 - `tests/test_job_progress.py`（新增 1 例，**T7.3**）：真跑一次 `_run_pipeline`（打桩外部依赖）→ 降级行带 `job_id` 落库，再跑一次干净的 → 该行 `resolved_at` 被盖上。接线后该文件已改用 `chunk_markdown` 桩（`_run_pipeline` 的解析入口变了）。
 - `tests/test_consistency.py`（**§6.1 加 8 例**）：`parser_stamp_mismatch` 双向普查（papers 列 vs 索引文档）、`unknown` 桶（未打戳的存量）、按后端分列计数、`by_backend` 子聚合。
 
@@ -449,7 +449,7 @@ docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `READ
 | 句内语义断点仍可能落在超长段的字符窗里 | `chunking.py:294-323` 对超 `target_chars` 的 `_Piece` 只能按字符窗硬切（长度模式必然如此） |
 | DOI/arXiv 规范化不在本模块 | `pdf.py:496`、`metadata_service.py:331` 原样返回，规范化在标识符层 |
 | XMP 只认 `dc`/`prism`/`xmp` 三命名空间 | `pdf.py:141-145`，其余 ns 元素被跳过（`:305-306`） |
-| **按阶段重跑尚未提供（T7.3 决策：暂不做）** —— 现在只能整篇 reindex（PARSING→INDEXING 全跑）；想要的「只补 embedding / 只补索引」需要复用 `_write_embeddings`/`_index_rows`/`_mark_indexed` 写一个 `--stage` 入口。数据模型已经支持断点：`paper_chunks.embedded_at`/`indexed_at` 可空，`GET /api/consistency` 能报出 `missing_index` | 留档见 `docs/progress/project.md` §21.7「后续优化方向」；`scripts/reindex.py` 目前只有 `--missing` / `--degraded` |
+| **按阶段重跑尚未提供（T7.3 决策：暂不做）** —— 现在只能整篇 reindex（PARSING→INDEXING 全跑）；想要的「只补 embedding / 只补索引」需要复用 `_write_embeddings`/`_index_rows`/`_mark_indexed` 写一个 `--stage` 入口。数据模型已经支持断点：`paper_chunks.embedded_at`/`indexed_at` 可空，`GET /api/consistency` 能报出 `missing_index` | 留档见 `docs/progress/project.md` §21.7「后续优化方向」；`scripts/reindex.py` 的选谁参数已有 `--missing` / `--degraded[-stage/-code]` / `--parser-backend` |
 | 语义模式把同一段文字嵌两遍（句子一遍、chunk 一遍，无复用） | `tasks.py:548` 与 :559 打同一个 `EMBEDDING_URL`；留档见 `docs/architecture/04-embedding.md` §8 缺口 11 |
 | **两个解析码只在禁止降级时出现** | `PARSE_BACKEND_UNAVAILABLE` / `PARSE_FAILED` 已登记（`errors.py:48-63`）并有单测（`tests/test_failure_classification.py:85-101`）。正常流水线**不产生**它们 —— docling 不可达是**降级到 pypdf** + `degraded_reason` + `paper_degradations` 一行；要用这两个码得先加「strict parse」调用方（当前只有只读探针会撞上） |
 | **降级侧 layout 模式会丢字符**：`2404.05260` p1 丢 28 字符、`1807.11311` p3 丢 394 字符（非常规字形/部分标题）→ 该页 `same_content` 不过，**拒绝重排、保持原序 + 告警**（宁可不动不可丢字）；实测 25 个真机双栏页只有 13 页成功重排 | `layout.py:619-629`；`docs/progress/parser.md` §6.1 |
@@ -457,7 +457,7 @@ docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `READ
 | 页眉页脚剔除是**启发式**（≥60% 页重复 + <120 字符），非常规版式可能漏剔或误剔位置固定的正文行 | `layout.py:702-795`；`docs/progress/parser.md` §6.4 |
 | **docling 侧公式降级没有真机样本**（要人为调小 `DOCLING_DOCUMENT_TIMEOUT` 才能造）；扫描版 PDF（`DOCLING_OCR` 默认关）、>15 页大论文、`PARSER_CONCURRENCY>1` 的行为也都没覆盖 | `docs/progress/parser.md` §5.9「本期没覆盖」 |
 | ~~`PARSER_BACKEND` 未翻默认 / 流水线未接线~~ **2026-09-30 已完成**：默认翻了 `docling`，流水线走 `parse_paper_file` + `chunk_markdown`，解析戳入库入索引 | `tasks.py:520`、`:542`；`config.py:188`；本文件 §4 |
-| **存量论文要 reindex 才会换后端**：改 `PARSER_BACKEND` 只影响新导入与 reindex，混库状态只能靠 `GET /api/consistency` 的 `parser_backends` 看；没有批量换后端的入口（`scripts/reindex.py` 也不带后端参数） | §5.34/§5.35 |
+| **存量论文要 reindex 才会换后端**：改 `PARSER_BACKEND` 只影响新导入与 reindex（缓存按 `(paper_id, backend)` 分目录，换后端必然未命中）；混库状态看 `GET /api/consistency` 的 `parser_backends`，批量换后端用 `scripts/reindex.py --parser-backend pypdf\|unknown`（先 `--dry-run`）。**已提供入口，仍缺的是「全量重索引 + 检索侧 A/B」的实测数字**（plan §6.1 ③） | §5.34/§5.35 |
 | **标题层级规范化 + pypdf 假标题过滤未做**：pypdf 侧的"标题"大量是假阳性（`# IEEE`、页码、全大写短行），反推适配器照单全收；两侧层级语义一致化留后续 | `structure.py:120-121`；`docs/progress/parser.md` §6 |
 | **反推适配器只认自己写出的方言**：`#` 之外的层级记号（docling 将来若新增标签）不会翻译，遇到即退化成段落 | `markdown.py:279-368` |
 | **标题层级规范化 / pypdf 假标题过滤未做**：T8 判读 docling 11 个真层级 vs pypdf 53 个（含 `# IEEE`、`# 2900 Boulevard…`、`# DFF` 等地址/图注假阳性）；切块按标题切边界，假标题 = 假边界 | `docs/examine/解析双后端验收-20260929.md` |

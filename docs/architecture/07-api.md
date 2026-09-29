@@ -30,7 +30,7 @@
 | 方法 | 路径 | 作用 | Bearer | 关键查询参数 | 出处 |
 |---|---|---|---|---|---|
 | GET | `/health` | 四个依赖的轻量探针 | 免 | — | `app/api/health.py:79` |
-| GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch） | 是 | `limit`（1..1000，默认 200） | `app/api/consistency.py:38` |
+| GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch） | 是 | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py:38` |
 | GET | `/` | landing（`include_in_schema=False`） | 免 | — | `app/main.py:92` |
 | POST | `/api/papers/ingest` | URL 摄取 | 是 | — | `app/api/ingestion.py:238` |
 | POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | 是 | — | `app/api/ingestion.py:257` |
@@ -110,7 +110,7 @@
 | 同上：multipart 缺 `file` part / JSON 解析失败 / 未知 `source_type` / `importer` 抛 `ValueError` | 422 | `app/api/metadata.py:66-70`, `:74-78`, `:82-86`, `:112-116`, `:126-129` |
 | `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py:54-57`, `:178-179`, `:241-249` |
 | `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:89-94`, `:95-98` |
-| `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py:38-49` |
+| `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py:38-56` |
 
 ### 2.4 lifespan 启停序列（`app/main.py:41-56`）
 
@@ -137,7 +137,7 @@
 | `paper.py` | `PaperOut`(`:22`)、`PaperFileOut`(`:10`)、`PaperListOut`(`:52`)、`PaperChunkOut`(`:63`)、`PaperChunkList`(`:79`) | 论文读接口 |
 | `metadata.py` | `PaperMetadataOut`(`:55`)、`SourceOut`(`:11`)、`IdentifierOut`(`:29`)、`ProvenanceEntry`(`:41`)、`MetadataPatch`(`:70`)、`MetadataPatchOut`(`:97`)、`MetadataRollbackIn/Out`(`:108`/`:115`)、`ImportReportOut`(`:127`)、`ConflictOut`(`:144`)、`ReviewOut`(`:157`)、`AttachIn/Out`(`:167`/`:173`)、`ApplyEntryIn/ApplyIn/ApplyOut`(`:186`/`:194`/`:202`) | 元数据读写与导入报告 |
 | `search.py` | `SearchRequest`(`:130`)、`SearchFilters`(`:61`)、`SearchResponse`(`:233`)、`SearchResult`(`:177`)、`SearchEvidence`(`:166`)、`SearchRerankInfo`(`:205`)、`SearchRewriteInfo`(`:218`)、`MIN_TOP_K/MAX_TOP_K`(`:42-43`) | 检索请求/响应 |
-| `consistency.py` | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:25`)、`ConsistencyTotalsOut`(`:29`)、**`ParserBackendsOut`(`:47`)**、`ConsistencyOut`(`:62`，含 `parser_backends` `:72`) |
+| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:25`)、`ConsistencyTotalsOut`(`:29`)、**`ParserBackendsOut`(`:47`)**（`:58` `papers`/`documents` 计数、`:62` `paper_ids` + `:64` `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、`ConsistencyOut`(`:67`，含 `parser_backends` `:77`) |
 | `search_log.py` | `SearchLogOut`(`:11`)、`SearchLogListOut`(`:32`) | 检索日志读接口 |
 | `__init__.py` | — | 仍是占位（1 行 docstring），无重导出；导入一律走子模块 |
 
