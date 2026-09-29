@@ -19,6 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: Accepted values of ``PARSER_BACKEND``. ``docling`` is the new primary backend,
+#: ``pypdf`` the degradation backend (and the default until the acceptance run).
+PARSER_BACKENDS = frozenset({"pypdf", "docling"})
+
 
 class Settings(BaseSettings):
     """Typed view over the process environment."""
@@ -167,6 +171,67 @@ class Settings(BaseSettings):
     #: Interval of the staging/extraction GC; it also runs once at startup.
     ingest_gc_interval_s: int = Field(default=300, alias="INGEST_GC_INTERVAL_S")
 
+    # --- parsing backend (plan 2026-09-28_160551-docling-parser-backend §2 T4) ---
+    #: ``pypdf`` (default) or ``docling``. docling is the new primary backend for
+    #: two-column/tabled papers; pypdf stays the degradation backend *and* the
+    #: default until the parser acceptance run passes (plan T8).
+    parser_backend: str = Field(default="pypdf", alias="PARSER_BACKEND")
+    #: Parses allowed to run at once. Keep at 1: docling is CPU-bound and its
+    #: container is deliberately capped, so a second concurrent parse only makes
+    #: both slower and walks into the memory ceiling the caps exist for.
+    parser_concurrency: int = Field(default=1, alias="PARSER_CONCURRENCY")
+    #: Cache parse artifacts in MinIO (plan T7). Off = always re-parse.
+    parser_cache: bool = Field(default=True, alias="PARSER_CACHE")
+    #: 0 = whole document; >0 parses only the first N pages (becomes docling's
+    #: ``page_range`` and is recorded as a degradation).
+    parser_max_pages: int = Field(default=0, alias="PARSER_MAX_PAGES")
+
+    # --- docling-serve (plan §1.3 mapping table; every value below is measured,
+    #     not guessed -- see the plan's §0.5/§0.6/§0.7/§0.8 notes) ---
+    #: Base URL of docling-serve. Since 2026-09-29 it runs on the fnOS NAS
+    #: (``http://192.168.31.53:8091``); the local WSL container is the rollback.
+    #: **Empty disables the backend**: the client raises ``DoclingUnavailable``
+    #: without dialing, so "no docling configured" degrades instead of timing out.
+    docling_url: str = Field(default="http://127.0.0.1:8091", alias="DOCLING_URL")
+    #: Client-side timeout. Must stay *above* ``DOCLING_DOCUMENT_TIMEOUT``: the
+    #: server aborts the document itself, and a shorter client timeout would throw
+    #: away a parse that was about to finish.
+    docling_timeout: float = Field(default=660.0, alias="DOCLING_TIMEOUT")
+    #: ``document_timeout`` form field. The server default is *no* deadline, which
+    #: let a 5-page paper burn every core for 17+ minutes; always send one. 600s
+    #: covers the worst measured case (formula-dense 7-page paper, 252s on the NAS).
+    docling_document_timeout: float = Field(
+        default=600.0, alias="DOCLING_DOCUMENT_TIMEOUT"
+    )
+    #: Retries for transient failures (5xx / timeout / transport error / empty
+    #: body). 4xx and "200 with a non-empty errors list" are never retried.
+    docling_max_retries: int = Field(default=1, alias="DOCLING_MAX_RETRIES")
+    #: Send ``do_ocr=true``. The corpus is born-digital, and the server default is
+    #: true -- so we switch it off explicitly (measured: OCR costs >50% throughput).
+    docling_ocr: bool = Field(default=False, alias="DOCLING_OCR")
+    #: ``accurate`` | ``fast``.
+    docling_table_mode: str = Field(default="accurate", alias="DOCLING_TABLE_MODE")
+    #: Formula LaTeX (plan decision 16). Expensive: 5.9s -> 39.2s on a 5-page
+    #: paper locally, 252s on the worst formula-dense paper. When it fails the
+    #: client retries once with formulas off and reports ``formulas=text``.
+    docling_formula_enrichment: bool = Field(
+        default=True, alias="DOCLING_FORMULA_ENRICHMENT"
+    )
+    #: Required *together with* ``do_formula_enrichment``: on its own the server
+    #: answers 404 (``Preset 'default' not found for CodeFormulaVlmOptions``).
+    #: ``granite_docling`` is the remote alternative and is not used here.
+    docling_formula_preset: str = Field(
+        default="codeformulav2", alias="DOCLING_FORMULA_PRESET"
+    )
+    #: Page-boundary marker. Both backends emit the same string, and the marker
+    #: count is ``pages - 1`` (measured for every paper in the T2/T2d corpus).
+    docling_page_break: str = Field(
+        default="<!-- page-break -->", alias="DOCLING_PAGE_BREAK"
+    )
+    #: Image tag, used as the fallback parser version when ``GET /version`` is
+    #: unreachable (the pinned tag is part of the artifact provenance).
+    docling_image_tag: str = Field(default="", alias="DOCLING_IMAGE_TAG")
+
     @field_validator("log_level")
     @classmethod
     def _normalize_log_level(cls, value: str) -> str:
@@ -194,12 +259,58 @@ class Settings(BaseSettings):
             raise ValueError("INGEST_CONCURRENCY must be positive")
         return value
 
+    @field_validator("parser_backend")
+    @classmethod
+    def _check_parser_backend(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in PARSER_BACKENDS:
+            raise ValueError(
+                f"PARSER_BACKEND must be one of {sorted(PARSER_BACKENDS)}"
+            )
+        return normalized
+
+    @field_validator("parser_concurrency")
+    @classmethod
+    def _check_parser_concurrency(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("PARSER_CONCURRENCY must be positive")
+        return value
+
+    @field_validator("parser_max_pages", "docling_max_retries")
+    @classmethod
+    def _check_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be zero or positive")
+        return value
+
+    @field_validator("docling_table_mode")
+    @classmethod
+    def _check_table_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"accurate", "fast"}:
+            raise ValueError("DOCLING_TABLE_MODE must be 'accurate' or 'fast'")
+        return normalized
+
     @field_validator("query_rewrite_max_chars")
     @classmethod
     def _check_rewrite_max_chars(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("QUERY_REWRITE_MAX_CHARS must be positive")
         return value
+
+    @model_validator(mode="after")
+    def _check_docling_timeouts(self) -> "Settings":
+        """The server must abort before the client gives up.
+
+        ``document_timeout`` is what stops a runaway conversion, so a client
+        timeout below it can only discard a parse that was about to finish (and
+        on the NAS the worst measured paper needs 252s of the 600s budget).
+        """
+        if self.docling_timeout <= self.docling_document_timeout:
+            raise ValueError(
+                "DOCLING_TIMEOUT must be greater than DOCLING_DOCUMENT_TIMEOUT"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_query_rewrite(self) -> "Settings":
