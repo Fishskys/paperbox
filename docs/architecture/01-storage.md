@@ -176,7 +176,7 @@ venues ──CASCADE──> venue_editions
 
 ## 8. 未做 / 已知缺口
 
-- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:492` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:379` 说索引名 `paper_chunks_v1`，运行时由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v2`）。
+- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:502` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:389` 说索引名 `paper_chunks_v1`，运行时由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v2`）。
 - `build_extracted_key` / `build_figure_key` / `papers/<id>/supplementary/` 只是预留布局，无任何调用方（`object_storage.py:5-9`、`:114-119`）。
 - `papers.deleted_at` 之外没有清理机制：`paper_chunks` 行软删后长期保留，仅 `scripts/purge_deleted.py` 处理 OpenSearch/MinIO 遗留，需要人工触发。
 - `search_queries` 无分区、无 TTL、无清理脚本（仅 `app/services/search_log_service.py` 写入）——是否另有保留策略未确认。

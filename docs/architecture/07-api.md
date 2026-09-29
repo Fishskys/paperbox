@@ -224,10 +224,10 @@
 | `tests/test_metadata_api.py` | `/api/metadata/import`（dry_run/apply/覆写）、`review`、`attach`、`apply`、415 | `:110-215`, `:189`, `:251-277`, `:305-475` |
 | `tests/test_manual_metadata.py` | `GET/PATCH /api/papers/{id}/metadata`（含 404）、rollback | `:326-400` |
 | `tests/test_deletion.py` | `papers_api.delete_paper` 直调：204、OpenSearch/MinIO 失败 503、顺序与幂等 | `:71-125`（非 TestClient） |
-| `tests/test_upload_gc.py` | housekeeping 生命周期（周期任务启停）、幂等、不改作业行 | `README.md:425` |
-| `tests/test_ingest_queue.py` / `test_queue_priority.py` | `recover_jobs`/`mark_queued`、优先级与 `queued_high/low` | `README.md:415-416` |
-| `tests/test_job_retry.py` | 重试的原子认领与路由（服务层） | `README.md:412` |
-| `tests/test_search_log.py` | 检索日志行序列化与写入降级（服务层） | `README.md:413` |
+| `tests/test_upload_gc.py` | housekeeping 生命周期（周期任务启停）、幂等、不改作业行 | `README.md:435` |
+| `tests/test_ingest_queue.py` / `test_queue_priority.py` | `recover_jobs`/`mark_queued`、优先级与 `queued_high/low` | `README.md:425-426` |
+| `tests/test_job_retry.py` | 重试的原子认领与路由（服务层） | `README.md:422` |
+| `tests/test_search_log.py` | 检索日志行序列化与写入降级（服务层） | `README.md:423` |
 
 未覆盖（本模块视角）：`security.py` 的 401/403 分支（tests/ 内 grep `api_key_matches|extract_api_key|verify_api_key` 0 命中，所有 API 测试用 `dependency_overrides` 绕过）、`GET /health`、`GET /api/search-logs` 路由、`GET /api/jobs/queue` 路由、`GET /api/jobs` 路由、`main.py` 的 lifespan 与 `request_id_middleware`（`TestClient` 只出现在 5 个文件：`test_ingest_files/file`、`test_ingest_dir`、`test_ingest_compressed`、`test_metadata_api`、`test_manual_metadata`）。
 

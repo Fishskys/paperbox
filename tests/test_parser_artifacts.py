@@ -298,6 +298,59 @@ def test_the_other_backends_artifacts_are_not_served() -> None:
     assert store.meta()["backend"] == "pypdf"
 
 
+def test_the_option_fingerprint_is_recorded_in_the_meta() -> None:
+    """The meta says which request options produced the markdown it stores."""
+    store = FakeStore()
+    parse_docling(store, CountingConverter(docling_result()))
+    assert store.meta()["options"] == parser_service.parse_options()
+
+
+def test_a_parse_option_change_invalidates_the_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flipping a parse knob must re-parse: the markdown shape depends on it.
+
+    Formula LaTeX is the case that motivated this: a ``$$...$$`` artifact and a
+    plain-text one are both "a docling markdown for this paper", so replaying
+    across the switch would hand the pipeline text that does not correspond to
+    the configuration it is running under.
+    """
+    store = FakeStore()
+    converter = CountingConverter(docling_result())
+
+    monkeypatch.setattr(settings, "docling_formula_enrichment", False)
+    parse_docling(store, converter)
+    assert converter.calls == 1
+    assert parse_docling(store, converter).cache_hit is True
+    assert converter.calls == 1, "same options must still replay"
+
+    monkeypatch.setattr(settings, "docling_formula_enrichment", True)
+    assert parse_docling(store, converter).cache_hit is False
+    assert converter.calls == 2, "formulas on is a different markdown"
+
+    monkeypatch.setattr(settings, "docling_formula_enrichment", False)
+    assert parse_docling(store, converter).cache_hit is False
+    assert converter.calls == 3, "and switching back is different again"
+
+
+def test_the_other_parse_options_invalidate_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Page break, table mode, OCR and the page cap are all part of the identity."""
+    store = FakeStore()
+    converter = CountingConverter(docling_result())
+    parse_docling(store, converter)
+
+    for name, value in (
+        ("docling_page_break", "<!-- page -->"),
+        ("docling_table_mode", "fast"),
+        ("docling_ocr", True),
+        ("docling_formula_preset", "granite_docling"),
+    ):
+        monkeypatch.setattr(settings, name, value)
+        assert parse_docling(store, converter).cache_hit is False, name
+        parse_docling(store, converter)
+    assert converter.calls == 5
+
+
 def test_a_cache_version_bump_invalidates_the_entry() -> None:
     store = FakeStore()
     converter = CountingConverter(docling_result())

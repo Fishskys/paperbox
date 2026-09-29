@@ -142,7 +142,7 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 | `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:157-159`；`archive_service.py:281-286` |
 | `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:161`；`archive_service.py:287-293` |
 | `INGEST_ARCHIVE_TMP_DIR` | 空 | 解包目录（空 = 系统 temp） | `config.py:163`；`archive_service.py:127-135` |
-| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:165`；`housekeeping.py:198`、`:232-250` |
+| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:165`；`housekeeping.py:198`、`:232-256` |
 | `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:169`；`housekeeping.py:307`、`323-334` |
 | `INGEST_CONCURRENCY` | 2 | 并发流水线数（处理腿，本文只引用） | `config.py:125`；见 `02-ingestion-pipeline.md` |
 
