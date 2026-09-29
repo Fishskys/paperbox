@@ -31,7 +31,7 @@ from app.core.errors import classify_failure
 from app.core.logging import get_logger
 from app.db.models import IngestionJob, Paper, PaperChunk, PaperFile, new_uuid
 from app.db.session import SessionLocal
-from app.parsing.chunking import chunk_document
+from app.parsing.chunking import CHUNK_MODE_SEMANTIC, chunk_document
 from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata, extract_pages
 from app.parsing.structure import detect_sections, merge_short_sections
 from app.search import mappings, opensearch, snapshot
@@ -502,7 +502,21 @@ def _run_pipeline(
 
     _advance_stage(session, job, STAGE_CHUNKING, PROGRESS_CHUNKING)
 
-    chunks = chunk_document(pages, sections)
+    # CHUNK_MODE=semantic cuts where the sentence embeddings dip (plan T7.2);
+    # the default length policy needs no embedding call at all, so the switch
+    # stays a pure pass-through here.
+    embed_fn = (
+        embedding_service.embed_texts
+        if settings.chunk_mode == CHUNK_MODE_SEMANTIC
+        else None
+    )
+    chunks = chunk_document(
+        pages,
+        sections,
+        embed_fn=embed_fn,
+        semantic_threshold=settings.chunk_semantic_threshold,
+        semantic_min_tokens=settings.chunk_semantic_min_tokens,
+    )
     if not chunks:
         raise ingest.IngestionError("parsing produced no chunks")
     rows = _replace_chunks(session, paper, chunks)
