@@ -55,10 +55,10 @@
 | GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py:147-151` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py:164` |
 | POST | `/api/metadata/apply` | 按报告批量应用人工决定 | 是 | — | `app/api/metadata.py:217` |
-| POST | `/api/search` | 论文级混合检索 | 是 | — | `app/api/search.py:49` |
+| POST | `/api/search` | 论文级混合检索 | 是 | — | `app/api/search.py:48` |
 | GET | `/api/search-logs` | 检索日志（只读） | 是 | `limit`、`since`、`mode` | `app/api/search_logs.py:27-32` |
 
-`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:59-67` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:192`。
+`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:59-67` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:49` 只收 body），日志另开 session：`app/api/search.py:191`。
 
 ### 2.2 鉴权实现
 
@@ -109,7 +109,7 @@
 | `POST /api/metadata/import`：Content-Type 既非 multipart 也非 JSON | 415 | `app/api/metadata.py:87-89` |
 | 同上：multipart 缺 `file` part / JSON 解析失败 / 未知 `source_type` / `importer` 抛 `ValueError` | 422 | `app/api/metadata.py:66-70`, `:74-78`, `:82-86`, `:112-116`, `:126-129` |
 | `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py:54-57`, `:178-179`, `:241-249` |
-| `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:89-94`, `:95-98` |
+| `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:86-91`, `:92-95` |
 | `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py:38-56` |
 
 ### 2.4 lifespan 启停序列（`app/main.py:41-56`）
@@ -136,8 +136,8 @@
 | `job.py` | `JobOut`(`:10`)、`JobListOut`(`:29`)、`QueueOut`(`:38`) | 作业状态与队列快照 |
 | `paper.py` | `PaperOut`(`:22`)、`PaperFileOut`(`:10`)、`PaperListOut`(`:52`)、`PaperChunkOut`(`:63`)、`PaperChunkList`(`:79`) | 论文读接口 |
 | `metadata.py` | `PaperMetadataOut`(`:55`)、`SourceOut`(`:11`)、`IdentifierOut`(`:29`)、`ProvenanceEntry`(`:41`)、`MetadataPatch`(`:70`)、`MetadataPatchOut`(`:97`)、`MetadataRollbackIn/Out`(`:108`/`:115`)、`ImportReportOut`(`:127`)、`ConflictOut`(`:144`)、`ReviewOut`(`:157`)、`AttachIn/Out`(`:167`/`:173`)、`ApplyEntryIn/ApplyIn/ApplyOut`(`:186`/`:194`/`:202`) | 元数据读写与导入报告 |
-| `search.py` | `SearchRequest`(`:130`)、`SearchFilters`(`:61`)、`SearchResponse`(`:233`)、`SearchResult`(`:177`)、`SearchEvidence`(`:166`)、`SearchRerankInfo`(`:205`)、`SearchRewriteInfo`(`:218`)、`MIN_TOP_K/MAX_TOP_K`(`:42-43`) | 检索请求/响应 |
-| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:25`)、`ConsistencyTotalsOut`(`:29`)、**`ParserBackendsOut`(`:47`)**（`:58` `papers`/`documents` 计数、`:62` `paper_ids` + `:64` `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、`ConsistencyOut`(`:67`，含 `parser_backends` `:77`) |
+| `search.py` | `SearchRequest`(`:128`)、`SearchFilters`(`:60`)、`SearchResponse`(`:233`)、`SearchResult`(`:176`)、`SearchEvidence`(`:165`)、`SearchRerankInfo`(`:204`)、`SearchRewriteInfo`(`:217`)、`MIN_TOP_K/MAX_TOP_K`(`:42-43`) | 检索请求/响应 |
+| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:25`)、`ConsistencyTotalsOut`(`:29`)、**`ParserBackendsOut`(`:46`)**（`:57` `papers`/`documents` 计数、`:61` `paper_ids` + `:64` `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、`ConsistencyOut`(`:64`，含 `parser_backends` `:74`) |
 | `search_log.py` | `SearchLogOut`(`:11`)、`SearchLogListOut`(`:32`) | 检索日志读接口 |
 | `__init__.py` | — | 仍是占位（1 行 docstring），无重导出；导入一律走子模块 |
 
@@ -169,7 +169,7 @@
 **`POST /api/papers/ingest/files`**（`ingestion.py:262`）：
 `request_id_middleware`(`main.py:70`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:286-309`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:133`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:95` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:193-201`) → `job_queue.submit`(`:207` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:296`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:318`) → 返回 `summarize()` 的 202 响应(`:345`)。
 
-**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:130`) → `_maybe_rewrite`(`search.py:160`，线程化 `:67`) → `asyncio.to_thread(search_service.search_papers)`(`:146`) → 逐结果构造 `SearchResult`(`:174`) → `_log_search` 另开 `SessionLocal()` 写日志(`:201`, `:203`) → `SearchResponse`(`:216`)。
+**`POST /api/search`**（`app/api/search.py:49`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:130`) → `_maybe_rewrite`(`search.py:159`，线程化 `:64`) → `asyncio.to_thread(search_service.search_papers)`(`:144`) → 逐结果构造 `SearchResult`(`:173`) → `_log_search` 另开 `SessionLocal()` 写日志(`:200`, `:202`) → `SearchResponse`(`:215`)。
 
 **`GET /api/papers/{id}/file`**（`papers.py:103`）：`_load_paper`(`:49`) → `papers.original_file`（主版本）→ `object_storage.open_stream`(`:121`) → `StreamingResponse` 64 KiB 分块 + `Content-Disposition: attachment`(`:134-146`)。
 
@@ -208,10 +208,10 @@
 | `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:125` |
 | `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:55`, `:59`, `:62`；`health.py:60-76` |
 | `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:114-115` |
-| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:75`, `:81`；`search.py:103-107` |
+| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:75`, `:81`；`search.py:101-105` |
 | `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:96-98`, `:205-223` |
 
-非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py:36`）、`CANDIDATE_FACTOR = 5`（`app/api/search.py:46`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py:27`）、chunk 分页上限 200（`app/api/papers.py:178`）。
+非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py:36`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py:27`）（原先还有 `CANDIDATE_FACTOR = 5` = 「请求时估算的候选池」，2026-09-30 随 T-A2 删除：候选数改由检索实际结果给出）、chunk 分页上限 200（`app/api/papers.py:178`）。
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 

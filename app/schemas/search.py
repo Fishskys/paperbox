@@ -12,7 +12,7 @@ Request shape::
 
 Response shape::
 
-    {"query": "...", "mode": "hybrid", "total": 12, "took_ms": 84.2,
+    {"query": "...", "mode": "hybrid", "total": 12, "candidates": 25, "took_ms": 84.2,
      "rerank": {"enabled": true, "model": "Xenova/ms-marco-MiniLM-L-6-v2",
                 "took_ms": 37},
      "results": [{"paper_id": "...", "title": "...", "authors": ["..."],

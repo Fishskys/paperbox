@@ -17,11 +17,11 @@
 | 表 | 一行代表 | 谁写它 | 出处 |
 |---|---|---|---|
 | `papers` | 一篇论文（**当前值**的物化） | `provenance_service.write_field`、`metadata_merge` | `models.py:76` |
-| `paper_sources` | 一份来源数据（一次导入 / 一次解析） | `metadata_sources.upsert_source` | `models.py:462` |
-| `paper_field_provenance` | 一条字段声明（append-only 账本） | `provenance_service.record_claim` / `promote` | `models.py:582` |
-| `paper_identifiers` | 一个标识符（DOI / arXiv / IEEE article number / …） | `metadata_identifiers.upsert_identifier` / `replace_identifier` | `models.py:521` |
+| `paper_sources` | 一份来源数据（一次导入 / 一次解析） | `metadata_sources.upsert_source` | `models.py:468` |
+| `paper_field_provenance` | 一条字段声明（append-only 账本） | `provenance_service.record_claim` / `promote` | `models.py:588` |
+| `paper_identifiers` | 一个标识符（DOI / arXiv / IEEE article number / …） | `metadata_identifiers.upsert_identifier` / `replace_identifier` | `models.py:527` |
 | `venues` | 一个期刊或会议**实体** | `venue_service.resolve_venue` | `models.py:206` |
-| `venue_editions` | 某实体**某一年的那一届** | `venue_service.get_or_create_edition` | `models.py:649` |
+| `venue_editions` | 某实体**某一年的那一届** | `venue_service.get_or_create_edition` | `models.py:655` |
 | `paper_files` | 一个 PDF 版本（含主版本标记、来源归属） | `paper_service.register_original_file` / `select_primary_file` | `models.py:326` |
 | `authors` + `paper_authors` | 作者字典 + 论文↔作者（带顺序） | `paper_service.get_or_create_author` | `models.py:177` / `:237` |
 | `paper_tags` + `papers_tags` | 标签字典 + 论文↔标签（带 `kind`） | `metadata_tags.link_tags` / `replace_kind` | `models.py:265` / `:293` |
@@ -90,7 +90,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ## 3. 表里有什么
 
-### 3.1 `paper_sources`（`models.py:462-518`）
+### 3.1 `paper_sources`（`models.py:468-524`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -107,9 +107,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `imported_at` | DATETIME NOT NULL，默认 `now()` | |
 | `importer` | VARCHAR(128) | API / CLI / 脚本名 |
 
-约束与索引：`UNIQUE(source_type, source_ref)`（`uq_paper_sources_type_ref`，`models.py:475`）＝**幂等导入**；`ix_paper_sources_paper_id`、`ix_paper_sources_match_status`。
+约束与索引：`UNIQUE(source_type, source_ref)`（`uq_paper_sources_type_ref`，`models.py:481`）＝**幂等导入**；`ix_paper_sources_paper_id`、`ix_paper_sources_match_status`。
 
-### 3.2 `paper_identifiers`（`models.py:521-580`）
+### 3.2 `paper_identifiers`（`models.py:527-586`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -126,7 +126,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 语义要点：删除论文时 `soft_delete_paper`（`paper_service.py:634`）会**删掉标识符行**以释放 DOI；`upsert_identifier`（`:230`）遇到"属主已软删"的行会把它改指到新论文。
 
-### 3.3 `paper_field_provenance`（`models.py:582-647`）
+### 3.3 `paper_field_provenance`（`models.py:588-653`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -150,7 +150,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 约束与索引：**部分唯一** `UNIQUE(paper_id, field) WHERE is_current`（`uq_paper_field_provenance_current`，`:583`）；`ix_paper_field_provenance_paper_field`。历史行永不删除——回滚 = 把历史某行置回 `is_current=true` 并写回 `papers` 列（`rollback_field`，`provenance_service.py:253`）。
 
-### 3.4 `venues`（`models.py:206-231`）与 `venue_editions`（`:653-682`）
+### 3.4 `venues`（`models.py:206-231`）与 `venue_editions`（`:659-688`）
 
 | 表 | 列 | 约束 |
 |---|---|---|
@@ -207,8 +207,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 | 不变量 | 索引 | 定义处 | 违反时会怎样 |
 |---|---|---|---|
-| 一个标识符只属一篇论文 | `uq_paper_identifiers_scheme_value` | `models.py:539` | 同一 DOI 注册不上第二篇；删除论文时**必须**释放标识符行 |
-| 每个字段只有一个当前值 | `uq_paper_field_provenance_current` | `models.py:593` | 翻转当前值必须在同一事务里先降旧行 |
+| 一个标识符只属一篇论文 | `uq_paper_identifiers_scheme_value` | `models.py:545` | 同一 DOI 注册不上第二篇；删除论文时**必须**释放标识符行 |
+| 每个字段只有一个当前值 | `uq_paper_field_provenance_current` | `models.py:599` | 翻转当前值必须在同一事务里先降旧行 |
 | 每篇论文只有一个主版本文件 | `uq_paper_files_primary` | `models.py:334` | 主版本翻牌必须在同一事务内改完所有行 |
 | 指纹只被存活论文占用 | `uq_papers_fingerprint_live` | `models.py:89` | 软删行保留原指纹供追溯，删除即释放 |
 
