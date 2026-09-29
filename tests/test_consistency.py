@@ -36,6 +36,8 @@ def add_paper(
     file_names: tuple[str, ...] = ("original.pdf",),
     chunks: int = 0,
     title: str = "A Paper",
+    parser_backend: str | None = None,
+    parser_version: str | None = None,
 ) -> str:
     """Insert one paper with ``file_names`` rows and ``chunks`` chunk rows."""
     session = session_factory()
@@ -45,6 +47,8 @@ def add_paper(
             title=title,
             fingerprint=f"sha256:{new_uuid()}",
             status=status,
+            parser_backend=parser_backend,
+            parser_version=parser_version,
         )
         if deleted:
             paper.deleted_at = datetime.now(timezone.utc)
@@ -116,20 +120,40 @@ class FakeIndices:
 
 
 class FakeClient:
-    """Enough of the OpenSearch client for one ``terms`` aggregation."""
+    """Enough of the OpenSearch client for one ``terms`` aggregation.
 
-    def __init__(self, counts: dict[str, int] | None = None, exists: bool = True) -> None:
+    ``backends`` gives a paper's documents a parser provenance: it becomes the
+    ``by_backend`` sub-aggregation, which is what the stamp check reads. A paper
+    missing from it has documents written before the stamp existed.
+    """
+
+    def __init__(
+        self,
+        counts: dict[str, int] | None = None,
+        exists: bool = True,
+        backends: dict[str, dict[str, int]] | None = None,
+    ) -> None:
         self.counts = dict(counts or {})
+        self.backends = {key: dict(value) for key, value in (backends or {}).items()}
         self.indices = FakeIndices(exists)
         self.requests: list[dict] = []
 
     def search(self, index=None, body=None):
         self.requests.append({"index": index, "body": body})
-        buckets = [
-            {"key": key, "doc_count": count}
-            for key, count in self.counts.items()
-            if count > 0
-        ]
+        buckets: list[dict] = []
+        for key, count in self.counts.items():
+            if count <= 0:
+                continue
+            bucket: dict = {"key": key, "doc_count": count}
+            by_backend = self.backends.get(key)
+            if by_backend:
+                bucket["by_backend"] = {
+                    "buckets": [
+                        {"key": name, "doc_count": docs}
+                        for name, docs in by_backend.items()
+                    ]
+                }
+            buckets.append(bucket)
         return {"aggregations": {"by_paper": {"buckets": buckets}}}
 
 
@@ -306,8 +330,13 @@ def test_the_check_resolves_the_module_client_when_none_is_passed(monkeypatch) -
     """A live run passes ``client=None``; that must not become ``None.search``."""
     sentinel = FakeClient({"paper-1": 4})
     monkeypatch.setattr(consistency_service.opensearch, "get_client", lambda: sentinel)
-    counts, exists, truncated = consistency_service._load_documents(None, "an-alias")
+    counts, backends, exists, truncated = consistency_service._load_documents(
+        None, "an-alias"
+    )
     assert counts == {"paper-1": 4}
+    # No ``by_backend`` sub-aggregation in the fake answer: documents written
+    # before the stamp existed.
+    assert backends == {"paper-1": {}}
     assert exists is True
     assert truncated is False
 
@@ -427,3 +456,116 @@ def test_the_endpoint_lists_a_drifted_paper(client, factory) -> None:  # noqa: F
 def test_the_endpoint_validates_the_limit(client) -> None:
     assert client.get("/api/consistency?limit=0").status_code == 422
     assert client.get("/api/consistency?limit=100000").status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# the parser stamp (plan 2026-09-28_160551 section 6.1 step 2)
+# --------------------------------------------------------------------------- #
+
+
+def backend_census(report) -> dict:
+    data = report.as_dict()
+    return data["parser_backends"]
+
+
+def test_a_paper_stamped_like_its_documents_is_not_reported(factory) -> None:  # noqa: F811
+    """The ordinary case after the switch: stamp and documents agree."""
+    paper_id = add_paper(factory, chunks=2, parser_backend="docling", parser_version="2.1")
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 2}, backends={paper_id: {"docling": 2}}),
+    )
+    assert report.problems_total == 0
+    assert backend_census(report) == {
+        "papers": {"docling": 1},
+        "documents": {"docling": 2},
+    }
+
+
+def test_documents_from_another_backend_than_the_stamp_are_reported(factory) -> None:  # noqa: F811
+    """A switch that only reached PostgreSQL: the old parse is still indexed."""
+    paper_id = add_paper(factory, chunks=3, parser_backend="docling")
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 3}, backends={paper_id: {"pypdf": 3}}),
+    )
+    assert problems_by_paper(report)[paper_id] == [
+        consistency_service.ISSUE_PARSER_STAMP_MISMATCH
+    ]
+    problem = report.problems[0]
+    assert problem.parser_backend == "docling"
+    assert problem.index_backends == ("pypdf",)
+    assert backend_census(report)["papers"] == {"docling": 1}
+    assert backend_census(report)["documents"] == {"pypdf": 3}
+
+
+def test_a_paper_whose_documents_are_split_across_backends_is_reported(factory) -> None:  # noqa: F811
+    paper_id = add_paper(factory, chunks=4, parser_backend="docling")
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient(
+            {paper_id: 4}, backends={paper_id: {"docling": 2, "pypdf": 2}}
+        ),
+    )
+    assert problems_by_paper(report)[paper_id] == [
+        consistency_service.ISSUE_PARSER_STAMP_MISMATCH
+    ]
+    assert report.problems[0].index_backends == ("docling", "pypdf")
+
+
+def test_documents_without_a_stamp_under_a_stamped_paper_are_reported(factory) -> None:  # noqa: F811
+    paper_id = add_paper(factory, chunks=2, parser_backend="docling")
+    report = run(factory, FakeStorage([object_key(paper_id)]), FakeClient({paper_id: 2}))
+    assert problems_by_paper(report)[paper_id] == [
+        consistency_service.ISSUE_PARSER_STAMP_MISMATCH
+    ]
+    assert report.problems[0].index_backends == ()
+
+
+def test_rows_indexed_before_the_stamp_existed_are_not_drift(factory) -> None:  # noqa: F811
+    """Both sides unknown is agreement -- the whole legacy library looks like this."""
+    paper_id = add_paper(factory, chunks=2)
+    report = run(factory, FakeStorage([object_key(paper_id)]), FakeClient({paper_id: 2}))
+    assert report.problems_total == 0
+    assert backend_census(report) == {
+        "papers": {consistency_service.UNKNOWN_BACKEND: 1},
+        "documents": {consistency_service.UNKNOWN_BACKEND: 2},
+    }
+
+
+def test_a_stamped_paper_never_indexed_is_not_reported_as_a_stamp_problem(factory) -> None:  # noqa: F811
+    """Nothing indexed yet: ``missing_index`` speaks, the stamp stays quiet."""
+    paper_id = add_paper(factory, chunks=2, parser_backend="pypdf")
+    report = run(factory, FakeStorage([object_key(paper_id)]), FakeClient({}))
+    assert problems_by_paper(report)[paper_id] == [
+        consistency_service.ISSUE_MISSING_INDEX
+    ]
+
+
+def test_document_census_counts_the_remainder_as_unknown(factory) -> None:  # noqa: F811
+    """A sub-aggregation that comes back short must not lose documents."""
+    paper_id = add_paper(factory, chunks=5, parser_backend="docling")
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 5}, backends={paper_id: {"docling": 3}}),
+    )
+    assert backend_census(report)["documents"] == {
+        "docling": 3,
+        consistency_service.UNKNOWN_BACKEND: 2,
+    }
+
+
+def test_deleted_papers_stay_out_of_the_backend_census(factory) -> None:  # noqa: F811
+    """The census describes what is live; deletion is not a parse."""
+    live_id = add_paper(factory, chunks=1, parser_backend="docling")
+    add_paper(factory, chunks=0, parser_backend="pypdf", deleted=True)
+    report = run(
+        factory,
+        FakeStorage([object_key(live_id)]),
+        FakeClient({live_id: 1}, backends={live_id: {"docling": 1}}),
+    )
+    assert backend_census(report)["papers"] == {"docling": 1}

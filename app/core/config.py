@@ -181,10 +181,11 @@ class Settings(BaseSettings):
     ingest_gc_interval_s: int = Field(default=300, alias="INGEST_GC_INTERVAL_S")
 
     # --- parsing backend (plan 2026-09-28_160551-docling-parser-backend §2 T4) ---
-    #: ``pypdf`` (default) or ``docling``. docling is the new primary backend for
-    #: two-column/tabled papers; pypdf stays the degradation backend *and* the
-    #: default until the parser acceptance run passes (plan T8).
-    parser_backend: str = Field(default="pypdf", alias="PARSER_BACKEND")
+    #: ``docling`` (default) or ``pypdf``. docling is the primary backend for
+    #: two-column/tabled papers; pypdf stays the degradation backend and is used
+    #: automatically whenever docling is unreachable, with the reason recorded in
+    #: the degradation ledger. One key flips the whole pipeline back (plan §6.1).
+    parser_backend: str = Field(default="docling", alias="PARSER_BACKEND")
     #: Parses allowed to run at once. Keep at 1: docling is CPU-bound and its
     #: container is deliberately capped, so a second concurrent parse only makes
     #: both slower and walks into the memory ceiling the caps exist for.

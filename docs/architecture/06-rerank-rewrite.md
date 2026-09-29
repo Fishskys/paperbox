@@ -48,7 +48,7 @@
 | `RewriteOutcome`（frozen dataclass） | `query_rewrite_service.py:44-53` | `original`、`rewritten`、`applied`、`model`、`took_ms`、`reason`（`reason` 只进日志，不进响应） |
 | `ChunkHit.retrieval_score` / `.rerank_score` | `hybrid.py:124` / `:126` | 前者为一阶段分（精排时才回填）、后者为归一化前的交叉编码器分；未精排时为 `None` |
 | 排序稳定性内存结构 | `hybrid.py:587` | `order = {id(hit): position}`，用于精排同分时回退一阶段次序 |
-| `search_queries` 表 | `app/db/models.py:757-785` | `query` `:696`、`rewritten_query` `:699`、`rerank` `:702`、`candidates` `:706`、`results`（JSONB，含双分数）`:709`；索引在 `created_at`/`mode` `:687-688` |
+| `search_queries` 表 | `app/db/models.py:765-793` | `query` `:704`、`rewritten_query` `:707`、`rerank` `:710`、`candidates` `:714`、`results`（JSONB，含双分数）`:717`；索引在 `created_at`/`mode` `:695-696` |
 
 响应字段语义（`app/api/search.py:108-157`、`app/schemas/search.py`）：
 
@@ -98,7 +98,7 @@
 | 容器侧无候选上限 | `RerankRequest.documents` 不设 `max_length`（对比 `/embed` 的 `MAX_BATCH` 限批），长候选清单由容器内部切批，不会 422 | `infra/embedding/server.py:181-185`、`:69`、`:140-141` |
 | 改写触发条件 | 需同时满足：`QUERY_REWRITE_ENABLED=true`、查询非空、长度 ≤ `QUERY_REWRITE_MAX_CHARS`、命中 CJK 正则；**纯 ASCII 查询即使开启也不改** | `api/search.py:166-170`；`query_rewrite_service.py:56-68`；`tests/test_query_rewrite.py:362-374` |
 | 改写失败降级 | 非 200、JSON 解析失败、无 `choices`/`content`、清洗后为空、改写结果与原查询相同 → `applied=false`、原查询继续检索 | `query_rewrite_service.py:149-196`；`tests/test_query_rewrite.py:177-263` |
-| 启动即校验 | `QUERY_REWRITE_ENABLED=true` 时 `URL`/`MODEL`/`API_KEY` 任一为空 → `Settings()` 抛 `ValueError`，进程起不来（不静默降级） | `config.py:214-232`；`tests/test_query_rewrite.py:322-326` |
+| 启动即校验 | `QUERY_REWRITE_ENABLED=true` 时 `URL`/`MODEL`/`API_KEY` 任一为空 → `Settings()` 抛 `ValueError`，进程起不来（不静默降级） | `config.py:215-233`；`tests/test_query_rewrite.py:322-326` |
 | 改写契约 | 请求体固定 `model/messages/temperature=0/max_tokens`，`Authorization: Bearer <key>`，URL 为 `<base>/chat/completions`（尾斜杠被 `rstrip`） | `query_rewrite_service.py:130-141`；`tests/test_query_rewrite.py:160-176` |
 | 推理模型坑 | 64-token 上限时推理模型把预算花在隐藏 `reasoning_content` 上，可见 `content` 为空且 `finish_reason=length` → 静默降级；默认已抬到 512 | `config.py:106-111`；`.env.example:69-72` |
 | 改写收益（外部实测） | 60 条查询：`hybrid|rerank=on` HR@1 0.700→0.900、MRR 0.850→0.950；中文改写后的另一组实测 ZH 语义命中从 0.30 提到 1.00（模块 docstring 引用的数字） | 出自 `evals/report-zh-llm-rewrite.md:12-17`；`query_rewrite_service.py:3-5` |
@@ -120,7 +120,7 @@
 | `QUERY_REWRITE_API_KEY` | `""` | Bearer 凭证 | `app/core/config.py:106` |
 | `QUERY_REWRITE_MODEL` | `""` | 请求体 `model` | `app/core/config.py:107` |
 | `QUERY_REWRITE_TIMEOUT` | `10.0` | httpx 超时（秒） | `app/core/config.py:108` |
-| `QUERY_REWRITE_MAX_CHARS` | `300` | 触发改写的输入长度上限 + 输出截断上限；校验必须为正 | `app/core/config.py:110`、`:197-202` |
+| `QUERY_REWRITE_MAX_CHARS` | `300` | 触发改写的输入长度上限 + 输出截断上限；校验必须为正 | `app/core/config.py:110`、`:198-203` |
 | `QUERY_REWRITE_TARGET_LANGUAGE` | `en` | 目标语言，**当前无代码读取** | `app/core/config.py:111-113` |
 | `QUERY_REWRITE_MAX_TOKENS` | `512` | 单次改写 `max_tokens`（留给推理模型的隐藏推理） | `app/core/config.py:119` |
 

@@ -295,7 +295,7 @@ uv run python scripts/check_consistency.py --no-fail  # 只报告，永远返回
 软删论文按"已内联清理"预期（PG 行保留、文档与对象应已消失），有残留才算问题。
 本机 2026-09-22 实测：**68 篇存活论文 / 68 个对象 / 2883 个文档 / 0 漂移**。
 
-### 3.6 解析后端：docling（主）与 pypdf（降级）（2026-09-29）
+### 3.6 解析后端：docling（主）与 pypdf（降级）（2026-09-29，2026-09-30 接入流水线）
 
 PDF 解析有两个后端，输出**同一份 markdown 方言**（标题层级、`<!-- page-break -->` 页标记、表格/公式约定），
 所以下游切块只认 markdown、不认后端：
@@ -306,8 +306,8 @@ PDF 解析有两个后端，输出**同一份 markdown 方言**（标题层级�
 | `pypdf` | 进程内纯 Python：`extract_pages` + 分栏修复 + 启发式标题；无公式、表格只留占位 | docling 不可用时的降级；或刻意摸底对比 |
 
 ```bash
-PARSER_BACKEND=pypdf    # 默认。pypdf 一档，零依赖
-PARSER_BACKEND=docling  # 走远端 docling-serve（地址见 DOCLING_URL）
+PARSER_BACKEND=docling  # 默认（2026-09-30 起）。走远端 docling-serve（地址见 DOCLING_URL）
+PARSER_BACKEND=pypdf    # 降级侧：进程内一档、零依赖，无公式、表格只留占位
 PARSER_CONCURRENCY=1    # 同时允许几个 docling 转换（进程内信号量）
 PARSER_CACHE=true       # 解析产物存 MinIO，按 (paper_id, backend, 解析器版本) 复用
 PARSER_MAX_PAGES=0      # 0=整篇；>0 只解析前 N 页（只作用于 docling，会记进 degraded_reason）
@@ -326,6 +326,18 @@ PARSER_MAX_PAGES=0      # 0=整篇；>0 只解析前 N 页（只作用于 doclin
 **解析产物缓存**（MinIO `papers/<id>/extracted/parsed/`）：命中要求 markdown 对象还在、
 docling 服务端报的版本与当初一致（`GET /version`，毫秒级）、当初不是降级产物；
 **部分解析（`--page-range` 或 `PARSER_MAX_PAGES>0`）既不读缓存也不写缓存** — 拿半篇冒充整篇比慢一点更糟。
+
+**已接入正式流水线**（2026-09-30）：导入的解析段就是 `parser_service.parse_paper_file`，
+切块走 `chunk_markdown`（markdown → 反推 pages+sections → `chunk_document`），
+`extract_pages` 只再供元数据启发式用。因此：
+
+* 改 `PARSER_BACKEND` **立刻影响新导入与 reindex**；
+* 每篇论文落 `papers.parser_backend` / `parser_version`，索引文档也带同样的两个字段 ——
+  想知道哪些论文还是旧后端，`GET /api/consistency` 的 `parser_backends`（或直接按
+  `parser_backend: pypdf` 过滤索引）一眼可见；
+* **存量论文换后端只能 reindex**：同一份 PDF 再导一次会被判重复（指纹是 DOI/arXiv 身份，不是字节），
+  不会重解析。`POST /api/papers/{id}/reindex` 会按当前后端重解析；
+  缓存按 `(paper_id, backend)` 分目录，所以换后端必然未命中 = 真跑一次远程解析。
 
 **两条后端的真机对照**（`scripts/acceptance_parser.py`，只读、不写库，跑完自净）：
 

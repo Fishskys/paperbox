@@ -31,8 +31,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.logging import get_logger
+from app.parsing.markdown import ParseBundle, pages_and_sections_from_markdown
 from app.parsing.pdf import PageText
-from app.parsing.structure import SECTION_BODY, Section
+from app.parsing.structure import SECTION_BODY, Section, merge_short_sections
 
 logger = get_logger(__name__)
 
@@ -614,3 +615,40 @@ def chunk_document(
             )
         )
     return chunks
+def chunk_markdown(
+    bundle: ParseBundle,
+    target_tokens: int = DEFAULT_TARGET_TOKENS,
+    overlap_tokens: int = DEFAULT_OVERLAP_TOKENS,
+    *,
+    max_tokens: int = MAX_TOKENS,
+    embed_fn: EmbedFn | None = None,
+    semantic_threshold: float = SEMANTIC_SIMILARITY_THRESHOLD,
+    semantic_min_tokens: int = SEMANTIC_MIN_TOKENS,
+    page_break: str | None = None,
+    on_degrade: DegradeSink | None = None,
+) -> list[Chunk]:
+    """Chunk a parse bundle -- the entry the ingestion pipeline uses (plan 6.1 step 1).
+
+    Both backends hand over the same markdown dialect, so the section and page
+    grid is rebuilt from it (``markdown.pages_and_sections_from_markdown``) and
+    the short-section merge the fallback has always applied
+    (``structure.merge_short_sections``) runs on top. Everything downstream --
+    never across a section, page spans, the overlap window, the ``MAX_TOKENS``
+    cap, the semantic policy and the degradation sink -- is ``chunk_document``'s
+    and therefore identical for docling and pypdf.
+
+    Returns ``[]`` for an empty bundle, exactly like an empty ``pages`` list;
+    the pipeline turns that into the ``NO_TEXT_LAYER`` failure.
+    """
+    pages, sections = pages_and_sections_from_markdown(bundle, page_break=page_break)
+    return chunk_document(
+        pages,
+        merge_short_sections(sections),
+        target_tokens,
+        overlap_tokens,
+        max_tokens=max_tokens,
+        embed_fn=embed_fn,
+        semantic_threshold=semantic_threshold,
+        semantic_min_tokens=semantic_min_tokens,
+        on_degrade=on_degrade,
+    )

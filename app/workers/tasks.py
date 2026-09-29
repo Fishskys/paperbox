@@ -31,15 +31,14 @@ from app.core.errors import classify_failure
 from app.core.logging import get_logger
 from app.db.models import IngestionJob, Paper, PaperChunk, PaperFile, new_uuid
 from app.db.session import SessionLocal
-from app.parsing.chunking import CHUNK_MODE_SEMANTIC, chunk_document
+from app.parsing.chunking import CHUNK_MODE_SEMANTIC, chunk_markdown
 from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata, extract_pages
-from app.parsing.structure import detect_sections, merge_short_sections
 from app.search import mappings, opensearch, snapshot
 from app.services import degradation_service, embedding_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_identifiers, metadata_matcher, metadata_merge
 from app.services import metadata_service, metadata_shell, metadata_sources
-from app.services import object_storage, paper_service, provenance_service
+from app.services import object_storage, paper_service, parser_service, provenance_service
 
 logger = get_logger(__name__)
 
@@ -470,8 +469,8 @@ def _run_pipeline(
     # Degradation ledger (plan T7.3): stages report what they gave up on through
     # this sink, so a thinner-but-usable result stays queryable after the log
     # line scrolls away. It rides in the job's transaction -- a rolled-back job
-    # leaves no row behind. The parsing stage reports through it once T8 routes
-    # the pipeline through ``parser_service``.
+    # leaves no row behind. Both the parsing stage (below) and chunking report
+    # through it.
     degradations = degradation_service.Recorder(
         session, paper_id=paper.id, job_id=job.id
     )
@@ -479,8 +478,11 @@ def _run_pipeline(
     _advance_stage(session, job, STAGE_PARSING, PROGRESS_PARSING)
 
     data = object_storage.download_bytes(object_key)
+    # The metadata layer keeps working on pypdf's own pages (decision 2): its
+    # heuristics need font sizes and line geometry, which markdown does not
+    # carry, and both backends must produce the same metadata. ``PARSER_BACKEND``
+    # therefore only decides what the *chunks* are made of.
     pages = extract_pages(data)
-    sections = merge_short_sections(detect_sections(pages))
 
     record = None
     if dedupe and file_record is not None:
@@ -511,6 +513,24 @@ def _run_pipeline(
 
     _advance_stage(session, job, STAGE_CHUNKING, PROGRESS_CHUNKING)
 
+    # Parsing happens *here* rather than with the metadata steps above: a
+    # duplicate fingerprint or a non-primary version ends the job before this
+    # point, and docling costs 30-370 s per paper (plan §6.1 step 2). Reindexing
+    # replays the stored artifacts instead of paying that again.
+    bundle = parser_service.parse_paper_file(
+        paper.id,
+        data,
+        filename=object_key.rsplit("/", 1)[-1],
+        on_degrade=degradations,
+    )
+    # The stamp makes a mixed library visible (plan §6.1 step 2): a degraded
+    # parse stamps ``pypdf``, so "docling is unreachable" is queryable later.
+    paper.parser_backend = bundle.backend
+    # NULL means "the parser did not report a version", which is not the same as
+    # an empty version string in the census or in the index.
+    paper.parser_version = bundle.parser_version or None
+    degradations.resolve(degradation_service.STAGE_PARSING)
+
     # CHUNK_MODE=semantic cuts where the sentence embeddings dip (plan T7.2);
     # the default length policy needs no embedding call at all, so the switch
     # stays a pure pass-through here.
@@ -519,12 +539,12 @@ def _run_pipeline(
         if settings.chunk_mode == CHUNK_MODE_SEMANTIC
         else None
     )
-    chunks = chunk_document(
-        pages,
-        sections,
+    chunks = chunk_markdown(
+        bundle,
         embed_fn=embed_fn,
         semantic_threshold=settings.chunk_semantic_threshold,
         semantic_min_tokens=settings.chunk_semantic_min_tokens,
+        page_break=settings.docling_page_break,
         on_degrade=degradations,
     )
     if not chunks:
@@ -1068,6 +1088,12 @@ def _index_rows(
             "embedding": vector,
             "embedding_model": settings.embedding_model,
             "embedding_dimension": settings.embedding_dimension,
+            # Provenance of the *text*: written from the stamp the parse just
+            # put on the paper row (plan §6.1 step 2). ``refresh_index_metadata``
+            # deliberately does not touch these -- a metadata refresh must not
+            # make a stale parse look fresh.
+            "parser_backend": paper.parser_backend,
+            "parser_version": paper.parser_version,
         }
         # --- metadata snapshot: the fields POST /api/search filters read ---
         document.update(metadata)

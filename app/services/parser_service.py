@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from app.core.config import PARSER_BACKENDS, settings
 from app.core.logging import get_logger
+import pypdf
 from app.parsing import markdown as markdown_dialect
 from app.parsing.docling_client import (
     FORMULA_FALLBACK_REASON,
@@ -263,6 +264,9 @@ def _parse_with_pypdf(data: bytes) -> ParseBundle:
         pages,
         pdf_bytes=data,
         backend="pypdf",
+        # Same shape as docling's string ("docling 2.130.0"): the stamp has to be
+        # able to say *which* pypdf produced these chunks.
+        parser_version=f"pypdf {pypdf.__version__}",
         timings={"extract_s": round(time.perf_counter() - started, 4)},
     )
     bundle.timings["total_s"] = round(time.perf_counter() - started, 4)

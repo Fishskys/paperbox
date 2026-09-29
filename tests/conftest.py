@@ -108,3 +108,47 @@ def table_names(session) -> set[str]:
         text("SELECT name FROM sqlite_master WHERE type='table'")
     ).all()
     return {row[0] for row in rows}
+
+
+class InMemoryArtifactStore:
+    """Stand-in for ``object_storage`` inside the parse-artifact cache."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str | None, str], bytes] = {}
+
+    def download_bytes(self, object_key: str, bucket: str | None = None) -> bytes:
+        try:
+            return self.objects[(bucket, object_key)]
+        except KeyError:
+            from app.services.object_storage import ObjectNotFound
+
+            raise ObjectNotFound(f"no such object: {object_key}") from None
+
+    def upload_bytes(
+        self,
+        object_key: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        bucket: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> object:
+        self.objects[(bucket, object_key)] = data
+        return object()
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_real_object_storage(monkeypatch):
+    """Guard: no unit test may reach MinIO through ``parser_service``.
+
+    ``parse_paper_file`` falls back to the real ``object_storage`` module when no
+    store is injected. One forgotten ``store=`` already put 16 orphan objects in
+    the live bucket (2026-09-29), so that fallback is replaced with an in-memory
+    store for *every* test. Tests that assert cache behaviour inject their own
+    store and are unaffected.
+    """
+    from app.services import parser_service
+
+    store = InMemoryArtifactStore()
+    monkeypatch.setattr(parser_service, "_default_store", lambda: store)
+    return store

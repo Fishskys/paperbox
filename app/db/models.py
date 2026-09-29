@@ -129,6 +129,14 @@ class Paper(TimestampMixin, Base):
     embedding_model: Mapped[str | None] = mapped_column(String(128))
     embedding_dimension: Mapped[int | None] = mapped_column(Integer)
 
+    #: Which parser produced the chunks that are indexed for this paper, and the
+    #: version string that parser reported (plan §6.1 step 2). ``NULL`` means the
+    #: paper was indexed before the stamp existed -- unknown, not "wrong".
+    #: Reindexing refreshes both; ``GET /api/consistency`` compares them against
+    #: the index documents so a mixed library is visible instead of silent.
+    parser_backend: Mapped[str | None] = mapped_column(String(16), index=True)
+    parser_version: Mapped[str | None] = mapped_column(String(64))
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     venue: Mapped["Venue | None"] = relationship(back_populates="papers")
