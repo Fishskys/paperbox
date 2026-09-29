@@ -135,7 +135,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | `EMBEDDING_URL` | `http://localhost:8090`（`.env` 实为 `http://127.0.0.1:8090`） | 应用侧 `/embed` base | `app/core/config.py:71`、`.env:19` |
 | `EMBEDDING_MODEL` | 代码 `BAAI/bge-m3`；`.env`/compose `intfloat/multilingual-e5-large` | 容器加载的模型名；应用仅作为请求字段与溯源值 | `config.py:72`、`server.py:36`、`docker-compose.yml:86`、`.env:20` |
 | `EMBEDDING_DIMENSION` | 1024 | 应用侧维度校验 + mapping `dimension` | `config.py:73`、`.env:21` |
-| `EMBEDDING_BATCH_SIZE` | 代码 32；`.env`/`.env.example` 16 | 单次 `/embed` 的 texts 数 | `config.py:74`、:271-276（正数校验）、`.env:22`、`.env.example:32` |
+| `EMBEDDING_BATCH_SIZE` | 代码 32；`.env`/`.env.example` 16 | 单次 `/embed` 的 texts 数 | `config.py:74`、:277-282（正数校验）、`.env:22`、`.env.example:32` |
 | `EMBEDDING_TIMEOUT` | **300.0**（T7.3 由 120 上调） | 单批 HTTP 超时；必须大于服务端最坏排队时间 | `config.py:75-79`、`.env.example:35` |
 | `EMBEDDING_MAX_RETRIES` | 2 | 每批额外重试次数 | `config.py:80`、`.env.example:36` |
 | `MAX_BATCH` | 代码 64；compose `16`（`infra/.env` 未设） | `/embed` 入参上限（超批 422） | `server.py:38`、`docker-compose.yml:99` |
@@ -147,7 +147,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | `RERANK_ENABLED` / `RERANK_URL` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `http://127.0.0.1:8090` / `10.0`（`.env:45`=60）/ `5` | 精排开关、地址、超时、候选倍数（细节见 06） | `config.py:83-95` |
 | `FASTEMBED_CACHE_PATH` | `/models` | 模型缓存目录（挂载宿主目录） | `docker-compose.yml:90`、:109 |
 | `HF_ENDPOINT` / `HF_HUB_DISABLE_XET` | `https://hf-mirror.com` / `1` | 首次下载的镜像与传输开关 | `docker-compose.yml:88-89` |
-| `INGEST_CONCURRENCY` | 2 | 并发流水线数（决定 `/embed` 的并发压力） | `config.py:137`、:286-291 |
+| `INGEST_CONCURRENCY` | 2 | 并发流水线数（决定 `/embed` 的并发压力） | `config.py:137`、:292-297 |
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 

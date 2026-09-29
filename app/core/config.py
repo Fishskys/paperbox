@@ -242,11 +242,17 @@ class Settings(BaseSettings):
     docling_ocr: bool = Field(default=False, alias="DOCLING_OCR")
     #: ``accurate`` | ``fast``.
     docling_table_mode: str = Field(default="accurate", alias="DOCLING_TABLE_MODE")
-    #: Formula LaTeX (plan decision 16). Expensive: 5.9s -> 39.2s on a 5-page
-    #: paper locally, 252s on the worst formula-dense paper. When it fails the
-    #: client retries once with formulas off and reports ``formulas=text``.
+    #: Formula LaTeX (plan decision 16) -- **off by default**: it is the single
+    #: most expensive knob (measured 5.9s -> 39.2s on a 5-page paper, 252s on the
+    #: worst formula-dense one, and ~310s for a full 5.9MB import against ~52s on
+    #: the pypdf path). Deployments that need ``$$...$$`` turn it on together with
+    #: ``DOCLING_FORMULA_PRESET`` and an image that carries the formula models.
+    #: When it *is* on and the server fails on it, the client retries once with
+    #: formulas off and reports ``formulas=text``. The value is part of the parse
+    #: artifact cache identity (see ``parser_service.parse_options``), so
+    #: flipping it re-parses instead of replaying a differently-shaped markdown.
     docling_formula_enrichment: bool = Field(
-        default=True, alias="DOCLING_FORMULA_ENRICHMENT"
+        default=False, alias="DOCLING_FORMULA_ENRICHMENT"
     )
     #: Required *together with* ``do_formula_enrichment``: on its own the server
     #: answers 404 (``Preset 'default' not found for CodeFormulaVlmOptions``).

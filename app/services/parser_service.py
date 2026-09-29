@@ -54,9 +54,10 @@ DOCLING_FALLBACK_PREFIX = "docling unavailable"
 DOCLING_BACKEND = "docling"
 
 #: Bumped whenever the *meaning* of a stored artifact changes (markdown dialect,
-#: normalization, span computation): an entry written under an older value is
-#: re-parsed instead of replayed.
-PARSE_CACHE_VERSION = 1
+#: normalization, span computation, or the request-option fingerprint below): an
+#: entry written under an older value is re-parsed instead of replayed.
+#: 2 = ``parse-meta.json`` carries ``options`` and replay requires the same ones.
+PARSE_CACHE_VERSION = 2
 PARSE_MARKDOWN_ARTIFACT = "document.md"
 PARSE_JSON_ARTIFACT = "document.json"
 PARSE_META_ARTIFACT = "parse-meta.json"
@@ -205,6 +206,28 @@ def _max_pages_range() -> str | None:
 def _partial_parse(page_range: str | None) -> bool:
     """True when this call parses less than the whole document."""
     return page_range is not None or _max_pages_range() is not None
+
+
+def parse_options() -> dict[str, Any]:
+    """The request options that shape the markdown, as a cache-identity dict.
+
+    A stored artifact is only replayed when the *same* options produced it: the
+    formula switch changes the text (``$$...$$`` vs plain), ``PARSER_MAX_PAGES``
+    changes the page set, and page break / table mode / OCR change the dialect.
+    Replaying across such a change would silently hand the pipeline a markdown
+    that does not correspond to the current configuration -- so the options are
+    written into ``parse-meta.json`` and compared on load. Deliberately one dict
+    for both backends: it over-invalidates the pypdf path when a docling-only
+    knob moves, and a cheap local re-parse is the right price for that.
+    """
+    return {
+        "ocr": bool(settings.docling_ocr),
+        "table_mode": str(settings.docling_table_mode),
+        "formula": bool(settings.docling_formula_enrichment),
+        "formula_preset": str(settings.docling_formula_preset),
+        "page_break": str(settings.docling_page_break),
+        "max_pages": int(settings.parser_max_pages),
+    }
 
 
 def _resolve_backend(backend: str | None) -> str:
@@ -444,6 +467,19 @@ def _load_cached_bundle(
         return None
     if meta.get("backend") != backend:
         return None
+    if meta.get("options") != parse_options():
+        logger.info(
+            "parse cache is stale: parse options changed",
+            extra={
+                "extra_fields": {
+                    "paper_id": paper_id,
+                    "backend": backend,
+                    "cached": meta.get("options"),
+                    "current": parse_options(),
+                }
+            },
+        )
+        return None
     if meta.get("degraded_reason"):
         # A degraded parse is kept for inspection but never replayed: whatever
         # broke the backend may be fixed by the next attempt.
@@ -549,6 +585,7 @@ def _store_bundle(
         "degraded_reason": bundle.degraded_reason,
         "filename": filename,
         "page_range": page_range,
+        "options": parse_options(),
         "created_at": (now or datetime.now(timezone.utc)).isoformat(),
         "timings": dict(bundle.timings),
         "headings": [list(item) for item in bundle.headings],

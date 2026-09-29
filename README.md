@@ -302,7 +302,7 @@ PDF 解析有两个后端，输出**同一份 markdown 方言**（标题层级�
 
 | 后端 | 做什么 | 何时用 |
 |------|--------|--------|
-| `docling` | 远端 `docling-serve` 转换：版面模型给阅读顺序、表格结构、公式 LaTeX；页眉页脚与页号在客户端剔除 | 论文主路径（两栏、公式、表格） |
+| `docling` | 远端 `docling-serve` 转换：版面模型给阅读顺序、表格结构；公式 LaTeX 要显式打开（见 `DOCLING_FORMULA_ENRICHMENT`）；页眉页脚与页号在客户端剔除 | 论文主路径（两栏、表格） |
 | `pypdf` | 进程内纯 Python：`extract_pages` + 分栏修复 + 启发式标题；无公式、表格只留占位 | docling 不可用时的降级；或刻意摸底对比 |
 
 ```bash
@@ -311,7 +311,15 @@ PARSER_BACKEND=pypdf    # 降级侧：进程内一档、零依赖，无公式、
 PARSER_CONCURRENCY=1    # 同时允许几个 docling 转换（进程内信号量）
 PARSER_CACHE=true       # 解析产物存 MinIO，按 (paper_id, backend, 解析器版本) 复用
 PARSER_MAX_PAGES=0      # 0=整篇；>0 只解析前 N 页（只作用于 docling，会记进 degraded_reason）
+DOCLING_FORMULA_ENRICHMENT=false     # 公式 LaTeX，默认关；要开就 true（同时配 preset + 带公式模型的镜像）
+DOCLING_FORMULA_PRESET=codeformulav2 # 仅公式开时发送；不配 preset 服务端直接 404
 ```
+
+**公式是一个部署开关，默认关**（2026-09-30 起）：它是最贵的一项 —— 实测同一篇 5 页论文
+5.9 s → 39.2 s，公式密集的 7 页论文 252 s，一篇 5.9 MB 论文整篇导入带公式 ~310 s
+（同一篇走降级侧 pypdf 只要 ~52 s）。关掉时请求里 `do_formula_enrichment=false` 且不发 preset，
+公式以纯文本形式回来；打开时若服务端在公式上失败，客户端会自动去掉公式重试一次并记 `formulas=text`。
+**这个值进解析产物缓存身份**：改了它不会重放旧产物，会真解析一遍。
 
 **降级永远是显式的**，绝不静默：
 
@@ -330,8 +338,10 @@ PARSER_MAX_PAGES=0      # 0=整篇；>0 只解析前 N 页（只作用于 doclin
   — 这是降级后端的能力边界，不是异常。
 
 **解析产物缓存**（MinIO `papers/<id>/extracted/parsed/`）：命中要求 markdown 对象还在、
-docling 服务端报的版本与当初一致（`GET /version`，毫秒级）、当初不是降级产物；
-**部分解析（`--page-range` 或 `PARSER_MAX_PAGES>0`）既不读缓存也不写缓存** — 拿半篇冒充整篇比慢一点更糟。
+docling 服务端报的版本与当初一致（`GET /version`，毫秒级）、**当初的解析选项与现在完全一致**
+（`parse-meta.json` 的 `options`：OCR / 表格模式 / 公式开关与 preset / 页标记 / 页数上限）、
+当初不是降级产物；**部分解析（`--page-range` 或 `PARSER_MAX_PAGES>0`）既不读缓存也不写缓存**
+— 拿半篇冒充整篇比慢一点更糟。
 
 **已接入正式流水线**（2026-09-30）：导入的解析段就是 `parser_service.parse_paper_file`，
 切块走 `chunk_markdown`（markdown → 反推 pages+sections → `chunk_document`），
