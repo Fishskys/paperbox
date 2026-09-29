@@ -1,7 +1,7 @@
 """FastAPI application for paperbox.
 
 Wiring only: the app object, the request-id middleware and the routers that
-already exist. Endpoints are added phase by phase (see ``MVP-SPEC.md``).
+already exist. Endpoints are added phase by phase (see ``docs/architecture/MVP-SPEC.md``).
 
 Run locally with::
 

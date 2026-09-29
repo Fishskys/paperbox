@@ -2,7 +2,7 @@
 
 论文知识服务：**导入 → 解析 → 分块 → Embedding → 索引 → 混合检索 → REST API**。
 无前端、无 Agent 逻辑，只提供事实与检索能力，供 Hermes 主 Agent 通过 HTTP 调用
-（架构与需求见 `plan.md`，实现规范见 `MVP-SPEC.md`）。
+（架构与需求见 `.hermes/plans/2026-09-10_215600-paperbox-master-plan.md`，实现规范见 `docs/architecture/MVP-SPEC.md`）。
 
 ```
 Hermes / 其他调用方
@@ -212,7 +212,7 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
 
 ### 3.4 元数据：多来源、外部导入、手动编辑（2026-09-21）
 
-架构权威是 `docs/metadata-architecture.md`；实测数字与坑见 `progress.md` §17。
+架构权威是 `docs/architecture/metadata-architecture.md`；实测数字与坑见 `docs/progress/project.md` §17。
 
 **三层模型**：论文（`papers`，唯一）+ 来源记录（`paper_sources`，一份外部数据/一次解析一行）+
 字段声明（`paper_field_provenance`，谁在什么时候把哪个字段写成了什么）。标识符表
@@ -408,7 +408,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 - `rerank=true`（`POST /api/search`）：两阶段精排——先按 `top_k * RERANK_CANDIDATES` 扩大候选，再用交叉编码器（`RERANK_MODEL`）重排，取 `top_k * 2` 交给论文级聚合；服务不可用时自动降级为原顺序（`rerank_score` 为 `null`），不报错
 - **精排模型与限批（`RERANK_MODEL` / `RERANK_MAX_BATCH`）**：交叉编码器的激活内存随 `(token × 候选数)` 增长，所以精排有独立上限，与 embedding 的 `MAX_BATCH` 解耦（共用一个旋钮要么撑爆精排、要么让正常导入吃 422）。本机实测（WSL 9GB，`ORT_THREADS=4`，文档截断 2000 字符）：`jinaai/jina-reranker-v2-base-multilingual` 加载占 1.9GB，单批 4 条峰值 ~2.4GB、8 条 ~3.3GB、**16 条 ~5.1GB**，速度 ~1.1–1.4 s/候选；`Xenova/ms-marco-MiniLM-L-6-v2` 16 条仅 ~0.7GB、0.09 s/候选。**本机现用多语言档：`RERANK_MODEL=jinaai/jina-reranker-v2-base-multilingual` + `RERANK_MAX_BATCH=4`**（换轻量档请把 `RERANK_MAX_BATCH` 一起调回 16）
 - **精排超时必须跟着放大（`RERANK_TIMEOUT`）**：应用侧候选数 = `top_k × RERANK_CANDIDATES`（默认 5），精排后保留 `top_k × 2`。多语言档实测 ≈ **0.4–0.47 s/候选**（文档截断 2000 字符）⇒ `top_k=1` 约 2.3s、`top_k=10`（50 条候选）约 20s。默认 10 秒会让精排**静默降级**（响应里 `rerank.model=null`、`rerank_score=null`，日志 `rerank request failed ... {"error":"timed out"}`，结果仍是"能搜到但没重排"）→ 本机设 `RERANK_TIMEOUT=60`，覆盖到约 `top_k ≤ 28`；`top_k=50`（250 条候选 ≈100s）会超时降级，需要继续调大超时或调小 `RERANK_CANDIDATES`。实测端到端：`top_k=3` → 6.9s（精排 6.05s）、`top_k=10` → 20.4s（精排 19.7s），响应正常回报 `model` 与 `took_ms`
-- **查询改写（可选开关，P1 I，默认关闭）**：`QUERY_REWRITE_ENABLED=true` 时，含 CJK 的查询先经 `POST {QUERY_REWRITE_URL}/chat/completions` 改写成英文检索式再检索；响应多出 `rewritten_query`（实际检索文本）与 `rewrite{enabled,applied,model,took_ms}`，`query` 始终返回原始值（不入日志表之外的任何替换）。只对含 CJK 的查询改写，纯英文查询零额外调用；LLM 不可达/超时自动降级为原查询（仍 200，`rewrite.applied=false`）。开启时 `QUERY_REWRITE_URL`/`QUERY_REWRITE_API_KEY`/`QUERY_REWRITE_MODEL` 必须齐备，否则启动即报错（不会静默失效）。实测收益（10 条中文定标查询）：HR@1 **0.30 → 0.90**、MRR 0.473 → 0.950（真实 LLM 改写，`evals/report-zh-llm-rewrite.md`；阈值细节与配置键见 `progress.md` §12）
+- **查询改写（可选开关，P1 I，默认关闭）**：`QUERY_REWRITE_ENABLED=true` 时，含 CJK 的查询先经 `POST {QUERY_REWRITE_URL}/chat/completions` 改写成英文检索式再检索；响应多出 `rewritten_query`（实际检索文本）与 `rewrite{enabled,applied,model,took_ms}`，`query` 始终返回原始值（不入日志表之外的任何替换）。只对含 CJK 的查询改写，纯英文查询零额外调用；LLM 不可达/超时自动降级为原查询（仍 200，`rewrite.applied=false`）。开启时 `QUERY_REWRITE_URL`/`QUERY_REWRITE_API_KEY`/`QUERY_REWRITE_MODEL` 必须齐备，否则启动即报错（不会静默失效）。实测收益（10 条中文定标查询）：HR@1 **0.30 → 0.90**、MRR 0.473 → 0.950（真实 LLM 改写，`evals/report-zh-llm-rewrite.md`；阈值细节与配置键见 `docs/progress/project.md` §12）
 
 只用一个 embedding space：换模型时必须新建 `paper_chunks_v2` 并切别名，不要覆盖旧向量。当前生产索引正是 `paper_chunks_v2`（CJK 分词），别名 `paper_chunks_current` → v2。
 
@@ -511,12 +511,14 @@ Redis/Celery；**压缩包只支持 zip**（7z/rar/tar 不做：7z 无本机二�
 `/ingest/dir` 只在 PDF 与 app 同机/同挂载卷时可用（容器化部署需挂卷 + 配白名单）。
 这些属于 plan 的 P1/P2，接口已为其预留（`rerank`、`paper_chunks_v2` 别名切换、
 `ingestion_jobs` 状态机）。**注意**：两阶段精排、评测闭环、查询改写、作业重试、失败归因已在
-P1 落地（见 §5 与 `progress.md`），不在"不做"之列。
+P1 落地（见 §5 与 `docs/progress/project.md`），不在"不做"之列。
 
 ## 10. 给 AI Agent 的构建说明
 
-> **文档跟踪范围**：本仓库只跟踪 `README.md`。`plan.md`（权威需求）、`progress.md`（进度与实测
-> 数字）、`MVP-SPEC.md`（接口摘要）、`AGENTS.md`（环境契约与执行纪律）、`docs/`、`evals/*.md`
+> **文档跟踪范围**：本仓库只跟踪 `README.md`。`AGENTS.md`（环境契约与执行纪律）、`.hermes/plans/`（各阶段 plan，
+> 权威需求是 `2026-09-10_215600-paperbox-master-plan.md`）、`docs/` 下的四类文档 —— `architecture/`（结构文档，
+> 含 `MVP-SPEC.md` 接口摘要）、`progress/`（`project.md` 进度与实测数字、`parser.md` 解析线）、`examine/`（审查报告）、
+> `old/`（过时文档）—— 以及 `evals/*.md`
 > 都是**本地工作副本**（已在 `.gitignore`），克隆仓库看不到它们 —— 所以实现事实以**代码 + 本文**为准。
 
 ### 10.1 一次性构建
