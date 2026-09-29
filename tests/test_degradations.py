@@ -443,6 +443,29 @@ def test_a_pypdf_parse_reports_its_own_layout_degradation() -> None:
         assert sink.calls, "a degraded pypdf parse must be reported"
 
 
+class _InMemoryStore:
+    """Never let a unit test reach the real MinIO bucket (2026-09-29).
+
+    T7.3 first wrote this test without a store: ``parse_paper_file`` then fell
+    back to ``_default_store()`` and cached the artifact in the *live* bucket
+    under a random uuid, which showed up as two extra orphan objects in
+    ``GET /api/consistency``. Unit tests must not touch real infrastructure.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def upload_bytes(self, key: str, data: bytes, **kwargs) -> None:
+        self.objects[key] = data
+
+    def download_bytes(self, key: str) -> bytes:
+        from app.services.object_storage import ObjectNotFound
+
+        if key not in self.objects:
+            raise ObjectNotFound(key)
+        return self.objects[key]
+
+
 def test_parse_paper_file_passes_the_sink_through(monkeypatch, tmp_path) -> None:
     """The pipeline's entry point must not swallow the sink."""
     seen: list[tuple] = []
@@ -463,14 +486,18 @@ def test_parse_paper_file_passes_the_sink_through(monkeypatch, tmp_path) -> None
 
     monkeypatch.setattr(parser_service, "parse_pdf", fake_parse_pdf)
     sink = Sink()
+    store = _InMemoryStore()
     parser_service.parse_paper_file(
         new_uuid(),
         pdf_bytes(),
         filename="a.pdf",
         backend="pypdf",
         on_degrade=sink,
+        store=store,
     )
     assert seen == [sink]
+    # The parse went through: the sink was honoured *and* nothing left the process.
+    assert store.objects
 
 
 # --------------------------------------------------------------------------- #

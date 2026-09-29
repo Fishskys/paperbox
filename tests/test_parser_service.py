@@ -250,3 +250,78 @@ def test_two_consecutive_parses_do_not_deadlock_on_the_semaphore() -> None:
     for _ in range(2):
         bundle = parser_service.parse_pdf(_pdf_bytes(), filename="a.pdf", backend="pypdf")
         assert bundle.page_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# PARSER_MAX_PAGES (2026-09-29 T8): the key is documented in .env.example, so it
+# has to do something -- and what it does has to be visible in degraded_reason.
+# --------------------------------------------------------------------------- #
+def test_parser_max_pages_limits_docling_and_reports_it(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "parser_max_pages", 5)
+    seen: list[str | None] = []
+
+    def convert(data: bytes, *, filename: str, page_range: str | None = None):
+        seen.append(page_range)
+        return DoclingResult(
+            markdown=DOCLING_MARKDOWN, page_count=2, parser_version="docling 2.130.0"
+        )
+
+    bundle = parser_service.parse_pdf(
+        _pdf_bytes(), filename="a.pdf", backend="docling", converter=convert
+    )
+
+    assert seen == ["1-5"]
+    assert "pages=1-5" in (bundle.degraded_reason or "")
+    assert parser_service.degradation_codes(bundle.degraded_reason or "") == [
+        parser_service.CODE_PAGES_TRUNCATED
+    ]
+
+
+def test_explicit_page_range_wins_and_is_not_a_degradation(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "parser_max_pages", 5)
+    seen: list[str | None] = []
+
+    def convert(data: bytes, *, filename: str, page_range: str | None = None):
+        seen.append(page_range)
+        return DoclingResult(
+            markdown=DOCLING_MARKDOWN, page_count=2, parser_version="docling 2.130.0"
+        )
+
+    bundle = parser_service.parse_pdf(
+        _pdf_bytes(),
+        filename="a.pdf",
+        backend="docling",
+        page_range="2-3",
+        converter=convert,
+    )
+
+    # The caller asked for a slice on purpose; only PARSER_MAX_PAGES is a degradation.
+    assert seen == ["2-3"]
+    assert bundle.degraded_reason is None
+
+
+def test_parser_max_pages_leaves_the_pypdf_path_alone(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "parser_max_pages", 1)
+    bundle = parser_service.parse_pdf(_pdf_bytes(), filename="a.pdf", backend="pypdf")
+    assert bundle.page_count == 1  # the fixture is one page; nothing was sliced
+    assert "pages=" not in (bundle.degraded_reason or "")
+
+
+def test_parser_max_pages_reaches_the_ledger(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "parser_max_pages", 3)
+    events: list[tuple[str, str]] = []
+
+    def convert(data: bytes, *, filename: str, page_range: str | None = None):
+        return DoclingResult(
+            markdown=DOCLING_MARKDOWN, page_count=2, parser_version="docling 2.130.0"
+        )
+
+    parser_service.parse_pdf(
+        _pdf_bytes(),
+        filename="a.pdf",
+        backend="docling",
+        converter=convert,
+        on_degrade=lambda stage, code, detail: events.append((stage, code)),
+    )
+
+    assert events == [("parsing", parser_service.CODE_PAGES_TRUNCATED)]
