@@ -5,6 +5,10 @@
     uv run python scripts/reindex.py <paper_id> ...  # only the given papers
     uv run python scripts/reindex.py --missing       # only papers without chunks
     uv run python scripts/reindex.py --degraded      # only papers with an open degradation
+    uv run python scripts/reindex.py --degraded --degraded-stage parsing \
+        --degraded-code docling_unavailable          # exactly "docling was down"
+    uv run python scripts/reindex.py --parser-backend pypdf   # by stamp, ledger or not
+    uv run python scripts/reindex.py --parser-backend pypdf --dry-run   # just the list
 
 Use this after changing the chunking strategy, the embedding model or the
 OpenSearch mapping (plan sections 15 and 24). The index itself must exist:
@@ -16,6 +20,18 @@ semantic-chunking fallback -- and prints the ``stage/code`` pairs that put each
 paper on the list, so re-running once the missing dependency is back is one
 command. There is deliberately no per-stage variant: the pipeline is cheap to
 re-run end to end, and a partial re-run would have to fake the stages before it.
+
+``--parser-backend`` is the *stamp* selector and answers the other half of the
+same question: a paper parsed by pypdf has ``papers.parser_backend='pypdf'``
+whether that was a fallback (ledger row, ``--degraded`` sees it) or the configured
+backend at the time (no ledger row). ``unknown`` selects rows with no stamp at all
+-- the papers indexed before the column existed. So "docling is healthy again,
+re-parse everything it did not produce" is::
+
+    uv run python scripts/reindex.py --parser-backend pypdf
+    uv run python scripts/reindex.py --parser-backend unknown
+
+and ``--dry-run`` prints the selection without touching the library.
 """
 from __future__ import annotations
 
@@ -34,17 +50,39 @@ from app.core.config import settings  # noqa: E402
 from app.db.models import Paper, PaperChunk  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.search import opensearch  # noqa: E402
+from app.core.config import PARSER_BACKENDS  # noqa: E402
 from app.services import degradation_service, paper_service  # noqa: E402
+from app.services.consistency_service import UNKNOWN_BACKEND  # noqa: E402
 from app.workers import tasks  # noqa: E402
+
+#: Accepted values of ``--parser-backend``: the two real backends plus the key for
+#: "this row has no stamp" (same spelling the consistency census uses).
+STAMP_CHOICES = tuple(sorted(PARSER_BACKENDS | {UNKNOWN_BACKEND}))
 
 
 def targets(
-    session, paper_ids: list[str], missing_only: bool, degraded_only: bool = False
+    session,
+    paper_ids: list[str],
+    missing_only: bool,
+    degraded_only: bool = False,
+    *,
+    degraded_stage: str | None = None,
+    degraded_code: str | None = None,
+    parser_backend: str | None = None,
 ) -> list[Paper]:
-    """Non-deleted papers to reindex, narrowed by the requested filters."""
+    """Non-deleted papers to reindex, narrowed by every requested filter (AND).
+
+    ``degraded_only`` reads the ledger (``paper_degradations``), ``parser_backend``
+    reads the stamp on ``papers``; ``unknown`` means "no stamp at all".
+    """
     query = select(Paper).where(Paper.deleted_at.is_(None))
     if paper_ids:
         query = query.where(Paper.id.in_(paper_ids))
+    if parser_backend:
+        if parser_backend == UNKNOWN_BACKEND:
+            query = query.where(Paper.parser_backend.is_(None))
+        else:
+            query = query.where(Paper.parser_backend == parser_backend)
     papers = list(session.execute(query.order_by(Paper.created_at)).scalars())
     if missing_only:
         have = {
@@ -55,17 +93,20 @@ def targets(
         }
         papers = [paper for paper in papers if paper.id not in have]
     if degraded_only:
-        flagged = degradation_service.paper_ids_with_open_degradations(session)
+        flagged = degradation_service.paper_ids_with_open_degradations(
+            session, stage=degraded_stage, code=degraded_code
+        )
         papers = [paper for paper in papers if paper.id in flagged]
     return papers
 
 
-def _print_reasons(session, paper_ids: list[str]) -> None:
-    """Say why each selected paper is on the list (plan T7.3)."""
-    for paper_id in paper_ids:
-        rows = degradation_service.list_for_paper(session, paper_id)
-        codes = ", ".join(f"{row.stage}/{row.code}" for row in rows) or "?"
-        print(f"  degraded: {paper_id}: {codes}")
+def _print_reasons(session, papers: list[Paper]) -> None:
+    """Say why each selected paper is on the list: stamp + open degradations."""
+    for paper in papers:
+        rows = degradation_service.list_for_paper(session, paper.id)
+        codes = ", ".join(f"{row.stage}/{row.code}" for row in rows) or "-"
+        stamp = paper.parser_backend or UNKNOWN_BACKEND
+        print(f"  {paper.id}: stamp={stamp} degraded={codes}")
 
 
 def main() -> int:
@@ -100,11 +141,25 @@ def main() -> int:
         action="store_true",
         help="print every open degradation and exit (no reindex)",
     )
+    parser.add_argument(
+        "--parser-backend",
+        default=None,
+        choices=STAMP_CHOICES,
+        help=(
+            "only papers whose current parser stamp is this backend (reads "
+            "papers.parser_backend, so it also catches papers imported while that "
+            "backend was configured on purpose); 'unknown' = no stamp yet"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the selection (with stamp and open degradations) and exit",
+    )
     args = parser.parse_args()
 
     print(f"embedding model : {settings.embedding_model}")
     print(f"index alias     : {settings.opensearch_alias}")
-    opensearch.ensure_index()
 
     session = SessionLocal()
     failures = 0
@@ -128,23 +183,26 @@ def main() -> int:
                 print(f"  {paper_id}: {', '.join(codes)}")
             return 0
 
-        if args.degraded and (args.degraded_stage or args.degraded_code):
-            flagged = degradation_service.paper_ids_with_open_degradations(
-                session, stage=args.degraded_stage, code=args.degraded_code
-            )
-            papers = [
-                paper
-                for paper in targets(session, args.paper_ids, args.missing)
-                if paper.id in flagged
-            ]
-        else:
-            papers = targets(session, args.paper_ids, args.missing, args.degraded)
+        papers = targets(
+            session,
+            args.paper_ids,
+            args.missing,
+            args.degraded,
+            degraded_stage=args.degraded_stage,
+            degraded_code=args.degraded_code,
+            parser_backend=args.parser_backend,
+        )
         if not papers:
-            print("nothing to reindex")
+            print("nothing to reindex" if not args.dry_run else "no paper matches")
+            return 0
+        if args.dry_run:
+            print(f"would reindex {len(papers)} paper(s)")
+            _print_reasons(session, papers)
             return 0
         print(f"reindexing {len(papers)} paper(s)")
-        if args.degraded:
-            _print_reasons(session, [paper.id for paper in papers])
+        if args.degraded or args.parser_backend:
+            _print_reasons(session, papers)
+        opensearch.ensure_index()
         for index, paper in enumerate(papers, start=1):
             started = time.perf_counter()
             label = f"[{index}/{len(papers)}] {paper.id} {(paper.title or '')[:48]!r}"

@@ -318,6 +318,12 @@ PARSER_MAX_PAGES=0      # 0=整篇；>0 只解析前 N 页（只作用于 doclin
 * docling 连不上 / 超时 / 返回非 JSON → 回落到 pypdf，`ParseBundle.degraded_reason` 写上原因，
   同时进 `paper_degradations` 账本（`stage=parsing`, `code=docling_unavailable`），
   `GET /api/papers/{id}/degradations` 能看到，`scripts/reindex.py --degraded` 能筛出来。
+* **降级过的论文怎么找回来（docling 恢复后一键重建）**：账本筛「这次降级了」——
+  `uv run python scripts/reindex.py --degraded --degraded-stage parsing --degraded-code docling_unavailable`
+  （先 `--degradations` 只列清单）；戳筛「现在是谁产的」——
+  `uv run python scripts/reindex.py --parser-backend pypdf`（连「当时就把后端配成 pypdf」的论文一起选）
+  与 `--parser-backend unknown`（打戳之前索引的存量论文）。**加 `--dry-run` 只列不跑**；
+  真跑会整篇 parse→chunk→embed→index，成功后账本行自动盖 `resolved_at`，再筛就不会重复选中。
 * docling 第一次带公式失败（缺模型、超时）→ 关掉公式重试一次，成功则记 `formulas=text`
   （公式退化为纯文本），不是整篇失败。
 * pypdf 侧带 `no formula latex`（一定能变；再按文档实际情况加 `table structure`、`reading order not verified`）
@@ -333,11 +339,13 @@ docling 服务端报的版本与当初一致（`GET /version`，毫秒级）、�
 
 * 改 `PARSER_BACKEND` **立刻影响新导入与 reindex**；
 * 每篇论文落 `papers.parser_backend` / `parser_version`，索引文档也带同样的两个字段 ——
-  想知道哪些论文还是旧后端，`GET /api/consistency` 的 `parser_backends`（或直接按
-  `parser_backend: pypdf` 过滤索引）一眼可见；
+  想知道哪些论文还是旧后端，`GET /api/consistency` 的 `parser_backends` 给**计数**，
+  加 `?parser_papers=true` 连**每篇 id** 一起给（上限 `PARSER_PAPER_ID_LIMIT=2000`，
+  超了置 `paper_ids_truncated`；或直接按 `parser_backend: pypdf` 过滤索引）；
 * **存量论文换后端只能 reindex**：同一份 PDF 再导一次会被判重复（指纹是 DOI/arXiv 身份，不是字节），
   不会重解析。`POST /api/papers/{id}/reindex` 会按当前后端重解析；
   缓存按 `(paper_id, backend)` 分目录，所以换后端必然未命中 = 真跑一次远程解析。
+  **批量换**用 `uv run python scripts/reindex.py --parser-backend pypdf --dry-run` 先看清单（`unknown` 选没打戳的）。
 
 **两条后端的真机对照**（`scripts/acceptance_parser.py`，只读、不写库，跑完自净）：
 
@@ -477,9 +485,9 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 脚本 | 用途 |
 |------|------|
 | `scripts/create_index.py` | 幂等创建 `paper_chunks_v1` + 别名 `paper_chunks_current`；`--index/--alias` 可指定，`--migrate-from <old>` 服务端 `_reindex` 整批拷贝（**不重新 embedding**）后原子切别名，旧索引保留供回滚 |
-| `scripts/reindex.py` | 全量/指定论文重建（`--missing` 只补没有 chunks 的论文） |
+| `scripts/reindex.py` | 全量/指定论文重建；选谁：`--missing`（没有 chunks）、`--degraded`（有未解决降级，可配 `--degraded-stage`/`--degraded-code`）、`--parser-backend pypdf\|docling\|unknown`（按解析戳，含「当时就配成该后端」的论文）；`--degradations` 只列账本，`--dry-run` 只列选中项（含戳与降级原因） |
 | `scripts/purge_deleted.py` | 清理已删论文遗留的索引文档与 MinIO 对象（`--dry-run` 可先预览）；`--hard` **连 PostgreSQL 行一起删**（chunks/files/identifiers/sources/provenance/authors/tags/jobs + 论文行，逐表打印计数；**不可逆**，安全网是 `backups/` 里的 `pg_dump`） |
-| `scripts/check_consistency.py` | 三端（PG / MinIO / OpenSearch）只读对账：逐篇核对文件行↔对象、chunk 行↔文档，报出缺失索引/缺失 chunk/缺失文档/孤儿对象/孤儿文档/删除残留；`--no-fail` 只报告不返回非 0 |
+| `scripts/check_consistency.py` | 三端（PG / MinIO / OpenSearch）只读对账：逐篇核对文件行↔对象、chunk 行↔文档，报出缺失索引/缺失 chunk/缺失文档/孤儿对象/孤儿文档/删除残留；`--no-fail` 只报告不返回非 0，`--parser-papers` 连每个后端戳下的论文 id 一起列（`reindex.py --parser-backend` 的工作清单） |
 | `scripts/refresh_index_metadata.py` | 批量改写**已索引文档的元数据快照**（不动 `embedding`/`text`，不重跑 embedding）：先 `PUT _mapping` 补新字段，再对每个 chunk 发 partial update；`--dry-run` / `--paper-id` / `--limit` / `--no-mapping` |
 | `scripts/healthcheck.py` | 四个依赖 + 应用健康检查与文档数统计 |
 | `scripts/acceptance.py` | 端到端验收：跑 plan §38 的 8 条 MVP 标准（真实导入/检索/鉴权） |

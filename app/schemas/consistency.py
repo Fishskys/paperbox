@@ -57,6 +57,11 @@ class ParserBackendsOut(BaseModel):
 
     papers: dict[str, int] = Field(default_factory=dict)
     documents: dict[str, int] = Field(default_factory=dict)
+    #: Opt-in (``?parser_papers=true``): live paper ids per stamp -- the worklist
+    #: for ``scripts/reindex.py --parser-backend <name>``.
+    paper_ids: dict[str, list[str]] = Field(default_factory=dict)
+    #: True when ``paper_ids`` hit the service-side cap.
+    paper_ids_truncated: bool = False
 
 
 class ConsistencyOut(BaseModel):

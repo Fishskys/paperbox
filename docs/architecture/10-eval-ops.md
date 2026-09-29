@@ -51,13 +51,13 @@
 | | `main` | 74-103 | 依赖逐项检查 + 索引文档计数，`RESULT:` 汇总 |
 | `scripts/acceptance.py`（231） | `Checker` | 49-61 | 逐条 `PASS/FAIL/SKIP` 记录与汇总 |
 | | `main` | 64-227 | 跑 plan §38 的 8 条（外加 `0 dependencies healthy`，共 9 行输出） |
-| `scripts/reindex.py`（93） | `targets` | 33-46 | 未删论文；`--missing` 时排除已有 chunks 的论文 |
+| `scripts/reindex.py`（228） | `targets` | 63-101 | 未删论文；`--missing` 排除已有 chunks；`--degraded[-stage/-code]` 按账本未解决降级；`--parser-backend` 按 `papers.parser_backend`（`unknown` = 无戳）；三者 AND |
 | | `main` | 49-89 | 逐篇 `tasks.reindex_paper`，统计 chunks 与 stage |
 | `scripts/purge_deleted.py`（183） | `deleted_papers` | 63-71 | 全部软删论文，按 `deleted_at` 升序 |
 | | `count_index_docs` | 43-49 | 指定论文在别名索引里的 chunk 文档数 |
 | | `hard_delete_paper` | 81-108 | `--hard`：逐表删该论文的 chunks/files/identifiers/sources/provenance/authors/tags/jobs + `papers` 行，返回各表计数 |
 | | `main` | 109-183 | 逐篇删 OpenSearch 文档 + MinIO 前缀；`--dry-run` 只预览；`--hard` 追加删 PG 行 |
-| `scripts/check_consistency.py`（111） | `main` | 84-111 | 真机三端对账；有漂移返回 1，`--no-fail` 恒 0 |
+| `scripts/check_consistency.py`（131） | `main` | 96-131 | 真机三端对账；有漂移返回 1，`--no-fail` 恒 0，`--parser-papers` 连每个后端戳的论文 id 一起列 |
 | `scripts/refresh_index_metadata.py`（141） | `paper_ids_statement` / `build_updates` / `main` | 41-58 / 81-93 / 94-141 | 先 `update_mapping`（除非 `--no-mapping`）再批量 partial update；`--dry-run` / `--paper-id` / `--limit` |
 | `scripts/bulk_ingest.py`（397） | `parse_arxiv_list` | 72-98 | 解析 `id<TAB>topic<TAB>title`，忽略 `#`/空行，id 去重 |
 | | `fetch_existing_arxiv_ids` / `start_ingest` / `poll_job` | 114 / 137 / 151 | 分页 `GET /api/papers` 收集已有 `arxiv_id`（`--resume`）；`POST /api/papers/ingest` → 轮询 `GET /api/jobs/{id}` 到终态或超时 |
@@ -222,9 +222,9 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 |---|---|---|---|---|---|
 | `healthcheck.py` | 四依赖 + API 健康检查与文档数 | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py:103`） |
 | `acceptance.py` | plan §38 端到端验收 9 项 | `--api`、`--url` | 否（会真导入一篇 arXiv PDF，判重则复用） | **写**：导入论文 | `0` 全 PASS / `1` 有 FAIL（`acceptance.py:61, 118`） |
-| `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引 | `0` 无失败 / `1` 有失败（`reindex.py:60`） |
+| `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing`、`--degraded`（+`--degraded-stage`/`--degraded-code`）、`--degradations`、`--parser-backend`、`--dry-run` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引（`--dry-run`/`--degradations` 只读不写） | `0` 无失败 / `1` 有失败（`reindex.py:222, 228`） |
 | `purge_deleted.py` | 清已删论文的索引文档与 MinIO 对象 | `--dry-run` | 是 | **写**：删索引文档 + 对象（PG 行保留） | 无残留 `0`；有失败 `1`；`--dry-run` 恒 `0`（`purge_deleted.py:126-128, 96, 101`） |
-| `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留 | `--no-fail` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:89-116`） |
+| `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留 | `--no-fail`、`--parser-papers` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:96-132`） |
 | `refresh_index_metadata.py` | 批量改写已索引文档的元数据快照（不重算向量） | `--dry-run`、`--paper-id`、`--limit`、`--no-mapping` | 是（同元数据同输出） | **写**：`PUT _mapping` + 每个 chunk 一条 partial update | 全成功 `0` / 有失败 `1`（`refresh_index_metadata.py:94-141`） |
 | `bulk_ingest.py` | 按 arXiv 清单串行导入 | `--file`、`--limit`、`--resume`、`--dry-run`、`--out`、`--timeout`、`--poll-interval`、`--base-url`、`--api-key` | 否（`--resume` 靠 `arxiv_id` 跳过） | **写**：批量导入 | 无失败 `0`；有失败 `1`；`--dry-run` `0`；`--limit<=0` `2`（`bulk_ingest.py:260-262, 289, 393`） |
 | `bulk_ingest_dir.py` | 导入一个文件夹 | `--root`(必需)、`--glob`、`--no-recursive`、`--limit`、`--via-http`、`--resume`、`--dry-run`、`--max-file-mb`、`--out`、`--timeout`、`--poll-interval` | 否（`--resume` 按相对路径跳过） | **写**：批量导入 | 无 error 且 `failed=0` 且 `rejected=0` → `0`，否则 `1`；root 非目录 / `--limit<=0` → `2`（`bulk_ingest_dir.py:482-484, 503-505, 591`） |

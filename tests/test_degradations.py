@@ -18,6 +18,8 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from app.api.papers import router as papers_router  # noqa: F401 - import side effect
 from app.core.security import require_api_key
 from app.db.models import Paper, PaperDegradation, new_uuid
+from datetime import datetime, timezone
+
 from app.db.session import get_db
 from app.main import app
 from app.parsing.chunking import chunk_document
@@ -664,6 +666,91 @@ def test_reindex_degradations_listing_shows_stage_code_pairs(
     out = capsys.readouterr().out
     assert "1 open degradation(s)" in out
     assert f"{paper_id}: parsing/docling_unavailable" in out
+
+
+def test_reindex_targets_can_select_a_backend_stamp(db_session) -> None:
+    """``--parser-backend`` reads the stamp, so it also catches a configured backend."""
+    from scripts.reindex import UNKNOWN_BACKEND, targets
+
+    docling = add_paper(db_session, parser_backend="docling", parser_version="2.1")
+    pypdf = add_paper(db_session, parser_backend="pypdf", parser_version="6.18")
+    legacy = add_paper(db_session)  # no stamp at all
+    gone = add_paper(db_session, parser_backend="pypdf")
+    gone_paper = db_session.get(Paper, gone)
+    gone_paper.deleted_at = datetime.now(timezone.utc)
+    db_session.flush()
+
+    def picked(**kwargs) -> set[str]:
+        return {paper.id for paper in targets(db_session, [], False, **kwargs)}
+
+    assert picked() == {docling, pypdf, legacy}
+    assert picked(parser_backend="docling") == {docling}
+    assert picked(parser_backend="pypdf") == {pypdf}
+    assert picked(parser_backend=UNKNOWN_BACKEND) == {legacy}
+
+
+def test_reindex_targets_combine_the_stamp_with_the_ledger(db_session) -> None:
+    """Both filters are AND-ed: "fell back to pypdf", not "is stamped pypdf"."""
+    from scripts.reindex import targets
+
+    fell_back = add_paper(db_session, parser_backend="pypdf")
+    by_choice = add_paper(db_session, parser_backend="pypdf")
+    ledger.record(
+        db_session,
+        paper_id=fell_back,
+        stage=ledger.STAGE_PARSING,
+        code="docling_unavailable",
+    )
+    chosen = {
+        paper.id
+        for paper in targets(
+            db_session,
+            [],
+            False,
+            True,
+            degraded_stage=ledger.STAGE_PARSING,
+            degraded_code="docling_unavailable",
+            parser_backend="pypdf",
+        )
+    }
+    assert chosen == {fell_back}
+    assert by_choice not in chosen
+
+
+def test_reindex_dry_run_lists_the_selection_without_indexing(
+    db_session, capsys, monkeypatch
+) -> None:
+    from scripts import reindex
+
+    pypdf = add_paper(db_session, parser_backend="pypdf", parser_version="6.18")
+    add_paper(db_session, parser_backend="docling", parser_version="2.1")
+    db_session.commit()
+
+    class Factory:
+        def __call__(self):
+            return db_session
+
+    touched: list[str] = []
+    monkeypatch.setattr(reindex, "SessionLocal", Factory())
+    monkeypatch.setattr(
+        reindex.opensearch, "ensure_index", lambda *a, **k: touched.append("index")
+    )
+    monkeypatch.setattr(
+        reindex.tasks, "reindex_paper", lambda *a, **k: touched.append("reindex")
+    )
+    monkeypatch.setattr(reindex.settings, "embedding_model", "test-model")
+    monkeypatch.setattr(reindex.settings, "opensearch_alias", "test-alias")
+
+    import sys
+
+    monkeypatch.setattr(
+        sys, "argv", ["reindex.py", "--parser-backend", "pypdf", "--dry-run"]
+    )
+    assert reindex.main() == 0
+    out = capsys.readouterr().out
+    assert "would reindex 1 paper(s)" in out
+    assert f"{pypdf}: stamp=pypdf degraded=-" in out
+    assert touched == []
 
 
 def test_job_id_foreign_key_column_is_optional(db_session) -> None:

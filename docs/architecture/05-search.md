@@ -76,7 +76,7 @@
 | `ieee_terms` / `author_terms` / `dynamic_index_terms` / `source_tags` | `keyword` | 按 `papers_tags.kind` 分列的索引词；`tags` 仍是四者的并集（`mappings.py:96`） |
 | `embedding` | `knn_vector(1024)` | `hnsw` / `l2` / `lucene`，`ef_construction=128`、`m=16`（`mappings.py:122`） |
 | `embedding_model` / `embedding_dimension` / `created_at` | `keyword` / `integer` / `date` | |
-| `parser_backend` / `parser_version` | `keyword` | **哪条解析器产出了这条 chunk**（`mappings.py:137-138`，值来自 `papers` 的两个戳列，`tasks.py:1095-1096`）。可以按它筛出「后端切换没覆盖到」的论文（`parser_backend: pypdf`）；同一个字段也是 `GET /api/consistency` 的 `parser_backends` 普查依据 |
+| `parser_backend` / `parser_version` | `keyword` | **哪条解析器产出了这条 chunk**（`mappings.py:137-138`，值来自 `papers` 的两个戳列，`tasks.py:1095-1096`）。可以按它筛出「后端切换没覆盖到」的论文（`parser_backend: pypdf`）；同一个字段也是 `GET /api/consistency` 的 `parser_backends` 普查依据（加 `?parser_papers=true` 连论文 id 清单一起给，`scripts/reindex.py --parser-backend pypdf\|unknown` 直接吃这份清单） |
 
 索引 settings：`index.knn=true`、1 shard、0 replica；`dynamic: true`（`mappings.py:155`）。文档 `_id` = `chunk_id`（`opensearch.py:320`）。
 

@@ -4,6 +4,7 @@
     uv run python scripts/check_consistency.py
     uv run python scripts/check_consistency.py --json
     uv run python scripts/check_consistency.py --limit 500 --no-fail
+    uv run python scripts/check_consistency.py --parser-papers   # + per-backend paper ids
 
 Prints the store totals, then every paper whose copies disagree, then objects and
 documents that have no paper row. Exits non-zero when anything drifted (``--no-fail``
@@ -47,6 +48,12 @@ def print_report(report) -> None:
         f"  parser    : papers {census.get('papers') or {}}  "
         f"documents {census.get('documents') or {}}"
     )
+    for backend, ids in (census.get("paper_ids") or {}).items():
+        print(f"    {backend}: {len(ids)} paper(s)")
+        for paper_id in ids:
+            print(f"      {paper_id}")
+    if census.get("paper_ids_truncated"):
+        print("    note: the paper id list hit its cap")
     print(
         "consistent: "
         + ("yes" if data["consistent"] else "NO")
@@ -100,9 +107,18 @@ def main() -> int:
         action="store_true",
         help="exit 0 even when drift was found",
     )
+    parser.add_argument(
+        "--parser-papers",
+        action="store_true",
+        help=(
+            "also list the live paper ids behind each parser stamp -- the worklist "
+            "for `scripts/reindex.py --parser-backend <name>`"
+        ),
+    )
     args = parser.parse_args()
-
-    report = consistency_service.check_consistency(limit=args.limit)
+    report = consistency_service.check_consistency(
+        limit=args.limit, with_parser_papers=args.parser_papers
+    )
     if args.json:
         print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
     else:

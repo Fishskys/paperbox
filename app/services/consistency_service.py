@@ -80,6 +80,10 @@ ORPHAN_SAMPLE = 100
 #: Census key for rows/documents that carry no parser stamp at all.
 UNKNOWN_BACKEND = "unknown"
 
+#: Cap on the opt-in per-backend paper id lists (``with_parser_papers``): the
+#: worklist for a backend switch is a few hundred ids, not an export dump.
+PARSER_PAPER_ID_LIMIT = 2000
+
 
 @dataclass
 class PaperConsistency:
@@ -147,6 +151,11 @@ class ConsistencyReport:
     errors: list[str]
     truncated: bool
     took_ms: float
+    #: Opt-in (``with_parser_papers``): the live paper ids behind each stamp, so
+    #: "docling is back, re-parse the fallbacks" has a worklist, not just a count.
+    parser_backends_paper_ids: dict[str, list[str]] = field(default_factory=dict)
+    #: True when the id lists above hit :data:`PARSER_PAPER_ID_LIMIT`.
+    parser_backends_paper_ids_truncated: bool = False
     checked_at: str = ""
 
     @property
@@ -182,6 +191,11 @@ class ConsistencyReport:
             "parser_backends": {
                 "papers": dict(sorted(self.parser_backends_papers.items())),
                 "documents": dict(sorted(self.parser_backends_documents.items())),
+                "paper_ids": {
+                    key: list(value)
+                    for key, value in sorted(self.parser_backends_paper_ids.items())
+                },
+                "paper_ids_truncated": self.parser_backends_paper_ids_truncated,
             },
             "problems": [problem.as_dict() for problem in self.problems],
             "orphan_objects": list(self.orphan_objects),
@@ -321,6 +335,26 @@ def _census(values: Iterable[str | None]) -> dict[str, int]:
     return counts
 
 
+def _census_ids(
+    rows: Iterable[tuple[str, str | None]],
+) -> tuple[dict[str, list[str]], bool]:
+    """Live paper ids grouped by stamp -- the opt-in detail behind ``_census``.
+
+    Sorted per backend so the output is stable, and capped at
+    :data:`PARSER_PAPER_ID_LIMIT` (the second element says the cap was hit).
+    """
+    grouped: dict[str, list[str]] = {}
+    truncated = False
+    for paper_id, value in rows:
+        key = str(value or UNKNOWN_BACKEND)
+        bucket = grouped.setdefault(key, [])
+        if len(bucket) >= PARSER_PAPER_ID_LIMIT:
+            truncated = True
+            continue
+        bucket.append(str(paper_id))
+    return ({key: sorted(grouped[key]) for key in sorted(grouped)}, truncated)
+
+
 def _document_census(
     documents: Mapping[str, int], backends: Mapping[str, Mapping[str, int]]
 ) -> dict[str, int]:
@@ -430,11 +464,16 @@ def check_consistency(
     client: Any = None,
     alias: str = opensearch.ALIAS,
     limit: int = DEFAULT_PROBLEM_LIMIT,
+    with_parser_papers: bool = False,
 ) -> ConsistencyReport:
     """Run the three-way check and return the report (read-only, never raises).
 
     ``storage``/``client``/``session_factory`` are injectable so the check can be
     unit-tested without MinIO, OpenSearch or PostgreSQL.
+
+    ``with_parser_papers`` adds the per-backend live paper id lists: the worklist
+    for re-parsing what a backend switch did not reach. Opt-in, because the
+    default report is a summary rather than an export.
     """
     started = time.perf_counter()
     errors: list[str] = []
@@ -499,6 +538,15 @@ def check_consistency(
         paper_id for paper_id in documents if paper_id not in papers
     )
 
+    paper_ids: dict[str, list[str]] = {}
+    paper_ids_truncated = False
+    if with_parser_papers:
+        paper_ids, paper_ids_truncated = _census_ids(
+            (paper_id, row.parser_backend)
+            for paper_id, row in papers.items()
+            if not row.deleted
+        )
+
     took_ms = round((time.perf_counter() - started) * 1000, 3)
     report = ConsistencyReport(
         index=alias,
@@ -521,6 +569,8 @@ def check_consistency(
             row.parser_backend for row in papers.values() if not row.deleted
         ),
         parser_backends_documents=_document_census(documents, document_backends),
+        parser_backends_paper_ids=paper_ids,
+        parser_backends_paper_ids_truncated=paper_ids_truncated,
         errors=errors,
         truncated=truncated,
         took_ms=took_ms,
@@ -554,6 +604,7 @@ __all__ = [
     "ISSUE_ORPHAN_INDEX",
     "ISSUE_ORPHAN_OBJECT",
     "ISSUE_PARSER_STAMP_MISMATCH",
+    "PARSER_PAPER_ID_LIMIT",
     "UNKNOWN_BACKEND",
     "ConsistencyReport",
     "PaperConsistency",
