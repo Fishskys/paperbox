@@ -10,12 +10,20 @@ must not change without a migration:
 
 ``NO_TEXT_LAYER`` / ``ENCRYPTED_PDF`` / ``CORRUPT_PDF`` / ``DOWNLOAD_FAILED`` /
 ``OVERSIZED`` / ``UNSUPPORTED_TYPE`` / ``DUPLICATE_FINGERPRINT`` /
-``EMBEDDING_FAILED`` / ``INDEX_FAILED`` / ``STORAGE_FAILED`` / ``INTERRUPTED`` /
-``INTERNAL``.
+``PARSE_BACKEND_UNAVAILABLE`` / ``PARSE_FAILED`` / ``EMBEDDING_FAILED`` /
+``INDEX_FAILED`` / ``STORAGE_FAILED`` / ``INTERRUPTED`` / ``INTERNAL``.
 
 ``INTERRUPTED`` is raised by the queue's startup recovery (2026-09-19): a job
 that was mid-pipeline when the process restarted is marked failed so the client
 sees it, and ``POST /api/jobs/{id}/retry`` re-drives it.
+
+The two ``PARSE_*`` codes come from the docling backend (2026-09-29).  The
+pipeline itself does **not** fail when docling is down -- it degrades to pypdf
+and records ``degraded_reason`` + a ``paper_degradations`` row (AGENTS.md
+section 3.10/3.11).  These codes exist for the paths that demand the docling
+backend without a fallback: probes, and any future "strict parse" caller.  A
+job that fails this way is worth retrying (the service may have been
+restarting), which is exactly what ``POST /api/jobs/{id}/retry`` is for.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.exc import IntegrityError
 
+from app.parsing.docling_client import DoclingFailed, DoclingUnavailable
 from app.parsing.pdf import PdfParseError
 from app.search.opensearch import SearchIndexError
 from app.services.embedding_service import EmbeddingError
@@ -44,6 +53,8 @@ FAILURE_CODES: tuple[str, ...] = (
     "OVERSIZED",
     "UNSUPPORTED_TYPE",
     "DUPLICATE_FINGERPRINT",
+    "PARSE_BACKEND_UNAVAILABLE",
+    "PARSE_FAILED",
     "EMBEDDING_FAILED",
     "INDEX_FAILED",
     "STORAGE_FAILED",
@@ -143,6 +154,19 @@ def classify_failure(exc: BaseException) -> Failure:
 
     if _is_no_text_layer(exc):
         return Failure("NO_TEXT_LAYER", f"NO_TEXT_LAYER: {detail}; {NO_TEXT_LAYER_HINT}")
+
+    if isinstance(exc, DoclingUnavailable):
+        return Failure(
+            "PARSE_BACKEND_UNAVAILABLE",
+            f"PARSE_BACKEND_UNAVAILABLE: the docling backend was unreachable "
+            f"and no fallback was allowed ({detail})",
+        )
+
+    if isinstance(exc, DoclingFailed):
+        return Failure(
+            "PARSE_FAILED",
+            f"PARSE_FAILED: the docling backend rejected the document ({detail})",
+        )
 
     if isinstance(exc, PdfParseError):
         if _mentions(exc, _KEYWORDS_ENCRYPTED):

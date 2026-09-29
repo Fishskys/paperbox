@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | chunking / pdf / structure 的地基依据 commit 54048a3（2026-09-22）；**T7 增补**（语义分块 + 解析产物缓存）按 2026-09-29 工作树核对；**T7.3 增补**（降级留痕：`on_degrade` sink + `paper_degradations`）按 2026-09-30 工作树核对。**docling 侧（T4–T6：`docling_client.py`/`layout.py`/`markdown.py`/`parser_service.py`）尚未并入本文，权威在 `docs/progress/parser.md`** |
+| 状态 | chunking / pdf / structure 的地基依据 commit 54048a3（2026-09-22）；**T7 增补**（语义分块 + 解析产物缓存）按 2026-09-29 工作树核对；**T7.3 增补**（降级留痕：`on_degrade` sink + `paper_degradations`）按 2026-09-30 工作树核对。**docling 侧（T4–T8：`docling_client.py`/`layout.py`/`markdown.py`/`parser_service.py`）尚未并入本文，权威在 `docs/progress/parser.md`（§5.9 T8 双后端验收）与 `docs/examine/解析双后端验收-20260929.md`** |
 | 关键文件 | `app/parsing/pdf.py`（584 行）、`app/parsing/structure.py`（231）、`app/parsing/chunking.py`（627）、`app/services/metadata_service.py`（457）、`app/core/errors.py`（199）、`app/workers/tasks.py`（1113，相关段 443-536 / 877-967 / 1045-1073）；解析后端另见 `app/parsing/{docling_client,layout,markdown}.py`、`app/services/parser_service.py` |
 | 相关文档 | `AGENTS.md` §3.6 / §3.7、`docs/architecture/metadata-architecture.md` §5（发现分层） |
 
@@ -18,11 +18,11 @@
 | 段落感知切块 + token 估算 + 重叠窗口 | `app/parsing/chunking.py:549` |
 | 读 PDF 内嵌元数据（Info 字典 + XMP，含 PRISM） | `app/parsing/pdf.py:404` |
 | 首页启发式元数据（标题/作者/摘要/年份/DOI/arXiv） | `app/services/metadata_service.py:340` |
-| 失败归因到稳定 `error_code` | `app/core/errors.py:116` |
+| 失败归因到稳定 `error_code` | `app/core/errors.py:127` |
 
 不做什么：
 
-- **不做 OCR**：文本层缺失没有兜底，`NO_TEXT_LAYER_HINT` 明确写 "OCR is required (not supported yet)"（`errors.py:55`）。
+- **不做 OCR**：文本层缺失没有兜底，`NO_TEXT_LAYER_HINT` 明确写 "OCR is required (not supported yet)"（`errors.py:66`）。
 - **不做版面/分栏/表格识别**：只用 `pypdf` 的 `Page.extract_text()` 默认阅读顺序（`pdf.py:55`）。
 - **不做网络元数据**：发现分层 3-6 层（外部导入、DOI 内容协商、平台 API、模糊反查）不在本模块（`docs/architecture/metadata-architecture.md:157`）。
 - **不写库、不切索引、不算向量**：本模块只返回内存对象；落 `paper_chunks`、调 embedding、bulk 到 OpenSearch 都在 `app/workers/tasks.py`。
@@ -102,7 +102,7 @@
 | `heuristic_claim_values` / `embedded_claim_values` | `metadata_service.py:377`、`:405` | 转成合并引擎吃的 `{provenance field: value}` |
 | `_backfill_metadata` | `tasks.py:864-927` | 层 1 → 层 2 顺序写 claim |
 | `_placeholder_title` / `_reset_placeholder_title` / `_restore_placeholder_title` | `tasks.py:832`、`:851`、`:867` | 文件名占位标题的清除与兜底 |
-| `classify_failure` | `errors.py:116-173` | 异常 → `error_code` |
+| `classify_failure` | `errors.py:127-197` | 异常 → `error_code`；两个解析码（`DoclingUnavailable`→`PARSE_BACKEND_UNAVAILABLE` :158、`DoclingFailed`→`PARSE_FAILED` :165）只在「明确要求 docling 且不许降级」时出现 |
 
 ## 3. 数据结构（表/字段/索引，或内存结构）
 
@@ -175,9 +175,9 @@ run_ingestion_job(tasks.py:138) / run_reindex_job(:118)
 6. **标题误判两处**：(a) running header——同一行在后续 3 行内复现即判页眉并入 `suppressed`，之后**同文本行被整篇跳过**（`structure.py:149-155`），正文里重复的短行也会被吞；(b) 全大写行当章节（`structure.py:120-121`，≤8 词、不以 `.` 结尾），`TABLE I ...` 这类表标题会被误判。
 8. **段落不跨页**：`pending` 每页开头重置（`structure.py:146`），跨页段落被切成两段，后一段记到后一页页码。
 9. **占位标题**：新 ingest 先用文件名当标题，那不是 claim，所以解析前 `_reset_placeholder_title` 清空（仅当无 `title` claim 且当前标题等于占位名，`tasks.py:846-851`），解析后 `_restore_placeholder_title` 兜底为占位名或 `"untitled"`（`title` NOT NULL，`:859-866`）。
-10. **文本层缺失不报错**：`extract_pages` 返回全空白页 → `detect_sections` 出空 → `chunk_document` 返回 `[]` → `tasks.py:506` 抛 `IngestionError("parsing produced no chunks")` → `NO_TEXT_LAYER`（关键字 `errors.py:58-64`，判定 `:188-191`；端到端见 `tests/test_failure_classification.py:200-211`）。
-11. **加密**：先试空口令 `reader.decrypt("")`（`pdf.py:109-115`），失败抛 `PdfParseError("encrypted PDF: password required")` → `ENCRYPTED_PDF`（关键字 `("encrypted","password")` 见 `errors.py:57`，分支 `:147-153`）。**损坏**：`PdfReadError` / 其他构造异常 → `PdfParseError("invalid PDF: ...")` → `CORRUPT_PDF`（`errors.py:153`）。
-13. **空字节流 → `PdfParseError("empty PDF payload")`**（`pdf.py:100-101`）。它**不会**命中 `UNSUPPORTED_TYPE`：`_KEYWORDS_UNSUPPORTED` 里的字面量是 `"empty payload"`（`errors.py:70`），`"empty PDF payload"` 不包含它，故走 `CORRUPT_PDF` 分支。此条为按代码字符串匹配的推断，未见测试固定 —— 标**未确认**。
+10. **文本层缺失不报错**：`extract_pages` 返回全空白页 → `detect_sections` 出空 → `chunk_document` 返回 `[]` → `tasks.py:506` 抛 `IngestionError("parsing produced no chunks")` → `NO_TEXT_LAYER`（关键字 `errors.py:69-75`，判定 `:212-215`；端到端见 `tests/test_failure_classification.py:230-241`）。
+11. **加密**：先试空口令 `reader.decrypt("")`（`pdf.py:109-115`），失败抛 `PdfParseError("encrypted PDF: password required")` → `ENCRYPTED_PDF`（关键字 `("encrypted","password")` 见 `errors.py:68`，分支 `:171-177`）。**损坏**：`PdfReadError` / 其他构造异常 → `PdfParseError("invalid PDF: ...")` → `CORRUPT_PDF`（`errors.py:177`）。
+13. **空字节流 → `PdfParseError("empty PDF payload")`**（`pdf.py:100-101`）。它**不会**命中 `UNSUPPORTED_TYPE`：`_KEYWORDS_UNSUPPORTED` 里的字面量是 `"empty payload"`（`errors.py:81`），`"empty PDF payload"` 不包含它，故走 `CORRUPT_PDF` 分支。此条为按代码字符串匹配的推断，未见测试固定 —— 标**未确认**。
 14. **`chunk_document` docstring 与实现不符**：docstring 说"`sections` 可以不完整，剩余文本按 `Body` 切"（`chunking.py:470-471`），但代码只在 `sections` 为空或全无段落时才造 `Body`（`:251-259`）。传入部分覆盖的 `sections` 会丢文本；流水线里 `detect_sections` 覆盖全文，现网不触发 —— 隐性契约，标**未确认（无测试固定）**。
 15. **`token_count` 是字符估算**：`len(text)//4`（`chunking.py:78-82`），假设 4 字符/token。CJK 约 1 字/token，同一 `MAX_TOKENS=450` 对中文论文实际更松，而索引 `title/text/section_title` 用的正是 `cjk` 分词器（`AGENTS.md` §3.5/§3.6）。代码里没有 CJK 专用估算 —— 标**未确认（无 CJK 长度测试）**。
 16. **没有客户端截断**：`embedding_service.embed_texts` 把 chunk 全文原样发服务端（`app/services/embedding_service.py:77-99`，payload 只有 `texts`/`model`），512 token 上限由服务端 + `MAX_TOKENS` 估算共同兜住。
@@ -244,7 +244,7 @@ run_ingestion_job(tasks.py:138) / run_reindex_job(:118)
 
 相邻但直接相关的测试：
 
-- `tests/test_failure_classification.py:190-211`：空白 PDF → 全 `is_blank` → `chunk_document == []` → `NO_TEXT_LAYER`（含 "OCR" 字样）；`tests/test_job_progress.py:178`：monkeypatch `chunk_document` 验证 `PARSING`/`CHUNKING` 阶段与进度顺序。
+- `tests/test_failure_classification.py:221-244`：空白 PDF → 全 `is_blank` → `chunk_document == []` → `NO_TEXT_LAYER`（含 "OCR" 字样）；`tests/test_job_progress.py:178`：monkeypatch `chunk_document` 验证 `PARSING`/`CHUNKING` 阶段与进度顺序。
 - `tests/test_degradations.py`（35 例，**T7.3**）：账本读写（幂等 upsert / 计数 / resolve / 复发重开 / stage 词表校验 / 级联删除）、`Recorder` 的 sink 语义与「记账失败不影响作业」、`chunk_document` 的 `on_degrade` 契约（长度模式不报、失败才报、无 sink 照常切块）、`parser_service.degradation_codes` 映射、`GET /api/papers/{id}/degradations`、`scripts/reindex.py --degraded` 的筛选。
 - `tests/test_job_progress.py`（新增 1 例，**T7.3**）：真跑一次 `_run_pipeline`（打桩外部依赖）→ 降级行带 `job_id` 落库，再跑一次干净的 → 该行 `resolved_at` 被盖上。
 
@@ -252,7 +252,7 @@ run_ingestion_job(tasks.py:138) / run_reindex_job(:118)
 
 | 缺口 | 依据 |
 |---|---|
-| 无 OCR / 无版面分析（分栏、表格、公式） | `errors.py:54-55` 仅提示；`pdf.py:55` 只走 `extract_text()` 默认顺序 |
+| **降级后端**（pypdf）无 OCR / 无版面分析（分栏靠 `layout.py` 几何重排、表格只留占位） | `errors.py:65-66` 仅提示；`pdf.py:55` 只走 `extract_text()` 默认顺序。docling 后端有版面顺序/表格/公式（`docs/progress/parser.md` §5.9：5 份输入真机对照，真表 1/3/4 张、公式 LaTeX 1/13/6 处、标题层级 11 vs pypdf 53） |
 | 全大写短行规则会误报章节 | `structure.py:120-121`（`TABLE I` 等） |
 | 死代码：`_ROMAN_TAIL`、`Chunk.is_overlap`（恒 `False`、无消费方） | `structure.py:26`；`chunking.py:200`、`:398`，全仓无其它引用 |
 | `_spans` 不进 `paper_chunks`/OpenSearch | 仅 `_finalize` 用来算页码 |
@@ -263,4 +263,5 @@ run_ingestion_job(tasks.py:138) / run_reindex_job(:118)
 | XMP 只认 `dc`/`prism`/`xmp` 三命名空间 | `pdf.py:141-145`，其余 ns 元素被跳过（`:305-306`） |
 | **按阶段重跑尚未提供（T7.3 决策：暂不做）** —— 现在只能整篇 reindex（PARSING→INDEXING 全跑）；想要的「只补 embedding / 只补索引」需要复用 `_write_embeddings`/`_index_rows`/`_mark_indexed` 写一个 `--stage` 入口。数据模型已经支持断点：`paper_chunks.embedded_at`/`indexed_at` 可空，`GET /api/consistency` 能报出 `missing_index` | 留档见 `docs/progress/project.md` §21.7「后续优化方向」；`scripts/reindex.py` 目前只有 `--missing` / `--degraded` |
 | 语义模式把同一段文字嵌两遍（句子一遍、chunk 一遍，无复用） | `tasks.py:528` 与 :539 打同一个 `EMBEDDING_URL`；留档见 `docs/architecture/04-embedding.md` §8 缺口 11 |
+| **两个解析码只在禁止降级时出现**：`PARSE_BACKEND_UNAVAILABLE` / `PARSE_FAILED` 已登记（`errors.py:48-63`）并有单测（`tests/test_failure_classification.py:85-101`），但正常流水线不产生它们 —— docling 不可达是**降级到 pypdf** + `degraded_reason` + `paper_degradations` 一行；要用这两个码得先加「strict parse」调用方（当前只有探针会撞上） |
 | 未确认项 | 空 payload 的 `error_code` 归类（§5.13）、CJK 长度上限（§5.15）；模型名/batch/`CHUNK_TARGET_TOKENS` 的文档口径已于 2026-09-22 对齐（§6） |
