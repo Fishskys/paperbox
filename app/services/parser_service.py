@@ -2,8 +2,10 @@
 
 One entry point for the ingestion pipeline: ``parse_pdf()`` prefers docling and
 falls back to pypdf when the docling call fails, always recording *why* in
-``ParseBundle.degraded_reason`` and in the logs.  The module is deliberately
-pure: no DB, no MinIO, no task state -- caching is T7, a layer above.
+``ParseBundle.degraded_reason`` and in the logs.  ``parse_pdf()`` itself stays
+pure: no DB, no MinIO, no task state.  T7.1 adds ``parse_paper_file()`` on top,
+which replays a previously stored parse from object storage (markdown + meta +
+docling's own JSON) instead of paying for another conversion.
 
 Backend resolution order: explicit ``backend`` argument > ``PARSER_BACKEND``.
 The docling call is guarded by a module-level semaphore sized
@@ -19,16 +21,24 @@ belongs to the task layer (T9), not here.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any, Protocol
 
 from app.core.config import PARSER_BACKENDS, settings
 from app.core.logging import get_logger
 from app.parsing import markdown as markdown_dialect
-from app.parsing.docling_client import DoclingError, DoclingResult
+from app.parsing.docling_client import (
+    DoclingError,
+    DoclingResult,
+    version_from_server,
+)
 from app.parsing.markdown import ParseBundle
 from app.parsing.pdf import extract_pages
+from app.services.object_storage import ObjectNotFound, ObjectStorageError
 
 logger = get_logger(__name__)
 
@@ -36,6 +46,31 @@ logger = get_logger(__name__)
 _docling_semaphore = threading.Semaphore(max(1, int(settings.parser_concurrency)))
 
 DOCLING_FALLBACK_PREFIX = "docling unavailable"
+DOCLING_BACKEND = "docling"
+
+#: Bumped whenever the *meaning* of a stored artifact changes (markdown dialect,
+#: normalization, span computation): an entry written under an older value is
+#: re-parsed instead of replayed.
+PARSE_CACHE_VERSION = 1
+PARSE_MARKDOWN_ARTIFACT = "document.md"
+PARSE_JSON_ARTIFACT = "document.json"
+PARSE_META_ARTIFACT = "parse-meta.json"
+
+
+class ArtifactStore(Protocol):
+    """The slice of ``object_storage`` the cache needs (faked in tests)."""
+
+    def download_bytes(self, object_key: str, bucket: str | None = None) -> bytes: ...
+
+    def upload_bytes(
+        self,
+        object_key: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        bucket: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> object: ...
 
 
 def parse_pdf(
@@ -122,6 +157,7 @@ def _parse_with_docling(
         parser_version=result.parser_version,
         degraded_reason=result.degraded_reason,
         timings=timings,
+        raw_json=result.raw_json,
     )
 
 
@@ -149,3 +185,364 @@ def _merge_reasons(prefix: str, existing: str | None) -> str:
     if existing:
         return f"{prefix}; {existing}"
     return prefix
+
+
+# --------------------------------------------------------------------------- #
+# parse-artifact cache (plan section 2 T7.1)
+# --------------------------------------------------------------------------- #
+def parse_paper_file(
+    paper_id: str,
+    data: bytes,
+    *,
+    filename: str,
+    backend: str | None = None,
+    converter: Callable[..., DoclingResult] | None = None,
+    page_range: str | None = None,
+    store: ArtifactStore | None = None,
+    cache: bool | None = None,
+    version_probe: Callable[[], str | None] | None = None,
+    now: datetime | None = None,
+) -> ParseBundle:
+    """Parse ``data`` for ``paper_id``, replaying stored artifacts if possible.
+
+    Artifacts live under ``papers/<paper_id>/extracted/parsed/``: the markdown
+    under ``<backend>/document.md``, docling's own JSON under
+    ``docling/document.json`` and the bookkeeping under ``parse-meta.json``.
+    They are removed with the paper (``delete_prefix``), and they make a parse
+    replayable: the second ingestion of the same file costs a download instead
+    of a conversion, and a parse can be inspected or A/B-ed later.
+
+    A stored entry is replayed only when it is as good as a fresh parse:
+
+    * its ``cache_version`` matches :data:`PARSE_CACHE_VERSION`,
+    * it was written by the backend now being asked for,
+    * it is not a degradation (a docling outage must not become sticky),
+    * the markdown object is still there,
+    * and, for docling, the server still reports the version it reported then
+      (probed with ``GET /version``, which is milliseconds against a conversion
+      that can take minutes).
+
+    Args:
+        paper_id: owning paper; also the object-key prefix.
+        data: the PDF bytes, read only when the cache cannot answer.
+        filename: for logs and the artifact metadata.
+        backend: explicit backend, defaults to ``PARSER_BACKEND``.
+        converter: test seam passed through to :func:`parse_pdf`.
+        page_range: passed through to docling.
+        store: storage seam (:class:`ArtifactStore`); defaults to
+            ``object_storage``. Tests inject a dict-backed fake.
+        cache: override ``PARSER_CACHE`` for this call.
+        version_probe: test seam for the docling version check.
+        now: injectable clock for the metadata timestamp.
+
+    Returns:
+        The parsed bundle; ``cache_hit`` is ``True`` when it came from storage.
+    """
+    resolved = _resolve_backend(backend)
+    storage = store if store is not None else _default_store()
+    enabled = settings.parser_cache if cache is None else bool(cache)
+
+    if enabled:
+        cached = _load_cached_bundle(
+            paper_id,
+            backend=resolved,
+            storage=storage,
+            version_probe=version_probe,
+        )
+        if cached is not None:
+            return cached
+
+    bundle = parse_pdf(
+        data,
+        filename=filename,
+        backend=resolved,
+        converter=converter,
+        page_range=page_range,
+    )
+    if enabled:
+        _store_bundle(
+            paper_id,
+            bundle,
+            storage=storage,
+            filename=filename,
+            page_range=page_range,
+            now=now,
+        )
+    return bundle
+
+
+def _default_store() -> Any:
+    """The real object storage, imported lazily so tests never dial MinIO."""
+    from app.services import object_storage
+
+    return object_storage
+
+
+def _artifact_key(paper_id: str, name: str, *, backend: str | None = None) -> str:
+    from app.services import object_storage
+
+    prefix = "parsed" if backend is None else f"parsed/{backend}"
+    return object_storage.build_extracted_key(paper_id, f"{prefix}/{name}")
+
+
+def _key_belongs_to(paper_id: str, object_key: str) -> bool:
+    """Guard against a meta file pointing at some other paper's objects."""
+    prefix = _artifact_key(paper_id, "")
+    return isinstance(object_key, str) and object_key.startswith(prefix)
+
+
+def _docling_version_probe() -> str | None:
+    """``GET /version``; ``None`` when it cannot be read (never raises)."""
+    return version_from_server()
+
+
+def _load_cached_bundle(
+    paper_id: str,
+    *,
+    backend: str,
+    storage: ArtifactStore,
+    version_probe: Callable[[], str | None] | None,
+) -> ParseBundle | None:
+    started = time.perf_counter()
+    meta_key = _artifact_key(paper_id, PARSE_META_ARTIFACT)
+    try:
+        raw_meta = storage.download_bytes(meta_key)
+    except ObjectNotFound:
+        return None
+    except ObjectStorageError as exc:
+        _log_cache_problem("parse cache unreadable, parsing again", meta_key, exc)
+        return None
+
+    meta = _decode_meta(raw_meta, meta_key)
+    if meta is None:
+        return None
+    if meta.get("cache_version") != PARSE_CACHE_VERSION:
+        logger.info(
+            "parse cache is stale: cache version changed",
+            extra={
+                "extra_fields": {
+                    "paper_id": paper_id,
+                    "cached": meta.get("cache_version"),
+                    "current": PARSE_CACHE_VERSION,
+                }
+            },
+        )
+        return None
+    if meta.get("backend") != backend:
+        return None
+    if meta.get("degraded_reason"):
+        # A degraded parse is kept for inspection but never replayed: whatever
+        # broke the backend may be fixed by the next attempt.
+        logger.info(
+            "parse cache holds a degraded parse, parsing again",
+            extra={
+                "extra_fields": {
+                    "paper_id": paper_id,
+                    "reason": meta.get("degraded_reason"),
+                }
+            },
+        )
+        return None
+
+    artifacts = meta.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, dict) else {}
+    markdown_key = artifacts.get("markdown") or _artifact_key(
+        paper_id, PARSE_MARKDOWN_ARTIFACT, backend=backend
+    )
+    if not _key_belongs_to(paper_id, markdown_key):
+        return None
+
+    if backend == DOCLING_BACKEND:
+        probe = version_probe or _docling_version_probe
+        cached_version = str(meta.get("parser_version") or "")
+        try:
+            probed = probe()
+        except Exception as exc:  # noqa: BLE001 - a probe must never break a replay
+            _log_cache_problem("docling version probe failed", meta_key, exc)
+            probed = None
+        if probed and cached_version and probed != cached_version:
+            logger.info(
+                "parse cache is stale: parser version changed",
+                extra={
+                    "extra_fields": {
+                        "paper_id": paper_id,
+                        "cached": cached_version,
+                        "current": probed,
+                    }
+                },
+            )
+            return None
+
+    try:
+        markdown = storage.download_bytes(markdown_key).decode("utf-8")
+    except ObjectNotFound:
+        return None
+    except (ObjectStorageError, UnicodeDecodeError) as exc:
+        _log_cache_problem("parse cache unreadable, parsing again", markdown_key, exc)
+        return None
+
+    marker_count, spans = markdown_dialect.page_spans_from_markdown(markdown)
+    page_count = _positive_int(meta.get("page_count")) or max(marker_count, 0)
+    timings = _timings(meta.get("timings"))
+    timings["cache_load_s"] = round(time.perf_counter() - started, 4)
+
+    logger.info(
+        "parse cache hit",
+        extra={
+            "extra_fields": {
+                "paper_id": paper_id,
+                "backend": backend,
+                "chars": len(markdown),
+                "cache_load_s": timings["cache_load_s"],
+            }
+        },
+    )
+    return ParseBundle(
+        markdown=markdown,
+        page_count=page_count,
+        spans=spans,
+        backend=backend,
+        parser_version=str(meta.get("parser_version") or ""),
+        degraded_reason=None,
+        timings=timings,
+        headings=_headings(meta.get("headings")),
+        raw_json=_cached_json(paper_id, artifacts, storage),
+        cache_hit=True,
+    )
+
+
+def _store_bundle(
+    paper_id: str,
+    bundle: ParseBundle,
+    *,
+    storage: ArtifactStore,
+    filename: str,
+    page_range: str | None,
+    now: datetime | None,
+) -> None:
+    """Write the parse artifacts; the meta file goes last, so a partial write is a miss."""
+    markdown_key = _artifact_key(paper_id, PARSE_MARKDOWN_ARTIFACT, backend=bundle.backend)
+    json_key = (
+        _artifact_key(paper_id, PARSE_JSON_ARTIFACT, backend=DOCLING_BACKEND)
+        if bundle.raw_json is not None
+        else None
+    )
+    meta = {
+        "cache_version": PARSE_CACHE_VERSION,
+        "backend": bundle.backend,
+        "parser_version": bundle.parser_version,
+        "page_count": bundle.page_count,
+        "degraded_reason": bundle.degraded_reason,
+        "filename": filename,
+        "page_range": page_range,
+        "created_at": (now or datetime.now(timezone.utc)).isoformat(),
+        "timings": dict(bundle.timings),
+        "headings": [list(item) for item in bundle.headings],
+        "artifacts": {"markdown": markdown_key, "json": json_key},
+    }
+    try:
+        storage.upload_bytes(
+            markdown_key,
+            bundle.markdown.encode("utf-8"),
+            content_type="text/markdown; charset=utf-8",
+        )
+        if json_key is not None:
+            storage.upload_bytes(
+                json_key,
+                json.dumps(bundle.raw_json, ensure_ascii=False).encode("utf-8"),
+                content_type="application/json",
+            )
+        storage.upload_bytes(
+            _artifact_key(paper_id, PARSE_META_ARTIFACT),
+            json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"),
+            content_type="application/json",
+        )
+    except ObjectStorageError as exc:
+        # The bundle in hand is still good: never fail an ingestion because the
+        # cache could not be written.
+        _log_cache_problem(
+            "could not write the parse artifacts", _artifact_key(paper_id, "parsed"),
+            exc,
+        )
+        return
+    logger.info(
+        "parse artifacts stored",
+        extra={
+            "extra_fields": {
+                "paper_id": paper_id,
+                "backend": bundle.backend,
+                "markdown_key": markdown_key,
+                "json_key": json_key,
+                "degraded_reason": bundle.degraded_reason,
+            }
+        },
+    )
+
+
+def _decode_meta(raw: bytes, meta_key: str) -> dict[str, Any] | None:
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _log_cache_problem("parse cache meta is unreadable, parsing again", meta_key, exc)
+        return None
+    if not isinstance(decoded, dict):
+        _log_cache_problem(
+            "parse cache meta is not an object, parsing again",
+            meta_key,
+            TypeError("not an object"),
+        )
+        return None
+    return decoded
+
+
+def _cached_json(
+    paper_id: str, artifacts: dict[str, Any], storage: ArtifactStore
+) -> dict[str, Any] | None:
+    json_key = artifacts.get("json")
+    if not json_key or not _key_belongs_to(paper_id, json_key):
+        return None
+    try:
+        decoded = json.loads(storage.download_bytes(json_key).decode("utf-8"))
+    except (ObjectNotFound, ObjectStorageError, UnicodeDecodeError, json.JSONDecodeError):
+        # The markdown is what the pipeline consumes; a missing or broken JSON
+        # artifact must not turn a replay into a parse.
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _timings(raw: Any) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(name): float(value)
+        for name, value in raw.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+
+
+def _headings(raw: Any) -> list[tuple[int, str]]:
+    if not isinstance(raw, list):
+        return []
+    headings: list[tuple[int, str]] = []
+    for item in raw:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            level = _positive_int(item[0])
+            if level:
+                headings.append((level, str(item[1])))
+    return headings
+
+
+def _positive_int(value: Any) -> int:
+    return int(value) if isinstance(value, int) and value > 0 else 0
+
+
+def _log_cache_problem(message: str, object_key: str, exc: BaseException) -> None:
+    logger.warning(
+        message,
+        extra={
+            "extra_fields": {
+                "object_key": object_key,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        },
+    )

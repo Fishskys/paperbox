@@ -23,6 +23,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: ``pypdf`` the degradation backend (and the default until the acceptance run).
 PARSER_BACKENDS = frozenset({"pypdf", "docling"})
 
+#: Accepted values of ``CHUNK_MODE``. Kept here rather than imported from
+#: ``app.parsing.chunking``: that module imports ``app.core.logging``, which
+#: imports this one, so the dependency has to point this way.
+CHUNK_MODES = frozenset({"length", "semantic"})
+
 
 class Settings(BaseSettings):
     """Typed view over the process environment."""
@@ -186,6 +191,27 @@ class Settings(BaseSettings):
     #: ``page_range`` and is recorded as a degradation).
     parser_max_pages: int = Field(default=0, alias="PARSER_MAX_PAGES")
 
+    # --- chunking (plan 2026-09-28_160551-docling-parser-backend §2 T7.2) ---
+    #: Boundary policy of ``chunk_document``. ``length`` (default) grows a chunk
+    #: until the next paragraph would push it past the target token count;
+    #: ``semantic`` embeds the section's sentences with the retrieval model and
+    #: cuts where the similarity dips. Semantic mode calls the embedding server
+    #: during parsing; a failed call degrades that section to ``length`` and
+    #: logs a warning, it never fails the ingestion job.
+    chunk_mode: str = Field(default="length", alias="CHUNK_MODE")
+
+    #: Semantic mode only: cosine below which a sentence boundary counts as a
+    #: candidate cut (see ``chunking.SEMANTIC_SIMILARITY_THRESHOLD``). Deployed
+    #: value is what the A/B in ``logs/eval/chunking`` picked.
+    chunk_semantic_threshold: float = Field(
+        default=0.80, alias="CHUNK_SEMANTIC_THRESHOLD"
+    )
+    #: Semantic mode only: a dip may cut only once the pending chunk has at least
+    #: this many estimated tokens (``chunking.SEMANTIC_MIN_TOKENS``).
+    chunk_semantic_min_tokens: int = Field(
+        default=200, alias="CHUNK_SEMANTIC_MIN_TOKENS"
+    )
+
     # --- docling-serve (plan §1.3 mapping table; every value below is measured,
     #     not guessed -- see the plan's §0.5/§0.6/§0.7/§0.8 notes) ---
     #: Base URL of docling-serve. Since 2026-09-29 it runs on the fnOS NAS
@@ -276,7 +302,24 @@ class Settings(BaseSettings):
             raise ValueError("PARSER_CONCURRENCY must be positive")
         return value
 
-    @field_validator("parser_max_pages", "docling_max_retries")
+    @field_validator("chunk_mode")
+    @classmethod
+    def _check_chunk_mode(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in CHUNK_MODES:
+            raise ValueError(f"CHUNK_MODE must be one of {sorted(CHUNK_MODES)}")
+        return normalized
+
+    @field_validator("chunk_semantic_threshold")
+    @classmethod
+    def _check_chunk_semantic_threshold(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("CHUNK_SEMANTIC_THRESHOLD must be in (0, 1]")
+        return value
+
+    @field_validator(
+        "parser_max_pages", "docling_max_retries", "chunk_semantic_min_tokens"
+    )
     @classmethod
     def _check_non_negative(cls, value: int) -> int:
         if value < 0:

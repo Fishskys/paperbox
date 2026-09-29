@@ -40,7 +40,8 @@ from app.db.models import (
     VenueEdition,
     new_uuid,
 )
-from app.parsing.chunking import Chunk
+from app.core.config import settings
+from app.parsing.chunking import CHUNK_MODE_SEMANTIC, Chunk
 from app.workers import tasks
 
 
@@ -172,7 +173,7 @@ def stubbed_pipeline(monkeypatch):
     monkeypatch.setattr(
         tasks,
         "chunk_document",
-        lambda pages, sections: [
+        lambda pages, sections, embed_fn=None, **kwargs: [
             Chunk(
                 chunk_index=0,
                 text="some chunk text",
@@ -494,3 +495,68 @@ def test_serialize_job_exposes_the_progress_fields(factory):
         "updated_at",
         "finished_at",
     } <= set(JobOut.model_fields)
+
+
+# --------------------------------------------------------------------------- #
+# CHUNK_MODE wiring (plan 2026-09-28_160551 section 2 T7.2)
+# --------------------------------------------------------------------------- #
+def test_chunk_mode_decides_whether_the_chunker_gets_the_embedder(
+    factory, stubbed_pipeline, monkeypatch
+):
+    """``CHUNK_MODE`` is the one chunking decision the chunker cannot make.
+
+    ``length`` (the default) must reach ``chunk_document`` with no embedding
+    callable at all -- that is what keeps the default path free of a network
+    dependency during chunking -- while ``semantic`` hands over the retrieval
+    embedder.
+    """
+    recorded: list[object] = []
+
+    def recording_chunker(pages, sections, embed_fn=None, **kwargs):
+        recorded.append((embed_fn, kwargs))
+        return [
+            Chunk(
+                chunk_index=0,
+                text="some chunk text",
+                page_start=1,
+                page_end=1,
+                section="body",
+                section_title="body",
+                token_count=3,
+                char_count=15,
+            )
+        ]
+
+    monkeypatch.setattr(tasks, "chunk_document", recording_chunker)
+
+    def run_once() -> None:
+        paper_id = make_paper(factory)
+        job_id = make_job(factory, paper_id)
+        session = factory()
+        try:
+            job = session.get(IngestionJob, job_id)
+            paper = session.get(Paper, paper_id)
+            # dedupe=False: both runs share the stubbed bytes, so the second
+            # would otherwise be discarded as a fingerprint duplicate before
+            # it ever reaches the chunker.
+            tasks._run_pipeline(
+                session, job, paper, "papers/x/original.pdf", dedupe=False
+            )
+        finally:
+            session.close()
+
+    run_once()
+    monkeypatch.setattr(settings, "chunk_mode", CHUNK_MODE_SEMANTIC)
+    run_once()
+
+    assert [embed_fn for embed_fn, _ in recorded] == [
+        None,
+        tasks.embedding_service.embed_texts,
+    ]
+    # The deployed tuning must reach the chunker, or CHUNK_SEMANTIC_* is a lie.
+    # It is passed unconditionally: the length policy simply ignores it.
+    expected_tuning = {
+        "semantic_threshold": settings.chunk_semantic_threshold,
+        "semantic_min_tokens": settings.chunk_semantic_min_tokens,
+    }
+    assert [kwargs for _, kwargs in recorded] == [expected_tuning, expected_tuning]

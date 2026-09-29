@@ -25,7 +25,7 @@ import html
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Any, Sequence
 
 from app.core.logging import get_logger
 from app.parsing.pdf import PageText
@@ -85,6 +85,14 @@ class ParseBundle:
     degraded_reason: str | None = None
     timings: dict[str, float] = field(default_factory=dict)
     headings: list[tuple[int, str]] = field(default_factory=list)
+    #: The backend's own structured document (docling's ``DoclingDocument``),
+    #: kept so T7 can store it next to the markdown for replay/A-B runs. The
+    #: pypdf path has no equivalent and leaves it ``None``.
+    raw_json: dict[str, Any] | None = None
+    #: True when the bundle was replayed from the parse-artifact cache rather
+    #: than produced by a backend (plan T7.1); the timings then describe the
+    #: original parse plus ``cache_load_s``.
+    cache_hit: bool = False
 
 
 def normalize_markdown(text: str) -> str:

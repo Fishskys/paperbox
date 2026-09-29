@@ -292,11 +292,29 @@ def resolve_parser_version(
     Falls back to the pinned image tag (``DOCLING_IMAGE_TAG``) and finally to a
     plain "version unknown" marker, so artifacts always carry *something*.
     """
+    return version_from_server(
+        client=client, base_url=base_url, timeout=timeout
+    ) or _version_fallback()
+
+
+def version_from_server(
+    *,
+    client: httpx.Client | None = None,
+    base_url: str | None = None,
+    timeout: float = 10.0,
+) -> str | None:
+    """``GET /version`` as a string, or ``None`` when it cannot be read.
+
+    Unlike :func:`resolve_parser_version` this returns ``None`` instead of a
+    fallback marker: cache validation (plan T7.1) must be able to tell "the
+    server says 2.130.0" from "nobody answered", because only the former is
+    evidence that a cached artifact is stale.
+    """
     url = (base_url if base_url is not None else settings.docling_url).strip()
+    if not url and client is None:
+        return None
     own_client = client is None
     if own_client:
-        if not url:
-            return _version_fallback()
         client = httpx.Client(base_url=url, timeout=timeout)
     try:
         response = client.get(VERSION_PATH, timeout=timeout)
@@ -312,7 +330,7 @@ def resolve_parser_version(
     finally:
         if own_client and client is not None:
             client.close()
-    return _version_fallback()
+    return None
 
 
 def _version_fallback() -> str:
