@@ -25,8 +25,16 @@ evals/report-*.md
 # （组件级文件名 README.md，如 infra/docling/fnos/README.md，**继续跟踪** —— 随各自组件进版）
 # 评测/导入产物：体积大（3.2MB）且含本机绝对路径，可由 scripts/eval.py 复现。
 # 只跟踪**输入集**：evals/queries-spec.json · queries*.jsonl · labels.jsonl · arxiv_ids*.txt
+#   + 主人清单冻结副本 evals/corpus30.txt 与旧语料定标集归档 evals/archive/*-old-corpus.json*（2026-09-30）
+#   （含本机绝对路径的派生产物不入库：corpus30.json 带源文档路径、corpus30-download.json 带 30 条 PDF 路径）
 evals/report-*.json
 evals/ingest-report*.json
+# 库里导出的复用表（原始数据，可由 backups/paperbox-pre-wipe-*.sql.gz 复现，不入库）
+evals/corpus30.json
+evals/corpus30-download.json
+evals/archive/papers.json
+evals/archive/paper_files.json
+evals/archive/paper_sources.json
 codex_*.log
 # 运行日志统一放 logs/（codex/app/eval），根目录不要再出现 *.log —— 见 progress.md §6
 logs/

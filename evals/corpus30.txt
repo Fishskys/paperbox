@@ -1,0 +1,32 @@
+# 主人清单冻结副本（2026-09-30）——语料的唯一权威定义，勿手改
+# TSV: arxiv_id \t 领域 \t 方向 \t 旧库sha256(=已导过) \t 标题
+1706.03762	计算机	Transformer / 注意力机制	Attention Is All You Need	Attention Is All You Need
+1512.03385	计算机	深度学习 / 计算机视觉	Deep Residual Learning for Image Recognition	Deep Residual Learning for Image Recognition
+1810.04805	计算机	NLP / 预训练模型	BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding	BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding
+2005.14165	计算机	GPT-3 / 大语言模型	-	Language Models are Few-Shot Learners
+2106.09685	计算机	参数高效微调	-	LoRA: Low-Rank Adaptation of Large Language Models
+2109.00859	软件	代码理解 / 代码生成	-	CodeT5: Identifier-aware Unified Pre-trained Encoder-Decoder Models for Code Understanding and Generation
+2009.08366	软件	程序语言 / 代码表示	-	GraphCodeBERT: Pre-training Code Representations with Data Flow
+2311.07989	软件	软件工程 + LLM 综述	-	Unifying the Perspectives of NLP and Software Engineering: A Survey on Language Models for Code
+2010.03525	软件	软件工程研究方法	-	Empirical Standards for Software Engineering Research
+2402.07138	软件	自动程序修改 / LLM4SE	-	Unprecedented Code Change Automation: The Fusion of LLMs and Transformation by Example
+2105.11453	半导体	半导体器件建模 / TCAD	-	Improving Semiconductor Device Modeling for Electronic Design Automation by Machine Learning Techniques
+2310.17724	半导体	2D 半导体 / FET 建模	-	Field-Effect Transistors based on 2-D Materials: a Modeling Perspective
+2110.08007	半导体	二维材料 / 异质集成	-	2D Materials for Future Heterogeneous Electronics
+1212.4225	半导体	GAA / III-V MOSFET / 工艺	-	III-V Gate-all-around Nanowire MOSFET Process Technology: From 3D to 4D
+2205.00360	半导体	GAA / 氧化物半导体	-	A Gate-All-Around Single-Channel In2O3 Nanoribbon FET with Near 20 mA/μm Drain Current
+1704.04760	数字芯片设计	TPU / 专用 AI 加速器	-	In-Datacenter Performance Analysis of a Tensor Processing Unit
+1911.09925	数字芯片设计	ASIC / DNN 加速器 / SoC	-	Gemmini: Enabling Systematic Deep-Learning Architecture Evaluation via Full-Stack Integration
+2009.14381	数字芯片设计	FPGA / HLS / 自动设计空间探索	-	AutoDSE: Enabling Software Programmers to Design Efficient FPGA Accelerators
+2308.05345	数字芯片设计	RTL 自动生成 / LLM4EDA	-	RTLLM: An Open-Source Benchmark for Design RTL Generation with Large Language Model
+2308.00708	数字芯片设计	Verilog / RTL 生成	-	VeriGen: A Large Language Model for Verilog Code Generation
+2011.07665	模拟芯片设计	模拟电路 / 强化学习	-	Analog Circuit Design with Dyna-Style Reinforcement Learning
+2112.07824	模拟芯片设计	AMS / EDA / 机器学习	-	Analog/Mixed-Signal Circuit Synthesis Enabled by the Advancements of Circuit Architectures and Machine Learning Algorithms
+1912.00402	模拟芯片设计	贝叶斯优化 / 模拟综合	-	Bayesian Optimization Approach for Analog Circuit Synthesis Using Neural Network
+2608.13472	模拟芯片设计	LLM / 拓扑生成 / 电路尺寸设计	-	AaLLM: An End-to-End Analog Circuit Design Framework from Topology Generation to Sizing Using Large Language Models
+2604.07387	模拟芯片设计	LLM / 电路 sizing / OTA	-	Self-Calibrating LLM-Based Analog Circuit Sizing with Interpretable Design Equations
+2301.07543	人文社科	经济学 / LLM 社会模拟	-	Large Language Models as Simulated Economic Agents: What Can We Learn from Homo Silicus?
+2304.03442	人文社科	社会模拟 / 人类行为	-	Generative Agents: Interactive Simulacra of Human Behavior
+2401.17435	人文社科	实验经济学 / 行为预测	-	Can LLMs Replace Economic Choice Prediction Labs? The Case of Language-based Persuasion Games
+2410.21359	人文社科	行为科学 / 博弈实验	-	Can Machines Think Like Humans? A Behavioral Evaluation of LLM-Agents in Dictator Games
+2604.01520	人文社科	社会科学 / AI 社会实验	-	LLM Agents as Social Scientists: A Human-AI Collaborative Platform for Social Science Automation
