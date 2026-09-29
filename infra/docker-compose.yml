@@ -97,6 +97,13 @@ services:
       # 4 线程 + embed batch 16 是安全点；精排用 RERANK_MAX_BATCH=4。
       ORT_THREADS: ${ORT_THREADS:-4}
       MAX_BATCH: ${MAX_BATCH:-16}
+      # 服务端排队（T7.3）：所有推理经过一个 FIFO 队列，由 INFERENCE_WORKERS 个
+      # 线程串行跑。并发请求不再各自抢 CPU/内存（精排单次峰值 2.4GB，历史上
+      # uvicorn 被 oom-killer 杀过）。积压超过 INFERENCE_QUEUE_DEPTH 直接
+      # 503+Retry-After，客户端退避重试；因此应用侧 EMBEDDING_TIMEOUT 要大于
+      # 最坏排队时间（默认 300s）。
+      INFERENCE_WORKERS: ${INFERENCE_WORKERS:-1}
+      INFERENCE_QUEUE_DEPTH: ${INFERENCE_QUEUE_DEPTH:-32}
       PORT: 8090
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:8090:8090"

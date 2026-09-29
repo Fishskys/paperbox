@@ -18,7 +18,14 @@ from app.core.logging import get_logger
 from app.core.security import require_api_key
 from app.db.models import PaperChunk
 from app.db.session import get_db
-from app.schemas.paper import PaperChunkList, PaperChunkOut, PaperListOut, PaperOut
+from app.schemas.paper import (
+    PaperChunkList,
+    PaperChunkOut,
+    PaperDegradationList,
+    PaperDegradationOut,
+    PaperListOut,
+    PaperOut,
+)
 from app.schemas.metadata import (
     MetadataPatch,
     MetadataPatchOut,
@@ -28,6 +35,7 @@ from app.schemas.metadata import (
 )
 from app.search import opensearch
 from app.search.opensearch import SearchIndexError
+from app.services import degradation_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_manual
 from app.services import object_storage
@@ -188,6 +196,47 @@ def get_paper_chunks(
         for row in rows
     ]
     return PaperChunkList(paper_id=paper_id, total=total, chunks=chunks)
+
+
+@router.get("/{paper_id}/degradations", response_model=PaperDegradationList)
+def get_paper_degradations(
+    paper_id: str,
+    include_resolved: bool = Query(
+        default=False,
+        description="also list causes a later run of the stage no longer reported",
+    ),
+    session: Session = Depends(get_db),
+) -> PaperDegradationList:
+    """Return what the pipeline had to give up on while indexing this paper.
+
+    Empty is the normal answer. A non-empty list means the paper is indexed but
+    thinner than it could be -- e.g. ``chunking/semantic_fallback`` while the
+    embedding server was down -- and is the signal for a re-run
+    (``scripts/reindex.py --degraded``).
+    """
+    _load_paper(session, paper_id)
+    rows = degradation_service.list_for_paper(
+        session, paper_id, include_resolved=include_resolved
+    )
+    items = [
+        PaperDegradationOut(
+            stage=row.stage,
+            code=row.code,
+            detail=row.detail or {},
+            occurrences=row.occurrences or 1,
+            first_seen_at=row.first_seen_at,
+            last_seen_at=row.last_seen_at,
+            resolved_at=row.resolved_at,
+            job_id=row.job_id,
+        )
+        for row in rows
+    ]
+    return PaperDegradationList(
+        paper_id=paper_id,
+        total=len(items),
+        degraded=any(item.resolved_at is None for item in items),
+        degradations=items,
+    )
 
 
 @router.get("/{paper_id}/metadata", response_model=PaperMetadataOut)

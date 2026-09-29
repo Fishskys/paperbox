@@ -35,7 +35,7 @@ from app.parsing.chunking import CHUNK_MODE_SEMANTIC, chunk_document
 from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata, extract_pages
 from app.parsing.structure import detect_sections, merge_short_sections
 from app.search import mappings, opensearch, snapshot
-from app.services import embedding_service
+from app.services import degradation_service, embedding_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_identifiers, metadata_matcher, metadata_merge
 from app.services import metadata_service, metadata_shell, metadata_sources
@@ -467,6 +467,15 @@ def _run_pipeline(
     """
     paper.status = paper_service.STATUS_PROCESSING
 
+    # Degradation ledger (plan T7.3): stages report what they gave up on through
+    # this sink, so a thinner-but-usable result stays queryable after the log
+    # line scrolls away. It rides in the job's transaction -- a rolled-back job
+    # leaves no row behind. The parsing stage reports through it once T8 routes
+    # the pipeline through ``parser_service``.
+    degradations = degradation_service.Recorder(
+        session, paper_id=paper.id, job_id=job.id
+    )
+
     _advance_stage(session, job, STAGE_PARSING, PROGRESS_PARSING)
 
     data = object_storage.download_bytes(object_key)
@@ -516,10 +525,14 @@ def _run_pipeline(
         embed_fn=embed_fn,
         semantic_threshold=settings.chunk_semantic_threshold,
         semantic_min_tokens=settings.chunk_semantic_min_tokens,
+        on_degrade=degradations,
     )
     if not chunks:
         raise ingest.IngestionError("parsing produced no chunks")
     rows = _replace_chunks(session, paper, chunks)
+    # The chunks just written are the artefact this stage is judged on: any
+    # degradation it did not report this time is no longer true of them.
+    degradations.resolve(degradation_service.STAGE_CHUNKING)
 
     _advance_stage(session, job, STAGE_EMBEDDING, PROGRESS_EMBEDDING)
 

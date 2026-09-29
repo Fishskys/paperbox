@@ -466,7 +466,8 @@ uv run pytest            # 或 uv run pytest tests -q
 | `tests/test_stored_cleanup.py` | STORED 后删 staging 与解包文件；STORED 之前失败保留 staging（可重试） |
 | `tests/test_upload_gc.py` | housekeeping：孤儿/终态 staging、**`STORED` 之前失败的行保留 72h 供重试 / 超期回收**、过期解包目录、残留压缩包、幂等、不改作业行、周期任务生命周期 |
 | `tests/test_bulk_ingest_dir.py` | 客户端脚本纯函数：预筛、清单、glob、429 退避、`--resume`、报告计数 |
-| `tests/test_consistency.py` | 三端一致性：缺失对象/孤儿对象/缺失索引/缺失 chunk/孤儿文档/删除残留/坏 store（一个挂了另两个照样答）/未传 client |
+| `tests/test_consistency.py` | 三端一致性：缺失对象/孤儿对象/缺失索引/缺失 chunk/孤儿文档/删除残留/坏 store（一个挂了另两个照样答）/未传 client |
+
 | `tests/test_jobs_api.py` | `GET /api/jobs` 的 offset 分页（新→旧、越界为空、负值 422）与 `stage` 过滤（total 随过滤变、未知 stage 422、十个阶段全放行、与 paper_id 叠加）、窗口回显 |
 | `tests/test_index_snapshot.py` | 索引映射与 chunk 文档形状快照：新字段类型、tag 按 kind 分列、identifiers 形状、`embedding` 仍是 1024 维 knn |
 | `tests/test_refresh_index_metadata.py` | 快照刷新：每个 chunk 一条 partial update（不含 embedding/text）、先 mapping 后文档、跳过软删与无 chunk 论文、`--dry-run`/`--paper-id`/`--no-mapping` |
@@ -487,7 +488,7 @@ uv run pytest            # 或 uv run pytest tests -q
 app/
   api/        health / papers / ingestion / jobs / search / search_logs / metadata / consistency 路由
   core/       config(pydantic-settings) logging security(Bearer)
-  db/         SQLAlchemy 2.x models（13 张表；另有 authors.normalized_name 唯一约束）+ session
+  db/         SQLAlchemy 2.x models（14 张表，含 T7.3 的 paper_degradations；另有 authors.normalized_name 唯一约束）+ session
   schemas/    Pydantic 请求/响应
   services/   paper / ingestion / embedding / metadata / object_storage / search /
               consistency_service（三端只读对账）
@@ -538,7 +539,7 @@ cp infra/.env.example infra/.env      # 容器侧：compose **只读** compose �
 #            · PAPERBOX_BIND_IP · OPENSEARCH_ADMIN_PASSWORD
 
 # 4) schema 与索引
-uv run alembic upgrade head          # 13 张表（papers.fingerprint 是部分唯一索引）
+uv run alembic upgrade head          # 14 张表（papers.fingerprint 是部分唯一索引；T7.3 新增 paper_degradations）
 uv run python scripts/create_index.py  # 建 paper_chunks_v2（CJK 分词）+ 别名 paper_chunks_current
 
 # 5) 启动 / 自检 / 测试

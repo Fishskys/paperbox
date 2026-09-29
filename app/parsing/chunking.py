@@ -18,8 +18,9 @@ Two boundary policies share this code path:
     count. Every ``length`` constraint still applies: the section boundary,
     the overlap window and the hard cap all win over a semantic dip, and a run
     of dips cannot produce chunks below ``semantic_min_tokens``. If embedding
-    fails the section silently (but loudly in the log) falls back to
-    ``length``.
+    fails the section falls back to ``length`` and -- when the caller passed one
+    -- reports the fact through ``on_degrade`` (plan T7.3), which is how a paper
+    ends up in the degradation ledger instead of only in the log.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.core.logging import get_logger
 from app.parsing.pdf import PageText
@@ -60,6 +62,17 @@ SEMANTIC_DIP_WINDOW = 1
 #: this many tokens; below it the dip is skipped (dips are cheap, chunks are
 #: not). Half of ``DEFAULT_TARGET_TOKENS``.
 SEMANTIC_MIN_TOKENS = 200
+
+#: Degradation ledger vocabulary for this module (plan T7.3). The stage string is
+#: validated against ``degradation_service.STAGES`` by the sink, so a typo here
+#: fails loudly instead of inventing a stage.
+DEGRADE_STAGE = "chunking"
+#: Reported when a section could not be embedded and falls back to ``length``.
+DEGRADE_SEMANTIC_FALLBACK = "semantic_fallback"
+
+#: ``(stage, code, detail) -> None``; the chunker only needs the callable, so it
+#: stays import-free of the service layer (and of a database in tests).
+DegradeSink = Callable[[str, str, dict[str, Any]], None]
 
 #: Sentence terminators; an ASCII terminator only ends a sentence when it is
 #: followed by whitespace or the end of the text.
@@ -245,6 +258,23 @@ def _section_pieces(section: Section) -> list[_Piece]:
     return pieces
 
 
+def _report_fallback(
+    on_degrade: DegradeSink | None,
+    *,
+    section: Section,
+    sentences: int,
+    detail: dict[str, Any],
+) -> None:
+    """Hand one fallback to the sink (a no-op without one)."""
+    if on_degrade is None:
+        return
+    on_degrade(
+        DEGRADE_STAGE,
+        DEGRADE_SEMANTIC_FALLBACK,
+        {"section": section.label, "sentences": sentences, **detail},
+    )
+
+
 def _semantic_pieces(
     section: Section,
     embed_fn: EmbedFn,
@@ -253,13 +283,15 @@ def _semantic_pieces(
     min_chars: int,
     threshold: float,
     window: int,
+    on_degrade: DegradeSink | None = None,
 ) -> list[_Piece] | None:
     """Group the section's sentences into pieces cut at similarity dips.
 
     Returns ``None`` when there is nothing to decide (fewer than two
     sentences) or when embedding failed: the caller then keeps the plain
     paragraph stream under the length policy, so a broken embedding server
-    degrades the chunking instead of failing the ingestion job.
+    degrades the chunking instead of failing the ingestion job. The failure is
+    handed to ``on_degrade`` so it outlives the log line.
     """
     units: list[tuple[int, str, bool]] = []
     for page, paragraph in section.paragraphs:
@@ -281,6 +313,12 @@ def _semantic_pieces(
                 }
             },
         )
+        _report_fallback(
+            on_degrade,
+            section=section,
+            sentences=len(units),
+            detail={"error": f"{type(exc).__name__}: {exc}"},
+        )
         return None
     if len(vectors) != len(units):
         logger.warning(
@@ -292,6 +330,12 @@ def _semantic_pieces(
                     "vectors": len(vectors),
                 }
             },
+        )
+        _report_fallback(
+            on_degrade,
+            section=section,
+            sentences=len(units),
+            detail={"vectors": len(vectors)},
         )
         return None
 
@@ -410,6 +454,7 @@ def _chunk_section(
     embed_fn: EmbedFn | None = None,
     semantic_threshold: float = SEMANTIC_SIMILARITY_THRESHOLD,
     semantic_min_tokens: int = SEMANTIC_MIN_TOKENS,
+    on_degrade: DegradeSink | None = None,
 ) -> list[Chunk]:
     pieces = _section_pieces(section)
     if not pieces:
@@ -431,6 +476,7 @@ def _chunk_section(
             min_chars=min_break_chars,
             threshold=semantic_threshold,
             window=SEMANTIC_DIP_WINDOW,
+            on_degrade=on_degrade,
         )
         if semantic is not None:
             pieces = semantic
@@ -510,6 +556,7 @@ def chunk_document(
     embed_fn: EmbedFn | None = None,
     semantic_threshold: float = SEMANTIC_SIMILARITY_THRESHOLD,
     semantic_min_tokens: int = SEMANTIC_MIN_TOKENS,
+    on_degrade: DegradeSink | None = None,
 ) -> list[Chunk]:
     """Chunk ``pages`` using ``sections``; never crosses a section boundary.
 
@@ -521,6 +568,10 @@ def chunk_document(
     the similarity dips. Either way the section boundary, the overlap window
     and the ``max_tokens`` cap are honoured, and a section whose embedding call
     fails falls back to the length policy.
+
+    ``on_degrade`` is the optional degradation sink (plan T7.3): it is called as
+    ``(stage, code, detail)`` for every fallback, so a paper whose semantic
+    chunking degraded can be found again once the embedding server is back.
     """
     if not pages:
         return []
@@ -559,6 +610,7 @@ def chunk_document(
                 embed_fn=embed_fn,
                 semantic_threshold=semantic_threshold,
                 semantic_min_tokens=semantic_min_tokens,
+                on_degrade=on_degrade,
             )
         )
     return chunks
