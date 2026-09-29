@@ -158,6 +158,61 @@ def test_the_snapshot_fields_are_declared() -> None:
         assert properties[field] == {"type": "keyword"}
 
 
+def test_the_chunk_mapping_is_strict() -> None:
+    """Unknown fields must fail the write, not get mapped to ``text`` silently.
+
+    2026-09-30: ``dynamic`` was ``true``, so a filter field added to a document
+    without a mapping update became a searchable-as-``text`` field that no
+    keyword filter could use -- and nothing complained (AGENTS §3.5). ``strict``
+    turns that into an indexing error; the tests below and just above keep it
+    safe by pinning that everything ``build_chunk_document`` emits is declared.
+    """
+    body = mappings.build_mapping()
+    assert body["mappings"]["dynamic"] == "strict"
+
+
+def test_every_field_the_document_emits_is_declared() -> None:
+    """The invariant that makes ``dynamic: strict`` safe."""
+    properties = mappings.build_mapping()["mappings"]["properties"]
+    document = opensearch.build_chunk_document(
+        {
+            "chunk_id": "c1",
+            "paper_id": "p1",
+            "text": "body",
+            "section": "1 Introduction",
+            "section_title": "Introduction",
+            "page_start": 1,
+            "page_end": 2,
+            "chunk_index": 0,
+            "title": "A Paper",
+            "authors": ["A Author"],
+            "year": 2024,
+            "venue": "ISSCC",
+            "venue_year": 2024,
+            "doi": "10.1/x",
+            "arxiv_id": "2401.00001",
+            "paper_type": "conference",
+            "publication_date": "2024-02-01",
+            "volume": "1",
+            "issue": "2",
+            "pages": "1-10",
+            "identifiers": ["doi:10.1/x"],
+            "pages": [1, 2],
+            "embedding": [0.0] * 4,
+            "embedding_model": "test",
+            "embedding_dimension": 4,
+            "parser_backend": "docling",
+            "parser_version": "1",
+            "tags": ["a"],
+        }
+    )
+    undeclared = sorted(set(document) - set(properties))
+    assert undeclared == [], (
+        f"{undeclared} would be rejected by dynamic:strict -- declare them in "
+        "mappings.build_mapping()"
+    )
+
+
 def test_the_vector_field_is_still_a_dense_knn_vector() -> None:
     properties = mappings.build_mapping()["mappings"]["properties"]
     assert properties["embedding"]["type"] == "knn_vector"
