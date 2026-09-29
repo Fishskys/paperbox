@@ -1,55 +1,1054 @@
 {
-  "note": "人工定标评测集（2026-09-12）。每条标注的判据来自 corpus 的 title/abstract（见 evals/README.md 与 progress.md）。grade 2 = 直接对应查询主题；grade 1 = 主题相关但非主目标；未列出者视为不相关（grade 0）。arxiv 指论文的 arxiv_id；title_like 用于库里 arxiv_id 为空的条目（按标题前缀匹配）。",
-  "queries": [
-    {"id": "q001", "query": "FPGA time-to-digital converter with sub-picosecond resolution", "language": "en", "note": "TDC 精度类：2412.18642 摘要写明 4.77 ps RMS；2209.00466 标题即 high-resolution TDC", "labels": [{"arxiv": "2412.18642", "grade": 2}, {"arxiv": "2209.00466", "grade": 2}, {"arxiv": "1702.06713", "grade": 1}, {"arxiv": "2406.17798", "grade": 1}]},
-    {"id": "q002", "query": "multi-channel time-to-digital converter for particle physics", "language": "en", "note": "通道数与场景：physics/0502062 为 96 通道 CDF 实验；1702.06713 为 384 通道 ARGNORN", "labels": [{"arxiv": "physics/0502062", "grade": 2}, {"arxiv": "1702.06713", "grade": 2}, {"arxiv": "2412.18642", "grade": 1}]},
-    {"id": "q003", "query": "stochastic time-to-digital converter linearity and measurement range", "language": "en", "note": "两篇 STDC（库里 arxiv_id 为空，按标题匹配）摘要都强调线性度/量程", "labels": [{"title_like": "A Novel 550-fs%", "grade": 2}, {"title_like": "A 9-bit 1.2GS/s Gain-Programmable%", "grade": 2}]},
-    {"id": "q004", "query": "time-interleaved ADC timing error calibration", "language": "en", "note": "1204.0844 标题/摘要即 signal-conditioning 缓解 timing errors", "labels": [{"arxiv": "1204.0844", "grade": 2}]},
-    {"id": "q005", "query": "wave union and tapped delay line TDC implementation", "language": "en", "note": "2412.18642 摘要明写 TDL + Wave Union A；2209.00466 摘要写 wave union 四边沿", "labels": [{"arxiv": "2412.18642", "grade": 2}, {"arxiv": "2209.00466", "grade": 2}]},
-    {"id": "q006", "query": "time-domain ADC with asynchronous pipeline successive approximation", "language": "en", "note": "库里那篇 8-GS/s TD-ADC 摘要原文即 asynchronous pipeline SAR", "labels": [{"title_like": "A Single-Channel%", "grade": 2}]},
-    {"id": "q007", "query": "low-cost Spartan-6 FPGA TDC core", "language": "en", "note": "1303.6840 标题即 Spartan-6 FPGA TDC core", "labels": [{"arxiv": "1303.6840", "grade": 2}]},
-    {"id": "q008", "query": "streaming time-to-digital converter for photon counting at low temperature", "language": "en", "note": "1207.2448 标题即 streaming TDC + photon counting", "labels": [{"arxiv": "1207.2448", "grade": 2}]},
-    {"id": "q009", "query": "SRAM read energy reduction by bit-line voltage swing", "language": "en", "note": "1710.07153 摘要即通过降低 bit-line 摆幅省读能耗", "labels": [{"arxiv": "1710.07153", "grade": 2}]},
-    {"id": "q010", "query": "SRAM compute-in-memory accelerating neural network inference", "language": "en", "note": "2309.03204（IMC 加速推理）与 2411.09546（rCiM 架构探索）", "labels": [{"arxiv": "2309.03204", "grade": 2}, {"arxiv": "2411.09546", "grade": 2}, {"arxiv": "2606.09129", "grade": 1}]},
-    {"id": "q011", "query": "nonvolatile SRAM using spin transistors", "language": "en", "note": "0901.2980 标题即 nonvolatile SRAM + spin-transistor", "labels": [{"arxiv": "0901.2980", "grade": 2}]},
-    {"id": "q012", "query": "carbon nanotube FET based SRAM cell design", "language": "en", "note": "1203.1971 标题即 CNTFET 32nm SRAM", "labels": [{"arxiv": "1203.1971", "grade": 2}]},
-    {"id": "q013", "query": "SRAM power delivery network benchmark circuits", "language": "en", "note": "2404.05260 标题即 SRAM-PG PDN benchmarks", "labels": [{"arxiv": "2404.05260", "grade": 2}]},
-    {"id": "q014", "query": "6T SRAM array design with sense amplifiers", "language": "en", "note": "2508.09419 摘要写 6T SRAM cell + sense amplifier；1203.1971 同为 SRAM 单元设计（相关）", "labels": [{"arxiv": "2508.09419", "grade": 2}, {"arxiv": "1203.1971", "grade": 1}]},
-    {"id": "q015", "query": "radiation induced delay and single event effects in SRAM-based FPGA", "language": "en", "note": "1502.03057 与 1807.11311 都研究 SRAM-FPGA 辐射导致的额外组合延迟", "labels": [{"arxiv": "1502.03057", "grade": 2}, {"arxiv": "1807.11311", "grade": 2}, {"arxiv": "2202.13769", "grade": 1}]},
-    {"id": "q016", "query": "pre-layout parasitic capacitance prediction for SRAM designs", "language": "en", "note": "2507.06549 标题即 deep-learning 寄生电容预测", "labels": [{"arxiv": "2507.06549", "grade": 2}]},
-    {"id": "q017", "query": "SRAM transistor sizing co-optimization with equivalent circuit model", "language": "en", "note": "2606.09129 摘要即等效 RC 负载 + 晶体管尺寸联合优化", "labels": [{"arxiv": "2606.09129", "grade": 2}]},
-    {"id": "q018", "query": "nanowire RAM as an alternative to SRAM", "language": "en", "note": "1404.0615 标题即 Nanowire Volatile RAM as an Alternative to SRAM", "labels": [{"arxiv": "1404.0615", "grade": 2}]},
-    {"id": "q019", "query": "FinFET self-heating effect inversion versus junctionless mode", "language": "en", "note": "2402.10858 标题即两种模式的 self-heating 对比", "labels": [{"arxiv": "2402.10858", "grade": 2}]},
-    {"id": "q020", "query": "random telegraph noise in FinFET subthreshold regime", "language": "en", "note": "2402.15176 标题即 RTN 幅度与 fin 形状", "labels": [{"arxiv": "2402.15176", "grade": 2}]},
-    {"id": "q021", "query": "silicon FinFET spin qubit TCAD simulation framework", "language": "en", "note": "2306.03213 标题即 FinFET spin qubit TCAD", "labels": [{"arxiv": "2306.03213", "grade": 2}]},
-    {"id": "q022", "query": "predictive process design kit for 15 nm FinFET", "language": "en", "note": "2009.04600 标题即 FreePDK15", "labels": [{"arxiv": "2009.04600", "grade": 2}]},
-    {"id": "q023", "query": "negative capacitance FinFET scaling study", "language": "en", "note": "2007.14448 摘要即 NC-FinFET 缩放到 2.1nm/1.5nm 节点的 TCAD 研究", "labels": [{"arxiv": "2007.14448", "grade": 2}]},
-    {"id": "q024", "query": "time-dependent dielectric breakdown in sub-nanometer EOT FinFET", "language": "en", "note": "2402.00886 标题即 TDDB + sub-1nm EOT nMOS FinFET", "labels": [{"arxiv": "2402.00886", "grade": 2}]},
-    {"id": "q025", "query": "multiple node charge collection in FinFET from neutron strike", "language": "en", "note": "1706.03315 标题即 14nm FinFET 中子引起的多节点电荷收集", "labels": [{"arxiv": "1706.03315", "grade": 2}]},
-    {"id": "q026", "query": "FinFET and nanowire SRAM radiation hardness TCAD simulation", "language": "en", "note": "2202.13769 标题即 5nm FinFET/nanowire SRAM 辐射硬度 ab initio-TCAD", "labels": [{"arxiv": "2202.13769", "grade": 2}, {"arxiv": "1706.03315", "grade": 1}]},
-    {"id": "q027", "query": "self-attention transformer for sequence transduction", "language": "en", "note": "1706.03762 库里有两行（同一篇的两个 paper_id，均判 2）；2010.13154 为 Transformer 语音分离（相关）", "labels": [{"arxiv": "1706.03762", "grade": 2}, {"arxiv": "2010.13154", "grade": 2}, {"arxiv": "1910.14537", "grade": 1}]},
-    {"id": "q028", "query": "attention ablation in hybrid state space and transformer models", "language": "en", "note": "2510.19861 摘要即 attention ablation 导致检索能力丧失；2606.02332 讨论 attention 与 SSM 结合", "labels": [{"arxiv": "2510.19861", "grade": 2}, {"arxiv": "2606.02332", "grade": 2}]},
-    {"id": "q029", "query": "dropout regularization for pre-trained language models", "language": "en", "note": "2104.04692 摘要即 dropout 作为 PrLM 过拟合疗法", "labels": [{"arxiv": "2104.04692", "grade": 2}]},
-    {"id": "q030", "query": "retention layer for long context transformer", "language": "en", "note": "2501.09166 摘要即 Retention Layer 机制补足 Transformer 保留能力", "labels": [{"arxiv": "2501.09166", "grade": 2}]},
-    {"id": "q031", "query": "MCP tool schema loading overhead reduction", "language": "en", "note": "2604.21816 标题即 tool gating + lazy schema loading", "labels": [{"arxiv": "2604.21816", "grade": 2}]},
-    {"id": "q032", "query": "dense passage retrieval dual encoder improvement", "language": "en", "note": "2108.06027 与 2508.09534 均为双编码器 DPR 改进", "labels": [{"arxiv": "2108.06027", "grade": 2}, {"arxiv": "2508.09534", "grade": 2}, {"arxiv": "2205.00970", "grade": 1}]},
-    {"id": "q033", "query": "learned index for large-scale dense passage retrieval", "language": "en", "note": "2205.00970 标题即 high-dimensional learned index", "labels": [{"arxiv": "2205.00970", "grade": 2}]},
-    {"id": "q034", "query": "retrieval augmented generation hallucination control token", "language": "en", "note": "2405.13008 标题即 Control Token + DPR；2402.11035 讨论 DPR 是否真的在检索（相关）", "labels": [{"arxiv": "2405.13008", "grade": 2}, {"arxiv": "2402.11035", "grade": 1}]},
-    {"id": "q035", "query": "graph foundation model for retrieval augmented generation", "language": "en", "note": "2502.01113 标题即 GFM-RAG", "labels": [{"arxiv": "2502.01113", "grade": 2}]},
-    {"id": "q036", "query": "automated literature review using LLM retrieval augmented generation", "language": "en", "note": "2411.18583 标题即自动化文献综述 + RAG", "labels": [{"arxiv": "2411.18583", "grade": 2}]},
-    {"id": "q037", "query": "patient cohort retrieval from electronic health records", "language": "en", "note": "2507.01049 标题即 cohort retrieval + DPR（医疗）", "labels": [{"arxiv": "2507.01049", "grade": 2}]},
-    {"id": "q038", "query": "retrieval augmented generation for quranic studies", "language": "en", "note": "2503.16581 标题即 Quranic studies RAG 评测", "labels": [{"arxiv": "2503.16581", "grade": 2}]},
-    {"id": "q039", "query": "multi-hop iterative refinement in retrieval augmented generation", "language": "en", "note": "2510.22344 标题即 faithful adaptive iterative refinement", "labels": [{"arxiv": "2510.22344", "grade": 2}]},
-    {"id": "q040", "query": "engineering the RAG stack architecture and trust framework review", "language": "en", "note": "2601.05264 标题即 RAG stack 综述 + 信任框架", "labels": [{"arxiv": "2601.05264", "grade": 2}]},
-    {"id": "q041", "query": "低功耗 SRAM 的读能耗与漏电优化", "language": "zh", "note": "中文查询 → 1710.07153（bit-line 摆幅降读能耗）", "labels": [{"arxiv": "1710.07153", "grade": 2}]},
-    {"id": "q042", "query": "FinFET 器件自热效应对比研究", "language": "zh", "note": "中文查询 → 2402.10858", "labels": [{"arxiv": "2402.10858", "grade": 2}]},
-    {"id": "q043", "query": "基于 FPGA 的高分辨率时间数字转换器", "language": "zh", "note": "中文查询 → 2412.18642 / 2406.17798（高分辨率 FPGA TDC）", "labels": [{"arxiv": "2412.18642", "grade": 2}, {"arxiv": "2406.17798", "grade": 2}, {"arxiv": "1702.06713", "grade": 1}]},
-    {"id": "q044", "query": "稠密段落检索的双编码器改进", "language": "zh", "note": "中文查询 → 2108.06027 / 2508.09534", "labels": [{"arxiv": "2108.06027", "grade": 2}, {"arxiv": "2508.09534", "grade": 2}]},
-    {"id": "q045", "query": "检索增强生成如何抑制大模型幻觉", "language": "zh", "note": "中文查询 → 2405.13008 / 2510.22344", "labels": [{"arxiv": "2405.13008", "grade": 2}, {"arxiv": "2510.22344", "grade": 2}, {"arxiv": "2402.11035", "grade": 1}]},
-    {"id": "q046", "query": "注意力机制用于语音分离", "language": "zh", "note": "中文查询 → 2010.13154（attention for speech separation）", "labels": [{"arxiv": "2010.13154", "grade": 2}]},
-    {"id": "q047", "query": "存内计算 SRAM 加速神经网络推理", "language": "zh", "note": "中文查询 → 2309.03204 / 2411.09546", "labels": [{"arxiv": "2309.03204", "grade": 2}, {"arxiv": "2411.09546", "grade": 2}]},
-    {"id": "q048", "query": "FinFET 器件中的随机电报噪声", "language": "zh", "note": "中文查询 → 2402.15176", "labels": [{"arxiv": "2402.15176", "grade": 2}]},
-    {"id": "q049", "query": "SRAM 之外的非易失存储器件方案", "language": "zh", "note": "中文查询 → 1404.0615（nanowire volatile RAM 替代 SRAM）、0901.2980（非易失 SRAM）", "labels": [{"arxiv": "1404.0615", "grade": 2}, {"arxiv": "0901.2980", "grade": 1}]},
-    {"id": "q050", "query": "时间交织 ADC 的时序误差校准", "language": "zh", "note": "中文查询 → 1204.0844", "labels": [{"arxiv": "1204.0844", "grade": 2}]}
-  ]
+ "note": "人工定标评测集（2026-09-30 重写，对应 evals/corpus30.txt 的 30 篇语料：计算机/软件/半导体/数字芯片/模拟芯片/人文社科 各 5 篇）。旧 spec（TDC/SRAM/FinFET/RAG 主题、引用 46 篇）与现语料只重合 1 篇，已归档 evals/archive/queries-spec-old-corpus.json。grade 2 = 直接对应查询主题；grade 1 = 主题相关但非主目标；未列出者视为不相关（grade 0）。labels 只用 arxiv（30 篇都有 arXiv id）。",
+ "version": "corpus30-20260930",
+ "queries": [
+  {
+   "id": "q001",
+   "query": "transformer architecture replacing recurrence with self-attention for sequence transduction",
+   "language": "en",
+   "note": "计算机/架构：1706.03762 是自注意力替代 RNN/CNN 的原论文（2）；1810.04805 用 Transformer 编码器但目标是预训练表征（1）",
+   "labels": [
+    {
+     "arxiv": "1706.03762",
+     "grade": 2
+    },
+    {
+     "arxiv": "1810.04805",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q002",
+   "query": "residual learning framework for training very deep convolutional networks",
+   "language": "en",
+   "note": "计算机/CV：1512.03385 提出残差学习（2）；1706.03762 也靠残差连接但主题是序列建模（1）",
+   "labels": [
+    {
+     "arxiv": "1512.03385",
+     "grade": 2
+    },
+    {
+     "arxiv": "1706.03762",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q003",
+   "query": "bidirectional encoder pretraining with masked language modeling for language understanding",
+   "language": "en",
+   "note": "计算机/NLP：1810.04805 双向掩码预训练（2）；2005.14165 同为预训练但自回归（1）",
+   "labels": [
+    {
+     "arxiv": "1810.04805",
+     "grade": 2
+    },
+    {
+     "arxiv": "2005.14165",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q004",
+   "query": "in-context learning and few-shot prompting at scale in autoregressive language models",
+   "language": "en",
+   "note": "计算机/LLM：2005.14165 首次系统展示 in-context few-shot（2）；1810.04805 的 fine-tuning 范式是其对照面（1）",
+   "labels": [
+    {
+     "arxiv": "2005.14165",
+     "grade": 2
+    },
+    {
+     "arxiv": "1810.04805",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q005",
+   "query": "parameter-efficient fine-tuning with low-rank adapters",
+   "language": "en",
+   "note": "计算机/PEFT：2106.09685 是 LoRA 原论文（2）；2005.14165 论证了全量微调的代价（1）",
+   "labels": [
+    {
+     "arxiv": "2106.09685",
+     "grade": 2
+    },
+    {
+     "arxiv": "2005.14165",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q006",
+   "query": "reducing trainable parameters when adapting large pretrained language models",
+   "language": "en",
+   "note": "计算机/PEFT 另一问法：2106.09685（2）；2109.00859 同属「预训练+适配到特定语言」（1）",
+   "labels": [
+    {
+     "arxiv": "2106.09685",
+     "grade": 2
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q007",
+   "query": "masked pretraining followed by task-specific fine-tuning on downstream benchmarks",
+   "language": "en",
+   "note": "计算机/预训练范式：1810.04805（2）；2005.14165 与 2106.09685 都建立在此两阶段范式上（1）",
+   "labels": [
+    {
+     "arxiv": "1810.04805",
+     "grade": 2
+    },
+    {
+     "arxiv": "2005.14165",
+     "grade": 1
+    },
+    {
+     "arxiv": "2106.09685",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q008",
+   "query": "attention is all you need self-attention encoder decoder",
+   "language": "en",
+   "note": "计算机/标题直查：1706.03762（2）；用于验证标题腿精确匹配",
+   "labels": [
+    {
+     "arxiv": "1706.03762",
+     "grade": 2
+    }
+   ]
+  },
+  {
+   "id": "q009",
+   "query": "identifier-aware encoder-decoder pretraining for code summarization and generation",
+   "language": "en",
+   "note": "软件/代码模型：2109.00859 是 CodeT5（2）；2009.08366 同为代码表示预训练（1）",
+   "labels": [
+    {
+     "arxiv": "2109.00859",
+     "grade": 2
+    },
+    {
+     "arxiv": "2009.08366",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q010",
+   "query": "pre-training code representations with data flow graphs",
+   "language": "en",
+   "note": "软件/代码表示：2009.08366 是 GraphCodeBERT（2）；2109.00859 同家族但用标识符感知（1）",
+   "labels": [
+    {
+     "arxiv": "2009.08366",
+     "grade": 2
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q011",
+   "query": "survey of language models for code covering models tasks and datasets",
+   "language": "en",
+   "note": "软件/综述：2311.07989（2）；2308.05345 是其中一类任务的基准（1）",
+   "labels": [
+    {
+     "arxiv": "2311.07989",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.05345",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q012",
+   "query": "empirical standards and methodological guidelines for software engineering research",
+   "language": "en",
+   "note": "软件/研究方法：2010.03525（2）；2311.07989 属综述而非标准（1）",
+   "labels": [
+    {
+     "arxiv": "2010.03525",
+     "grade": 2
+    },
+    {
+     "arxiv": "2311.07989",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q013",
+   "query": "combining large language models with transformation by example for automated code change",
+   "language": "en",
+   "note": "软件/自动程序修改：2402.07138（2）；2109.00859 提供代码生成底座（1）",
+   "labels": [
+    {
+     "arxiv": "2402.07138",
+     "grade": 2
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q014",
+   "query": "code search and code completion with pretrained programming language models",
+   "language": "en",
+   "note": "软件/任务面：2009.08366 与 2109.00859 都直接刷这两项任务（2/2）；2311.07989 是任务全景（1）",
+   "labels": [
+    {
+     "arxiv": "2009.08366",
+     "grade": 2
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 2
+    },
+    {
+     "arxiv": "2311.07989",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q015",
+   "query": "benchmarks and evaluation tasks for code generation models",
+   "language": "en",
+   "note": "软件→数字跨域：2311.07989 汇总 40+ 评测任务（2）；2308.05345 是 RTL 生成基准（1）；2010.03525 关注研究评测标准（1）",
+   "labels": [
+    {
+     "arxiv": "2311.07989",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.05345",
+     "grade": 1
+    },
+    {
+     "arxiv": "2010.03525",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q016",
+   "query": "machine learning techniques to improve semiconductor device modeling for electronic design automation",
+   "language": "en",
+   "note": "半导体/TCAD：2105.11453（2）；2310.17724 是器件建模另一路线（1）",
+   "labels": [
+    {
+     "arxiv": "2105.11453",
+     "grade": 2
+    },
+    {
+     "arxiv": "2310.17724",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q017",
+   "query": "field-effect transistors based on two-dimensional materials modeling perspective",
+   "language": "en",
+   "note": "半导体/2D 器件：2310.17724（2）；2110.08007 讲 2D 材料集成而非建模（1）",
+   "labels": [
+    {
+     "arxiv": "2310.17724",
+     "grade": 2
+    },
+    {
+     "arxiv": "2110.08007",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q018",
+   "query": "two-dimensional materials for future heterogeneous electronics integration",
+   "language": "en",
+   "note": "半导体/异质集成：2110.08007（2）；2310.17724 是器件级建模（1）",
+   "labels": [
+    {
+     "arxiv": "2110.08007",
+     "grade": 2
+    },
+    {
+     "arxiv": "2310.17724",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q019",
+   "query": "gate-all-around nanowire MOSFET process technology",
+   "language": "en",
+   "note": "半导体/GAA 工艺：1212.4225（2）；2205.00360 是同类器件的单篇结果（1）",
+   "labels": [
+    {
+     "arxiv": "1212.4225",
+     "grade": 2
+    },
+    {
+     "arxiv": "2205.00360",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q020",
+   "query": "indium oxide nanoribbon transistor with high drain current density",
+   "language": "en",
+   "note": "半导体/氧化物半导体器件：2205.00360（2）；1212.4225 是 GAA 工艺路线（1）",
+   "labels": [
+    {
+     "arxiv": "2205.00360",
+     "grade": 2
+    },
+    {
+     "arxiv": "1212.4225",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q021",
+   "query": "scaled transistor device design and simulation for advanced technology nodes",
+   "language": "en",
+   "note": "半导体/器件综合面：2105.11453 做建模自动化（2）；1212.4225 与 2205.00360 是具体器件实现（1）",
+   "labels": [
+    {
+     "arxiv": "2105.11453",
+     "grade": 2
+    },
+    {
+     "arxiv": "1212.4225",
+     "grade": 1
+    },
+    {
+     "arxiv": "2205.00360",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q022",
+   "query": "in-datacenter performance analysis of a tensor processing unit",
+   "language": "en",
+   "note": "数字芯片/AI 加速器：1704.04760（2）；1911.09925 是同类加速器的系统级评估（1）",
+   "labels": [
+    {
+     "arxiv": "1704.04760",
+     "grade": 2
+    },
+    {
+     "arxiv": "1911.09925",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q023",
+   "query": "full-stack SoC integration for systematic deep learning accelerator evaluation",
+   "language": "en",
+   "note": "数字芯片/全栈评估：1911.09925（2）；1704.04760 是数据中心实测（1）",
+   "labels": [
+    {
+     "arxiv": "1911.09925",
+     "grade": 2
+    },
+    {
+     "arxiv": "1704.04760",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q024",
+   "query": "automatic design space exploration for efficient FPGA accelerators with high-level synthesis",
+   "language": "en",
+   "note": "数字芯片/FPGA+HLS：2009.14381（2）；1911.09925 是 ASIC 侧同类加速器（1）",
+   "labels": [
+    {
+     "arxiv": "2009.14381",
+     "grade": 2
+    },
+    {
+     "arxiv": "1911.09925",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q025",
+   "query": "benchmark for design RTL generation with large language models",
+   "language": "en",
+   "note": "数字芯片/LLM4EDA：2308.05345（2）；2308.00708 是同类 Verilog 生成模型（1）",
+   "labels": [
+    {
+     "arxiv": "2308.05345",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.00708",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q026",
+   "query": "large language model for Verilog code generation",
+   "language": "en",
+   "note": "数字芯片/LLM4EDA：2308.00708（2）；2308.05345 用它定义的任务做基准（1）；2109.00859 是通用代码生成底座（1）",
+   "labels": [
+    {
+     "arxiv": "2308.00708",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.05345",
+     "grade": 1
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q027",
+   "query": "energy efficiency and bottleneck analysis of deep learning hardware accelerators",
+   "language": "en",
+   "note": "数字芯片/性能面：1704.04760 的 roofline 瓶颈分析（2）；1911.09925 的跨栈评估（2）；2009.14381 的加速器生成（1）",
+   "labels": [
+    {
+     "arxiv": "1704.04760",
+     "grade": 2
+    },
+    {
+     "arxiv": "1911.09925",
+     "grade": 2
+    },
+    {
+     "arxiv": "2009.14381",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q028",
+   "query": "reinforcement learning for analog circuit design optimization",
+   "language": "en",
+   "note": "模拟芯片/RL：2011.07665（2）；2608.13472 也用学习型优化但主体是 LLM（1）",
+   "labels": [
+    {
+     "arxiv": "2011.07665",
+     "grade": 2
+    },
+    {
+     "arxiv": "2608.13472",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q029",
+   "query": "machine learning algorithms enabling analog mixed-signal circuit synthesis",
+   "language": "en",
+   "note": "模拟芯片/AMS 综合：2112.07824（2）；1912.00402 是其中一类优化器（1）",
+   "labels": [
+    {
+     "arxiv": "2112.07824",
+     "grade": 2
+    },
+    {
+     "arxiv": "1912.00402",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q030",
+   "query": "Bayesian optimization with neural network surrogate model for analog circuit synthesis",
+   "language": "en",
+   "note": "模拟芯片/BO：1912.00402（2）；2112.07824 综述了这条路线（1）",
+   "labels": [
+    {
+     "arxiv": "1912.00402",
+     "grade": 2
+    },
+    {
+     "arxiv": "2112.07824",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q031",
+   "query": "large language model framework from topology generation to sizing for analog circuits",
+   "language": "en",
+   "note": "模拟芯片/LLM+设计：2608.13472 覆盖拓扑到尺寸（2）；2604.07387 只做尺寸自校准（2）；2011.07665 是更早的学习型方法（1）",
+   "labels": [
+    {
+     "arxiv": "2608.13472",
+     "grade": 2
+    },
+    {
+     "arxiv": "2604.07387",
+     "grade": 2
+    },
+    {
+     "arxiv": "2011.07665",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q032",
+   "query": "interpretable design equations for self-calibrating LLM based analog circuit sizing",
+   "language": "en",
+   "note": "模拟芯片/可解释 sizing：2604.07387（2）；2608.13472 是端到端框架但可解释性非重点（1）",
+   "labels": [
+    {
+     "arxiv": "2604.07387",
+     "grade": 2
+    },
+    {
+     "arxiv": "2608.13472",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q033",
+   "query": "operational transconductance amplifier sizing automation with large language models",
+   "language": "en",
+   "note": "模拟芯片/OTA sizing：2604.07387（2）；1912.00402 是传统 BO 路线的 sizing（1）",
+   "labels": [
+    {
+     "arxiv": "2604.07387",
+     "grade": 2
+    },
+    {
+     "arxiv": "1912.00402",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q034",
+   "query": "analog circuit performance optimization subject to design constraints",
+   "language": "en",
+   "note": "模拟芯片/约束优化：2011.07665（RL，2）；1912.00402（BO，2）；2112.07824 综述（1）",
+   "labels": [
+    {
+     "arxiv": "2011.07665",
+     "grade": 2
+    },
+    {
+     "arxiv": "1912.00402",
+     "grade": 2
+    },
+    {
+     "arxiv": "2112.07824",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q035",
+   "query": "large language models as simulated economic agents homo silicus",
+   "language": "en",
+   "note": "人文社科/LLM 经济主体：2301.07543（2）；2401.17435 用 LLM 做经济选择预测（1）",
+   "labels": [
+    {
+     "arxiv": "2301.07543",
+     "grade": 2
+    },
+    {
+     "arxiv": "2401.17435",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q036",
+   "query": "interactive simulacra of human behavior with generative agents",
+   "language": "en",
+   "note": "人文社科/社会模拟：2304.03442（2）；2604.01520 把 LLM 代理用于社科实验平台（1）",
+   "labels": [
+    {
+     "arxiv": "2304.03442",
+     "grade": 2
+    },
+    {
+     "arxiv": "2604.01520",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q037",
+   "query": "can LLMs replace economic choice prediction labs language based persuasion games",
+   "language": "en",
+   "note": "人文社科/实验经济学：2401.17435（2）；2301.07543 是 LLM 经济主体的方法论前作（1）",
+   "labels": [
+    {
+     "arxiv": "2401.17435",
+     "grade": 2
+    },
+    {
+     "arxiv": "2301.07543",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q038",
+   "query": "behavioral evaluation of LLM agents prosocial behavior in dictator games",
+   "language": "en",
+   "note": "人文社科/行为评估：2410.21359（2）；2301.07543 与 2304.03442 提供方法论基础（1）",
+   "labels": [
+    {
+     "arxiv": "2410.21359",
+     "grade": 2
+    },
+    {
+     "arxiv": "2301.07543",
+     "grade": 1
+    },
+    {
+     "arxiv": "2304.03442",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q039",
+   "query": "human-AI collaborative platform for automating social science experiments",
+   "language": "en",
+   "note": "人文社科/研究自动化：2604.01520（2）；2304.03442 是交互式代理原型（1）",
+   "labels": [
+    {
+     "arxiv": "2604.01520",
+     "grade": 2
+    },
+    {
+     "arxiv": "2304.03442",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q040",
+   "query": "persona conditioning effects on LLM agent decisions in economic games",
+   "language": "en",
+   "note": "人文社科/persona 效应：2410.21359（2）；2401.17435 也研究提示与角色对选择的影响（1）",
+   "labels": [
+    {
+     "arxiv": "2410.21359",
+     "grade": 2
+    },
+    {
+     "arxiv": "2401.17435",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q041",
+   "query": "large language models for electronic design automation and chip design",
+   "language": "en",
+   "note": "跨域/LLM+EDA（主人点名要的检索面）：数字侧 2308.05345、2308.00708，模拟侧 2608.13472、2604.07387 都是直接命中（2）；软件侧 2109.00859 与综述 2311.07989 相关（1）",
+   "labels": [
+    {
+     "arxiv": "2308.05345",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.00708",
+     "grade": 2
+    },
+    {
+     "arxiv": "2608.13472",
+     "grade": 2
+    },
+    {
+     "arxiv": "2604.07387",
+     "grade": 2
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 1
+    },
+    {
+     "arxiv": "2311.07989",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q042",
+   "query": "pretrained language models generating code from natural language instructions",
+   "language": "en",
+   "note": "跨域/代码生成：2109.00859 与 2009.08366（2）；2308.00708 把同一范式搬到硬件描述语言（1）；2311.07989（1）",
+   "labels": [
+    {
+     "arxiv": "2109.00859",
+     "grade": 2
+    },
+    {
+     "arxiv": "2009.08366",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.00708",
+     "grade": 1
+    },
+    {
+     "arxiv": "2311.07989",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q043",
+   "query": "domain adaptation of pretrained transformers to specialized engineering tasks",
+   "language": "en",
+   "note": "跨域/适配：2109.00859 把 NLP 预训练迁到编程语言（2）；2106.09685 是适配的通用技术（1）；2608.13472 把 LLM 用到电路设计（1）",
+   "labels": [
+    {
+     "arxiv": "2109.00859",
+     "grade": 2
+    },
+    {
+     "arxiv": "2106.09685",
+     "grade": 1
+    },
+    {
+     "arxiv": "2608.13472",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q044",
+   "query": "graph neural representations of programs for code understanding",
+   "language": "en",
+   "note": "软件/图表示：2009.08366 用数据流图（2）；2109.00859 用标识符而非图（1）",
+   "labels": [
+    {
+     "arxiv": "2009.08366",
+     "grade": 2
+    },
+    {
+     "arxiv": "2109.00859",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q045",
+   "query": "nano-scale transistor integration and process challenges beyond FinFET",
+   "language": "en",
+   "note": "半导体/先进器件：2205.00360（2）；1212.4225（2）；2110.08007 材料侧（1）",
+   "labels": [
+    {
+     "arxiv": "2205.00360",
+     "grade": 2
+    },
+    {
+     "arxiv": "1212.4225",
+     "grade": 2
+    },
+    {
+     "arxiv": "2110.08007",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q046",
+   "query": "survey reviewing recent advances across models tasks and datasets",
+   "language": "en",
+   "note": "综述面：2311.07989（2）；2112.07824 也是综述但限于 AMS（1）",
+   "labels": [
+    {
+     "arxiv": "2311.07989",
+     "grade": 2
+    },
+    {
+     "arxiv": "2112.07824",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q047",
+   "query": "simulating human behavior and society with large language model agents",
+   "language": "en",
+   "note": "人文社科/社会模拟汇总：2304.03442（2）；2301.07543（2）；2410.21359（1）；2604.01520（1）",
+   "labels": [
+    {
+     "arxiv": "2304.03442",
+     "grade": 2
+    },
+    {
+     "arxiv": "2301.07543",
+     "grade": 2
+    },
+    {
+     "arxiv": "2410.21359",
+     "grade": 1
+    },
+    {
+     "arxiv": "2604.01520",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q048",
+   "query": "augmenting a machine learning accelerator with a full system software stack",
+   "language": "en",
+   "note": "数字芯片/全栈：1911.09925（2）；1704.04760 是数据中心部署实测（1）",
+   "labels": [
+    {
+     "arxiv": "1911.09925",
+     "grade": 2
+    },
+    {
+     "arxiv": "1704.04760",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q049",
+   "query": "transferring natural language pretraining to programming languages",
+   "language": "en",
+   "note": "跨域/迁移：2109.00859（2）；2009.08366（1）；1810.04805 是被迁移的源模型（1）",
+   "labels": [
+    {
+     "arxiv": "2109.00859",
+     "grade": 2
+    },
+    {
+     "arxiv": "2009.08366",
+     "grade": 1
+    },
+    {
+     "arxiv": "1810.04805",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "q050",
+   "query": "training deeper networks with identity mappings and shortcut connections",
+   "language": "en",
+   "note": "计算机/残差另一问法：1512.03385（2）；1706.03762 用残差+层归一化（1）",
+   "labels": [
+    {
+     "arxiv": "1512.03385",
+     "grade": 2
+    },
+    {
+     "arxiv": "1706.03762",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z001",
+   "query": "低秩适配的大模型微调方法",
+   "language": "zh",
+   "note": "中文/计算机 PEFT：2106.09685（2）；2005.14165 全量微调对照（1）。用于验证 CJK 分词与中文查询命中",
+   "labels": [
+    {
+     "arxiv": "2106.09685",
+     "grade": 2
+    },
+    {
+     "arxiv": "2005.14165",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z002",
+   "query": "自注意力机制替代循环网络做序列建模",
+   "language": "zh",
+   "note": "中文/计算机架构：1706.03762（2）；1810.04805 用 Transformer 编码器（1）",
+   "labels": [
+    {
+     "arxiv": "1706.03762",
+     "grade": 2
+    },
+    {
+     "arxiv": "1810.04805",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z003",
+   "query": "面向代码理解与生成的预训练模型",
+   "language": "zh",
+   "note": "中文/软件：2109.00859 与 2009.08366（2）；2311.07989 综述（1）",
+   "labels": [
+    {
+     "arxiv": "2109.00859",
+     "grade": 2
+    },
+    {
+     "arxiv": "2009.08366",
+     "grade": 2
+    },
+    {
+     "arxiv": "2311.07989",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z004",
+   "query": "大语言模型生成Verilog硬件描述代码",
+   "language": "zh",
+   "note": "中文/LLM4EDA：2308.00708（2）；2308.05345 是同类基准（1）",
+   "labels": [
+    {
+     "arxiv": "2308.00708",
+     "grade": 2
+    },
+    {
+     "arxiv": "2308.05345",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z005",
+   "query": "用大语言模型做模拟电路尺寸设计",
+   "language": "zh",
+   "note": "中文/模拟芯片：2604.07387 与 2608.13472（2）；1912.00402 是传统 sizing 优化（1）",
+   "labels": [
+    {
+     "arxiv": "2604.07387",
+     "grade": 2
+    },
+    {
+     "arxiv": "2608.13472",
+     "grade": 2
+    },
+    {
+     "arxiv": "1912.00402",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z006",
+   "query": "二维材料场效应晶体管的器件建模",
+   "language": "zh",
+   "note": "中文/半导体：2310.17724（2）；2110.08007 是材料集成（1）",
+   "labels": [
+    {
+     "arxiv": "2310.17724",
+     "grade": 2
+    },
+    {
+     "arxiv": "2110.08007",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z007",
+   "query": "环栅纳米线晶体管工艺与器件",
+   "language": "zh",
+   "note": "中文/半导体 GAA：1212.4225 与 2205.00360（2）",
+   "labels": [
+    {
+     "arxiv": "1212.4225",
+     "grade": 2
+    },
+    {
+     "arxiv": "2205.00360",
+     "grade": 2
+    }
+   ]
+  },
+  {
+   "id": "z008",
+   "query": "大语言模型作为经济主体的社会模拟",
+   "language": "zh",
+   "note": "中文/人文社科：2301.07543（2）；2304.03442 与 2410.21359（1）",
+   "labels": [
+    {
+     "arxiv": "2301.07543",
+     "grade": 2
+    },
+    {
+     "arxiv": "2304.03442",
+     "grade": 1
+    },
+    {
+     "arxiv": "2410.21359",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z009",
+   "query": "张量处理器的数据中心性能分析",
+   "language": "zh",
+   "note": "中文/数字芯片：1704.04760（2）；1911.09925 同类加速器评估（1）",
+   "labels": [
+    {
+     "arxiv": "1704.04760",
+     "grade": 2
+    },
+    {
+     "arxiv": "1911.09925",
+     "grade": 1
+    }
+   ]
+  },
+  {
+   "id": "z010",
+   "query": "贝叶斯优化与神经网络代理模型的模拟电路综合",
+   "language": "zh",
+   "note": "中文/模拟芯片：1912.00402（2）；2112.07824 综述（1）",
+   "labels": [
+    {
+     "arxiv": "1912.00402",
+     "grade": 2
+    },
+    {
+     "arxiv": "2112.07824",
+     "grade": 1
+    }
+   ]
+  }
+ ]
 }
