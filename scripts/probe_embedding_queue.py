@@ -20,7 +20,7 @@ artifacts):
 ``rejection`` checks the bounded part of the queue: fire ``--clients`` requests at
 once and expect a mix of ``200`` and ``503``+``Retry-After`` once the backlog
 exceeds ``INFERENCE_QUEUE_DEPTH``. Point it at a throwaway container that sets a
-small depth (see progress.md), never at the live one.
+small depth (see docs/progress/project.md), never at the live one.
 
 Nothing is written anywhere: the script only reads HTTP, so there is nothing to
 clean up afterwards.

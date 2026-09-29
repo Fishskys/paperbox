@@ -1,4 +1,4 @@
-"""Schema of the multi-source metadata layer (docs/metadata-architecture.md).
+"""Schema of the multi-source metadata layer (docs/architecture/metadata-architecture.md).
 
 These are metadata-only assertions (no PostgreSQL): they pin the table names,
 the columns the services rely on, and -- most importantly -- the three partial

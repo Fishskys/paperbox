@@ -1,6 +1,6 @@
 """Matching an external record against the papers already in the library.
 
-Five steps, first hit wins (docs/metadata-architecture.md section 7):
+Five steps, first hit wins (docs/architecture/metadata-architecture.md section 7):
 
 ======  ==================================================  =========  =============
 step    evidence                                            confidence  outcome

@@ -5,7 +5,7 @@ Nine tables form the minimum viable model:
     papers, authors, venues, paper_authors, paper_tags, papers_tags,
     paper_files, paper_chunks, ingestion_jobs
 
-The multi-source metadata layer (docs/metadata-architecture.md) adds four more:
+The multi-source metadata layer (docs/architecture/metadata-architecture.md) adds four more:
 
     paper_sources, paper_identifiers, paper_field_provenance, venue_editions
 
@@ -110,7 +110,7 @@ class Paper(TimestampMixin, Base):
     venue_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("venues.id", ondelete="SET NULL")
     )
-    #: Bibliographic detail of the merged current value (docs/metadata-architecture.md
+    #: Bibliographic detail of the merged current value (docs/architecture/metadata-architecture.md
     #: section 3.5). ``venue_year`` is a redundant copy of ``venue_editions.year``
     #: so "venue + year" can be filtered without a join.
     volume: Mapped[str | None] = mapped_column(String(32))

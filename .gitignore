@@ -5,16 +5,24 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .hermes/
-# 文档：仓库只跟踪 README.md。以下都是**本地工作副本**，不进版本库（2026-09-14 主人要求）：
-#   plan.md（权威需求）· progress.md（进度与实测数字）· MVP-SPEC.md（接口摘要）
-#   AGENTS.md（环境契约与执行纪律）· docs/ · evals/README.md · evals/report-*.md
+# 文档跟踪范围（2026-09-29 主人要求）：**只跟踪 `README.md` 与 `docs/architecture/*`**，其余文档一律不跟踪。
+#   跟踪：README.md · docs/architecture/（结构文档集：00-overview 入口 + 01–10 + metadata-architecture /
+#         hermes-integration / MVP-SPEC）
+#   不跟踪（本地工作副本，克隆仓库看不到）：
+#     docs/progress/（project.md · parser.md）· docs/examine/（审查快照）· docs/old/（过时文档）
+#     .hermes/（各阶段 plan；2026-09-10_215600-paperbox-master-plan.md 是权威需求）
+#     AGENTS.md（环境契约与执行纪律）· evals/README.md · evals/report-*.md
+#   注意：`docs/*` + `!docs/architecture/` 是 gitignore 的标准反选写法（父目录必须先被反选，git 才会下探）。
+#   根目录的三个模式加 `/` 锚定 —— 不加锚定的 `MVP-SPEC.md` 会连 `docs/architecture/MVP-SPEC.md` 一起忽略。
 AGENTS.md
-MVP-SPEC.md
-plan.md
-progress.md
-docs/
+/plan.md
+/progress.md
+/MVP-SPEC.md
+docs/*
+!docs/architecture/
 evals/README.md
 evals/report-*.md
+# （组件级文件名 README.md，如 infra/docling/fnos/README.md，**继续跟踪** —— 随各自组件进版）
 # 评测/导入产物：体积大（3.2MB）且含本机绝对路径，可由 scripts/eval.py 复现。
 # 只跟踪**输入集**：evals/queries-spec.json · queries*.jsonl · labels.jsonl · arxiv_ids*.txt
 evals/report-*.json

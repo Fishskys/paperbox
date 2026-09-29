@@ -1,7 +1,7 @@
 """Metadata endpoints: import, review queue, human attribution, batch apply.
 
 These are the write-side companions of the read-only paper endpoints (section 9 of
-``docs/metadata-architecture.md``). Two rules shape all of them:
+``docs/architecture/metadata-architecture.md``). Two rules shape all of them:
 
 * **nothing is written unless the caller says so** -- ``POST /api/metadata/import``
   defaults to ``dry_run=true`` and only an explicit ``apply`` (or ``dry_run=false``)

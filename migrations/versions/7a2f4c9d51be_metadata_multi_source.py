@@ -1,6 +1,6 @@
 """metadata multi-source storage
 
-Adds the multi-source metadata layer described in ``docs/metadata-architecture.md``
+Adds the multi-source metadata layer described in ``docs/architecture/metadata-architecture.md``
 and ``.hermes/plans/2026-09-21_201622-metadata-discovery-storage.md``:
 
 * four new tables -- ``paper_sources`` (verbatim source snapshots),
