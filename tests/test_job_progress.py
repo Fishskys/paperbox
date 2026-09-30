@@ -170,7 +170,9 @@ def stubbed_pipeline(monkeypatch):
     )
     monkeypatch.setattr(tasks, "extract_pages", lambda data: ["page one text"])
     monkeypatch.setattr(
-        tasks, "_backfill_metadata", lambda session, paper, pages, data=None: None
+        tasks,
+        "_backfill_metadata",
+        lambda session, paper, pages, data=None, filename=None: None,
     )
 
     def _parse_paper_file(paper_id, data, **kwargs):

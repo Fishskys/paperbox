@@ -45,6 +45,7 @@ SOURCE_TYPE_ARXIV_API = sources.SOURCE_TYPE_ARXIV_API
 SOURCE_TYPE_CROSSREF = sources.SOURCE_TYPE_CROSSREF
 SOURCE_TYPE_PDF_EMBEDDED = sources.SOURCE_TYPE_PDF_EMBEDDED
 SOURCE_TYPE_PDF_HEURISTIC = sources.SOURCE_TYPE_PDF_HEURISTIC
+SOURCE_TYPE_FILENAME = sources.SOURCE_TYPE_FILENAME
 SOURCE_TYPE_IMPORT_FILE = sources.SOURCE_TYPE_IMPORT_FILE
 SOURCE_TYPE_MANUAL = sources.SOURCE_TYPE_MANUAL
 
@@ -61,8 +62,15 @@ STRUCTURED_SOURCE_TYPES: frozenset[str] = frozenset(
     }
 )
 
-#: The only source whose values can be corrected by rule 2.
-HEURISTIC_SOURCE_TYPES: frozenset[str] = frozenset({SOURCE_TYPE_PDF_HEURISTIC})
+#: The sources whose values can be corrected by rule 2: the first-page
+#: heuristics and the file name (both are guesses about the document, while
+#: ``pdf_embedded`` / ``arxiv_api`` / ``manual`` actually know something).
+WEAK_SOURCE_TYPES: frozenset[str] = frozenset(
+    {SOURCE_TYPE_PDF_HEURISTIC, SOURCE_TYPE_FILENAME}
+)
+
+#: Backwards-compatible alias (older call sites and docs use this name).
+HEURISTIC_SOURCE_TYPES: frozenset[str] = WEAK_SOURCE_TYPES
 
 #: ``manual`` is the one source R2 does not constrain (decision 12).
 UNRESTRICTED_SOURCE_TYPES: frozenset[str] = frozenset({SOURCE_TYPE_MANUAL})
@@ -129,7 +137,7 @@ def is_structured(source_type: str | None) -> bool:
 
 
 def is_heuristic(source_type: str | None) -> bool:
-    """Whether a source type is the overridable heuristic one."""
+    """Whether a source type is a *weak* one a structured source may correct."""
     return (source_type or "").strip().lower() in HEURISTIC_SOURCE_TYPES
 
 
@@ -225,7 +233,7 @@ def decide(
             action=ACTION_OVERRIDDEN,
             kept=value,
             rejected=current_value,
-            reason="structured source overrides pdf_heuristic",
+            reason="structured source overrides a weak source",
             source_type=incoming_type,
         )
     if _special_winner(field_name, current_value, value):
@@ -403,6 +411,8 @@ __all__ = [
     "ACTION_UNCHANGED",
     "AUTHORS_FIELD",
     "HEURISTIC_SOURCE_TYPES",
+    "WEAK_SOURCE_TYPES",
+    "SOURCE_TYPE_FILENAME",
     "SOURCE_TYPES",
     "SOURCE_TYPE_ARXIV_API",
     "SOURCE_TYPE_CROSSREF",

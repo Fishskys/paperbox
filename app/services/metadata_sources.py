@@ -29,6 +29,9 @@ SOURCE_TYPE_ARXIV_API = "arxiv_api"
 SOURCE_TYPE_CROSSREF = "crossref"
 SOURCE_TYPE_PDF_EMBEDDED = "pdf_embedded"
 SOURCE_TYPE_PDF_HEURISTIC = "pdf_heuristic"
+#: The file name a human handed us (``1706.03762__topic.pdf``). Weakest layer:
+#: a name says *which* paper this is, never what its metadata is.
+SOURCE_TYPE_FILENAME = "filename"
 SOURCE_TYPE_IMPORT_FILE = "import_file"
 SOURCE_TYPE_MANUAL = "manual"
 
@@ -38,6 +41,7 @@ SOURCE_TYPES: tuple[str, ...] = (
     SOURCE_TYPE_CROSSREF,
     SOURCE_TYPE_PDF_EMBEDDED,
     SOURCE_TYPE_PDF_HEURISTIC,
+    SOURCE_TYPE_FILENAME,
     SOURCE_TYPE_IMPORT_FILE,
     SOURCE_TYPE_MANUAL,
 )
@@ -69,6 +73,11 @@ class SourceRef:
 def paper_heuristic_ref(paper_id: str) -> str:
     """``paper:<id>:heuristic`` -- one heuristic source per paper."""
     return f"paper:{paper_id}:heuristic"
+
+
+def paper_filename_ref(paper_id: str) -> str:
+    """``paper:<id>:filename`` -- one file-name source per paper."""
+    return f"paper:{paper_id}:filename"
 
 
 def paper_embedded_ref(paper_id: str) -> str:

@@ -80,7 +80,7 @@
 两个互不相干的机制：
 
 1. **HTTP 错误** = 各 endpoint 内手写 `raise HTTPException(...)`。没有统一异常处理器，也没有业务异常基类到状态的集中映射；FastAPI 默认处理器输出字符串 `detail`，与 `docs/architecture/MVP-SPEC.md:108`「统一 `{"detail": "…"}`」一致。
-2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1118`。
+2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1202`。
 
 业务异常 → HTTP 状态映射（全部为端点内显式 raise）：
 

@@ -42,6 +42,10 @@ from app.services import object_storage, paper_service, parser_service, provenan
 
 logger = get_logger(__name__)
 
+#: A file name is a hint about identity, weaker than the first-page heuristics
+#: (0.5) and far weaker than the PDF's own metadata (1.0).
+FILENAME_MATCH_CONFIDENCE = 0.4
+
 #: Test/observability hook, fired right after each stage commit (None in production).
 stage_commit_hook: Callable[[str, str, float], None] | None = None
 
@@ -497,7 +501,7 @@ def _run_pipeline(
             return
 
     _reset_placeholder_title(session, paper, job)
-    _backfill_metadata(session, paper, pages, data)
+    _backfill_metadata(session, paper, pages, data, filename=_source_filename(paper, job, file_record))
     _restore_placeholder_title(session, paper, job)
 
     # Parsing revealed DOI/arXiv/title, so the sha256 fingerprint can now be
@@ -913,15 +917,27 @@ def _restore_placeholder_title(
     session.flush()
 
 
-def _backfill_metadata(session: Session, paper: Paper, pages, pdf_bytes: bytes | None = None) -> None:
-    """Fill the paper's metadata from the PDF, layer 1 then layer 2.
+def _backfill_metadata(
+    session: Session,
+    paper: Paper,
+    pages,
+    pdf_bytes: bytes | None = None,
+    filename: str | None = None,
+) -> None:
+    """Fill the paper's metadata from the PDF, layers 1 to 3.
 
-    Two sources are recorded, in this order:
+    Three sources are recorded, in this order:
 
     1. ``pdf_embedded`` -- the Info dictionary / XMP packet (no network, no
-       guessing). Structured, so it may correct a heuristic value.
+       guessing). Structured, so it may correct a weak value.
     2. ``pdf_heuristic`` -- the first-page heuristics that have always run. They
        only fill what is still blank (rule R2).
+    3. ``filename`` -- the weakest layer, and the last to speak: a dropped-in file
+       is often named ``<arxiv_id>__<topic>.pdf``. Only the identifier is taken
+       from the name, and only while nothing else has claimed one -- a PDF with no
+       arXiv stamp whose ``/Info`` title is Word/LaTeX garbage otherwise ends up
+       with no identifier at all (7 of the 30 corpus papers on 2026-09-30, fixed by
+       hand back then).
 
     Every value goes through the merge engine and lands in
     ``paper_field_provenance``, so ``GET /api/papers/{id}/metadata`` can say where
@@ -975,8 +991,76 @@ def _backfill_metadata(session: Session, paper: Paper, pages, pdf_bytes: bytes |
             confidence=0.5,
         )
 
+    if filename:
+        filename_values = metadata_service.filename_claim_values(filename)
+        guessed = str(filename_values.get("identifier:arxiv") or "")
+        if guessed and _may_offer_arxiv_id(session, paper, guessed):
+            source = metadata_sources.upsert_source(
+                session,
+                source_type=metadata_sources.SOURCE_TYPE_FILENAME,
+                source_ref=metadata_sources.paper_filename_ref(paper.id),
+                raw={"filename": filename, **filename_values},
+                paper_id=paper.id,
+                match_status=metadata_sources.MATCH_STATUS_MATCHED,
+                match_method="filename",
+                match_confidence=FILENAME_MATCH_CONFIDENCE,
+                importer="pipeline",
+            )
+            metadata_merge.merge_values(
+                session,
+                paper,
+                filename_values,
+                source_type=metadata_sources.SOURCE_TYPE_FILENAME,
+                source_id=source.id,
+                confidence=FILENAME_MATCH_CONFIDENCE,
+            )
+
     metadata_identifiers.mirror_legacy_columns(session, paper)
     session.flush()
+
+
+def _source_filename(
+    paper: Paper, job: IngestionJob, file_record: "PaperFile | None" = None
+) -> str | None:
+    """The name of the PDF this ingest is working on (input to layer 3).
+
+    Preference order: the paper's primary file row (also correct on retry/reindex,
+    and the name the operator sees), the row this job just created, then the job
+    payload -- a URL import may only have that last one.
+    """
+    record = paper_service.original_file(paper) or file_record
+    if record is not None and (record.filename or "").strip():
+        return record.filename
+    payload = job.payload or {}
+    name = payload.get("filename")
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _may_offer_arxiv_id(session: Session, paper: Paper, arxiv_id: str) -> bool:
+    """Whether layer 3 may offer the arXiv id its file name carries.
+
+    Two ways the answer is no:
+
+    * the paper already knows an arXiv id (checked as a claim *and* as the mirror
+      column, since rows written before the provenance layer carry the column
+      only) -- a name must never second-guess a document or a human;
+    * the id already belongs to some other paper. The identifier table would
+      refuse the row anyway (``uq`` on scheme+value), but the provenance claim
+      would still be written, leaving a paper whose *current claim* is an id it
+      does not hold -- and rolling that claim back writes the value straight onto
+      ``papers.arxiv_id``. A name that contradicts the library's identity map is
+      a duplicate-detection signal for the matcher, not a metadata hint.
+    """
+    if provenance_service.current_claim(session, paper.id, "identifier:arxiv"):
+        return False
+    if (paper.arxiv_id or "").strip():
+        return False
+    return (
+        metadata_identifiers.find_identifier(
+            session, metadata_identifiers.SCHEME_ARXIV, arxiv_id
+        )
+        is None
+    )
 
 
 def _replace_chunks(session: Session, paper: Paper, chunks) -> list[PaperChunk]:
