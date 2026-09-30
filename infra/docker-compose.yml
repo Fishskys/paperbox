@@ -52,6 +52,11 @@ services:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:9200:9200"
     volumes:
       - ${OPENSEARCH_DATA_DIR:-./data/opensearch}:/usr/share/opensearch/data
+      # 快照仓库（`_snapshot`）的落点；必须与 `path.repo` 一致，见 PAPERBOX_BACKUP_DIR 说明。
+      - ${OPENSEARCH_BACKUP_DIR:-./data/opensearch-backups}:/mnt/backups
+    # `path.repo` 只能靠 `-E` 传（该镜像不读任意环境变量当 settings），
+    # 且改了 `path.repo` 必须重建容器 —— 只 `restart` 不生效。
+    command: ["opensearch", "-Epath.repo=/mnt/backups"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
       interval: 15s

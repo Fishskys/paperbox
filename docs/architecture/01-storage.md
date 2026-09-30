@@ -151,7 +151,9 @@ venues ──CASCADE──> venue_editions
 | `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:175` |
 | `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:179`；`app/workers/housekeeping.py:323-334` |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:41` |
-| 镜像/端口 | `postgres:15.2-alpine:5432`、`opensearchproject/opensearch:3.6.0:9200`、`minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1:9000/9001` | 依赖版本与端口 | `infra/docker-compose.yml:17`、`:35`、`:62`、`:24-25`、`:51-52`、`:69-71` |
+| `OPENSEARCH_BACKUP_DIR` | `./data/opensearch-backups` | 快照仓库落点（挂到容器 `/mnt/backups`，与 `-Epath.repo` 成对） | `infra/docker-compose.yml:60-65`；`infra/.env:15` |
+| 快照策略 | `paperbox-daily`（`30 3 * * *` Asia/Shanghai，留 14 份/30 天） | SM 定时快照：`paper_chunks_*,search-relevance-*` | `scripts/setup_snapshots.py:41-56`；真机 `_plugins/_sm/policies` |
+| 镜像/端口 | `postgres:15.2-alpine:5432`、`opensearchproject/opensearch:3.6.0:9200`、`minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1:9000/9001` | 依赖版本与端口 | `infra/docker-compose.yml:17`、`:35`、`:67`、`:24-25`、`:51-52`、`:74-76` |
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 
@@ -176,8 +178,9 @@ venues ──CASCADE──> venue_editions
 
 ## 8. 未做 / 已知缺口
 
-- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:502` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:389` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v3`）。
+- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:513` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:399` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v3`）。
 - `build_extracted_key` / `build_figure_key` / `papers/<id>/supplementary/` 只是预留布局，无任何调用方（`object_storage.py:5-9`、`:114-119`）。
+- **备份只覆盖 OpenSearch**：快照仓库（`paperbox_backup`）不包含 PostgreSQL 与 MinIO 原件 —— PG 在 WSL 的 ext4（`paperbox-data/` 备份不覆盖），MinIO 的对象要靠 `mc mirror` 或冻结的 PDF 副本。
 - `papers.deleted_at` 之外没有清理机制：`paper_chunks` 行软删后长期保留，仅 `scripts/purge_deleted.py` 处理 OpenSearch/MinIO 遗留，需要人工触发。
 - `search_queries` 无分区、无 TTL、无清理脚本（仅 `app/services/search_log_service.py` 写入）——是否另有保留策略未确认。
 - `move_object` 失败会让对象留在 `papers/<临时id>/`，`delete_prefix` 按 `paper_id` 前缀删会漏掉它（`object_storage.py:389-423`），未找到补偿扫描。
