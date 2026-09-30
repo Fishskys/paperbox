@@ -323,6 +323,117 @@ CARDINALITY_PRECISION = 3000
 #: How many neighbours the kNN leg offers when counting papers.
 COUNT_K = 1000
 
+#: Facets ``facets=true`` reports: the metadata filters a caller can feed back in.
+#: Every one of these is a ``keyword`` field on the chunk (see
+#: :data:`app.search.mappings.KEYWORD_FIELDS`), except ``year`` -- an ``integer``,
+#: which is bucketed by a histogram instead of a terms aggregation.
+FACET_TERM_FIELDS: tuple[str, ...] = (
+    "venue",
+    "paper_type",
+    "ieee_terms",
+    "author_terms",
+    "dynamic_index_terms",
+    "source_tags",
+)
+FACET_YEAR_FIELD = "year"
+FACET_NAMES: tuple[str, ...] = FACET_TERM_FIELDS + (FACET_YEAR_FIELD,)
+
+#: Buckets per facet. ``terms`` is top-N by paper count, so this is a ceiling, not
+#: a promise: on the 30-paper corpus ``author_terms`` (arXiv categories) already
+#: holds 31 distinct values, and the tail beyond 50 would be dropped. Bigger
+#: vocabularies need a composite aggregation with paging -- not today.
+FACET_SIZE = 50
+
+
+def _papers_sub_aggregation() -> dict[str, Any]:
+    """Count **papers**, not chunks, inside one bucket.
+
+    The index holds one document per chunk, so a plain ``doc_count`` would answer
+    "how many chunks mention this venue" -- a number that grows with chunk length
+    and cannot be compared with ``GET /api/papers``. Same correction as ``total``.
+    """
+    return {
+        "papers": {
+            "cardinality": {
+                "field": "paper_id",
+                "precision_threshold": CARDINALITY_PRECISION,
+            }
+        }
+    }
+
+
+def build_facet_body(
+    filters: Mapping[str, Any] | None = None, *, size: int = FACET_SIZE
+) -> dict[str, Any]:
+    """``size: 0`` body with one paper-counting aggregation per facet.
+
+    **Query independent on purpose.** The relevance legs (BM25, kNN) are *not* in
+    this body: a facet answers "what does this filter leave in the library", which
+    must not move because a caller changed ``top_k``, turned rerank on, or phrased
+    the query differently. It is also the only reading that lines up with
+    ``GET /api/papers``, whose filters read PostgreSQL. Callers who want the
+    facets of the page they got can filter the response themselves.
+
+    Pure: the clause shape is asserted in ``tests/test_search_facets.py`` without
+    a cluster.
+    """
+    clauses = build_filters(filters)
+    query: dict[str, Any] = {"bool": {"filter": list(clauses)}} if clauses else {"match_all": {}}
+    aggs: dict[str, Any] = {
+        field: {
+            "terms": {"field": field, "size": int(size)},
+            "aggs": _papers_sub_aggregation(),
+        }
+        for field in FACET_TERM_FIELDS
+    }
+    aggs[FACET_YEAR_FIELD] = {
+        # One bucket per year, count of papers (``min_doc_count`` drops the empty
+        # years a histogram would otherwise emit across the span).
+        "histogram": {"field": FACET_YEAR_FIELD, "interval": 1, "min_doc_count": 1},
+        "aggs": _papers_sub_aggregation(),
+    }
+    return {
+        "size": 0,
+        "track_total_hits": False,
+        "query": query,
+        "aggs": aggs,
+    }
+
+
+def facet_counts(
+    filters: Mapping[str, Any] | None = None,
+    *,
+    client: OpenSearch | None = None,
+    index: str = ALIAS,
+    size: int = FACET_SIZE,
+) -> dict[str, list[dict[str, Any]]]:
+    """Read :func:`build_facet_body` back as ``{facet: [{key, count}, ...]}``.
+
+    Buckets keep the engine's order: ``terms`` by descending paper count, the year
+    histogram ascending. Zero-paper buckets are dropped (a bucket cannot be empty --
+    every document carries a ``paper_id`` -- but a histogram may emit one).
+    """
+    response = _search(
+        build_facet_body(filters, size=size), client=client, index=index
+    )
+    aggregations = response.get("aggregations") or {}
+    return {name: _facet_buckets(aggregations.get(name)) for name in FACET_NAMES}
+
+
+def _facet_buckets(aggregation: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Normalize one aggregation's buckets into ``{key: str, count: int}``."""
+    buckets: list[dict[str, Any]] = []
+    for bucket in (aggregation or {}).get("buckets") or []:
+        count = int(((bucket.get("papers") or {}).get("value")) or 0)
+        if not count:
+            continue
+        key = bucket.get("key_as_string")
+        if key is None:
+            raw = bucket.get("key")
+            key = str(int(raw)) if isinstance(raw, (int, float)) and float(raw).is_integer() else str(raw)
+        buckets.append({"key": str(key), "count": count})
+    return buckets
+
 
 def build_count_body(
     query: str,

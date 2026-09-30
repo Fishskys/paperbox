@@ -143,6 +143,16 @@ class SearchRequest(BaseModel):
             "with the cross-encoder before paper aggregation."
         ),
     )
+    facets: bool = Field(
+        default=False,
+        description=(
+            "Also report, for every metadata filter, which values exist under the "
+            "current filters and how many **papers** each holds (one extra "
+            "size:0 aggregation). Query independent: the relevance legs are not "
+            "part of it, so the counts do not move with top_k/rerank and match "
+            "GET /api/papers."
+        ),
+    )
 
     @field_validator("query")
     @classmethod
@@ -230,6 +240,31 @@ class SearchRewriteInfo(BaseModel):
     took_ms: int | None = None
 
 
+class FacetBucket(BaseModel):
+    """One facet value and how many papers carry it."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: The value to feed back as a filter (``year`` comes back as ``"2017"``).
+    key: str
+    #: Distinct papers, not chunks -- a plain bucket doc_count would count chunks.
+    count: int
+
+
+class SearchFacets(BaseModel):
+    """``facets=true`` read-out: the same keys the filters accept."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    venue: list[FacetBucket] = Field(default_factory=list)
+    paper_type: list[FacetBucket] = Field(default_factory=list)
+    year: list[FacetBucket] = Field(default_factory=list)
+    ieee_terms: list[FacetBucket] = Field(default_factory=list)
+    author_terms: list[FacetBucket] = Field(default_factory=list)
+    dynamic_index_terms: list[FacetBucket] = Field(default_factory=list)
+    source_tags: list[FacetBucket] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     """Response body of ``POST /api/search``."""
 
@@ -248,13 +283,18 @@ class SearchResponse(BaseModel):
     took_ms: float
     rerank: SearchRerankInfo = Field(default_factory=SearchRerankInfo)
     rewrite: SearchRewriteInfo = Field(default_factory=SearchRewriteInfo)
+    #: ``null`` when ``facets`` was not requested -- or when the aggregation
+    #: failed (logged as a warning; a facet is never worth a 503).
+    facets: SearchFacets | None = None
     results: list[SearchResult] = Field(default_factory=list)
 
 
 __all__ = [
     "MAX_TOP_K",
     "MIN_TOP_K",
+    "FacetBucket",
     "SearchEvidence",
+    "SearchFacets",
     "SearchFilters",
     "SearchRequest",
     "SearchResponse",

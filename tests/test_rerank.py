@@ -343,6 +343,8 @@ def test_response_has_a_rerank_block() -> None:
         "took_ms",
         "rerank",
         "rewrite",
+        # ``facets`` (2026-09-30, T-A3): null unless the caller asked for buckets.
+        "facets",
         "results",
     }
 

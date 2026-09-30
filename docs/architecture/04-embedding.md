@@ -39,7 +39,7 @@
 | | `_write_embeddings()` :1099 | PG 侧 model/dimension/embedded_at |
 | | `_index_rows()` :1135 | 构造待索引文档（含 `embedding`） |
 | | `_record_failure()` :1201 | FAILED 簿记（`classify_failure` → `error_code`） |
-| `app/search/hybrid.py` | `_semantic_hits()` :499 | 查询侧 `embed_text(query)`，把 `EmbeddingError` 转 `SearchError` |
+| `app/search/hybrid.py` | `_semantic_hits()` :610 | 查询侧 `embed_text(query)`，把 `EmbeddingError` 转 `SearchError` |
 | `app/core/errors.py` | `classify_failure()` :127；`EmbeddingError` 分支 :179 | `EMBEDDING_FAILED` 归类 |
 | `app/services/degradation_service.py` | `record()` :81 / `resolve_stage()` :133 / `Recorder` :226 | **T7.3 降级账本**：`(stage, code, detail)` 落 `paper_degradations` |
 
@@ -81,7 +81,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 10. `opensearch.ensure_index()` → `delete_by_paper_id()` → `_index_rows()` → `bulk_index_chunks()`（:549-552，`opensearch.py:364`，`BULK_BATCH_SIZE` 默认 200 + `refresh=True`）→ `_mark_indexed()`（:557）。
 
 查询侧（策略细节见 06）：
-`POST /api/search` → `search_service.search_papers` → `hybrid.search_chunks()`（`hybrid.py:526`）→ `_semantic_hits()`（:499）→ `embed_text(query)`（:508）→ `EmbeddingError` 被转成 `SearchError`（:509-510）→ `app/api/search.py:86-90` 返回 503（查询侧 embedding 失败**不会**退化成纯关键词）。精排另走 `rerank_service.rerank_texts()` → `POST /rerank`（客户端契约见 `app/services/rerank_service.py:1-14`）。
+`POST /api/search` → `search_service.search_papers` → `hybrid.search_chunks()`（`hybrid.py:637`）→ `_semantic_hits()`（:610）→ `embed_text(query)`（:619）→ `EmbeddingError` 被转成 `SearchError`（:620-621）→ `app/api/search.py:88-92` 返回 503（查询侧 embedding 失败**不会**退化成纯关键词）。精排另走 `rerank_service.rerank_texts()` → `POST /rerank`（客户端契约见 `app/services/rerank_service.py:1-14`）。
 
 ### 4b. 服务端排队（T7.3）
 
@@ -169,7 +169,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 
 | # | 缺口 | 说明 / 证据 |
 |---|---|---|
-| 1 | e5 的 `query:`/`passage:` 前缀**未做** | 全仓无 `passage:` 前缀构造（`grep` 仅命中 `evals/report-jina-rerank-comparison.md:39` 的说明）；`embedding_service.py` 直接发送原文（:34），`hybrid.py:508` 发送原查询。决策与理由：**出自 docs/progress/project.md §13**（一阶段召回已非瓶颈，重算+迁移收益传导不到最终指标） |
+| 1 | e5 的 `query:`/`passage:` 前缀**未做** | 全仓无 `passage:` 前缀构造（`grep` 仅命中 `evals/report-jina-rerank-comparison.md:39` 的说明）；`embedding_service.py` 直接发送原文（:34），`hybrid.py:619` 发送原查询。决策与理由：**出自 docs/progress/project.md §13**（一阶段召回已非瓶颈，重算+迁移收益传导不到最终指标） |
 | 2 | 池化方式（mean/cls）代码不可见 —— 未确认（由 fastembed 内部决定，本模块未配置） | `server.py:146-154` 只传 `model_name`/`cache_dir`/`threads` |
 | 3 | 512 token 上限未在代码中体现 —— 未确认（依据 `AGENTS.md` §3.7；容器无截断/长度校验，`fastembed` 内部如何截断未读） | `server.py:146-154`、`embedding_service.py:33-38` 均无长度参数 |
 | 4 | 换模型不会自动更新自报维度：`/info`、`/health` 硬编码 1024 | `server.py:205`、:192 |

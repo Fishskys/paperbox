@@ -63,6 +63,63 @@ def test_a_backend_failure_is_a_503_not_a_500(client, monkeypatch) -> None:
     assert response.json()["detail"] == "search backend unavailable"
 
 
+def _outcome_with_facets(facets):  # noqa: ANN001
+    """A search outcome with a metadata page, so the API path runs for real."""
+    return search_service.SearchOutcome(
+        results=[],
+        total=7,
+        candidates=3,
+        facets=facets,
+    )
+
+
+def test_facets_are_null_unless_asked_for(client, monkeypatch) -> None:  # noqa: ANN001
+    def stub(*args, **kwargs):
+        assert "facets" in kwargs, "the API must always pass the flag down"
+        assert kwargs["facets"] is False
+        return _outcome_with_facets(None)
+
+    monkeypatch.setattr(search_service, "search_papers", stub)
+
+    body = client.post("/api/search", json={"query": "sram"}).json()
+
+    assert body["facets"] is None
+
+
+def test_facets_come_back_as_buckets(client, monkeypatch) -> None:  # noqa: ANN001
+    def stub(*args, **kwargs):
+        assert kwargs["facets"] is True
+        return _outcome_with_facets(
+            {
+                "venue": [{"key": "ISSCC", "count": 4}],
+                "year": [{"key": "2017", "count": 2}],
+            }
+        )
+
+    monkeypatch.setattr(search_service, "search_papers", stub)
+
+    body = client.post("/api/search", json={"query": "sram", "facets": True}).json()
+
+    assert body["facets"]["venue"] == [{"key": "ISSCC", "count": 4}]
+    assert body["facets"]["year"] == [{"key": "2017", "count": 2}]
+    # Every declared facet is present, empty when the library has none.
+    assert body["facets"]["paper_type"] == []
+
+
+def test_a_failed_aggregation_is_a_null_facet_not_an_empty_library(client, monkeypatch) -> None:  # noqa: ANN001
+    """``{}`` (asked, nothing to show) must not read as "this library has no venues"."""
+    monkeypatch.setattr(
+        search_service, "search_papers", lambda *a, **k: _outcome_with_facets({})
+    )
+
+    response = client.post("/api/search", json={"query": "sram", "facets": True})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["facets"] is None
+    assert body["total"] == 7
+
+
 def test_a_duplicate_fingerprint_message_is_not_confused_with_a_backend_error(
     client, monkeypatch
 ) -> None:
