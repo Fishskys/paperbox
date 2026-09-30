@@ -437,4 +437,12 @@ def test_search_request_has_no_rewrite_switch() -> None:
     """The feature is server-side only: clients keep sending plain queries."""
     request = SearchRequest(query="中文查询")
 
-    assert set(request.model_dump()) == {"query", "mode", "top_k", "filters", "rerank"}
+    # ``facets`` (2026-09-30, T-A3) is a plain output switch, not a rewrite one.
+    assert set(request.model_dump()) == {
+        "query",
+        "mode",
+        "top_k",
+        "filters",
+        "rerank",
+        "facets",
+    }

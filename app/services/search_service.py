@@ -314,6 +314,10 @@ class SearchOutcome:
     results: list[PaperResult]
     total: int
     candidates: int
+    #: ``{facet: [{key, count}]}`` when the caller asked for ``facets=true``.
+    #: ``None`` = not requested; ``{}`` = requested but the aggregation failed
+    #: (only a warning -- a broken facet must not spoil a working search).
+    facets: dict[str, list[dict[str, Any]]] | None = None
 
 
 def search_papers(
@@ -327,6 +331,7 @@ def search_papers(
     client: Any = None,
     index: str | None = None,
     count_total: bool = True,
+    facets: bool = False,
     **search_kwargs: Any,
 ) -> SearchOutcome:
     """Run the chunk search and aggregate it into paper-level results.
@@ -346,7 +351,7 @@ def search_papers(
     engine round trip and reports the candidate pool's paper count as ``total``
     (used by callers that only want the page).
     """
-    from app.search.hybrid import ALIAS, count_papers, search_chunks
+    from app.search.hybrid import ALIAS, count_papers, facet_counts, search_chunks
 
     hits = search_chunks(
         query,
@@ -360,8 +365,11 @@ def search_papers(
         **search_kwargs,
     )
     results = normalize_scores(aggregate_papers(hits, top_k=top_k))
+    computed_facets = _facet_counts(filters, facets, client=client, index=index)
     if not count_total:
-        return SearchOutcome(results, len({hit.paper_id for hit in hits}), len(hits))
+        return SearchOutcome(
+            results, len({hit.paper_id for hit in hits}), len(hits), computed_facets
+        )
     try:
         total = count_papers(query, mode, filters, client=client, index=index or ALIAS)
     except SearchError as exc:
@@ -369,7 +377,31 @@ def search_papers(
         # working search into an error. Fall back to the pool and say so.
         logger.warning("paper count failed, reporting the candidate pool: %s", exc)
         total = len({hit.paper_id for hit in hits})
-    return SearchOutcome(results, int(total), len(hits))
+    return SearchOutcome(results, int(total), len(hits), computed_facets)
+
+
+def _facet_counts(
+    filters: Mapping[str, Any] | None,
+    wanted: bool,
+    *,
+    client: Any = None,
+    index: str | None = None,
+) -> dict[str, list[dict[str, Any]]] | None:
+    """``facets=true`` -> the facet counts, on the same courtesy-query terms as ``total``.
+
+    Returns ``None`` when the caller did not ask. An engine failure is logged and
+    reported as ``{}`` (nothing to show) rather than raised: asking for facets must
+    never be the reason a search fails.
+    """
+    if not wanted:
+        return None
+    from app.search.hybrid import ALIAS, facet_counts
+
+    try:
+        return facet_counts(filters, client=client, index=index or ALIAS)
+    except SearchError as exc:
+        logger.warning("facets failed, returning none: %s", exc)
+        return {}
 
 
 def results_to_payload(results: Sequence[PaperResult]) -> list[dict[str, Any]]:

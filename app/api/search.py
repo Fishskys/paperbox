@@ -21,6 +21,7 @@ from app.core.security import require_api_key
 from app.db.session import SessionLocal
 from app.schemas.search import (
     SearchEvidence,
+    SearchFacets,
     SearchRerankInfo,
     SearchRequest,
     SearchResponse,
@@ -82,6 +83,7 @@ async def search(request: SearchRequest) -> SearchResponse:
             filters,
             rerank=request.rerank,
             telemetry=telemetry,
+            facets=request.facets,
         )
     except search_service.SearchError as exc:
         logger.warning("search failed: %s", exc)
@@ -95,6 +97,9 @@ async def search(request: SearchRequest) -> SearchResponse:
         ) from exc
 
     results, total, candidates = outcome.results, outcome.total, outcome.candidates
+    # ``outcome.facets`` is None without the flag and {} when the aggregation
+    # failed; both come out as ``null`` (the warning is in the log).
+    facets = SearchFacets(**outcome.facets) if outcome.facets else None
     took_ms = round((time.perf_counter() - started) * 1000, 3)
     # The reranker "did something" only when a paper actually carries a score.
     reranked = any(item.rerank_score is not None for item in results)
@@ -152,6 +157,7 @@ async def search(request: SearchRequest) -> SearchResponse:
         took_ms=took_ms,
         rerank=rerank_info,
         rewrite=rewrite_info,
+        facets=facets,
         results=payload,
     )
 
