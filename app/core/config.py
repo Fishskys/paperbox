@@ -57,7 +57,9 @@ class Settings(BaseSettings):
 
     # --- OpenSearch (full-text + vector index) ---
     opensearch_url: str = Field(default="http://localhost:9200", alias="OPENSEARCH_URL")
-    opensearch_index: str = Field(default="paper_chunks_v1", alias="OPENSEARCH_INDEX")
+    # `.env` 是唯一真源（AGENTS §3.4）；这里的默认值只是没配 .env 时的兜底，
+    # 必须跟着当前物理索引走 —— v1/v2 已于 2026-09-30 drop。
+    opensearch_index: str = Field(default="paper_chunks_v3", alias="OPENSEARCH_INDEX")
     opensearch_alias: str = Field(default="paper_chunks_current", alias="OPENSEARCH_ALIAS")
 
     # --- MinIO (raw object storage) ---

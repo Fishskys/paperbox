@@ -32,7 +32,7 @@
 | `app/db/session.py` | `get_engine` | 懒建引擎，`pool_pre_ping=True, pool_size=5, max_overflow=10, pool_recycle=1800`（:22-34） |
 | | `session_scope` / `get_db` | 脚本事务上下文（:56-67）/ FastAPI 请求级依赖（:70-76） |
 | `migrations/env.py` | `get_url` / `include_object` | DSN 只来自 `settings.database_url`（:31-37）；`include_object` 恒返回 True（:40-42） |
-| `app/search/mappings.py` | `build_mapping` | 返回 `paper_chunks_v1` 的 settings+mappings（:104-174） |
+| `app/search/mappings.py` | `build_mapping` | 返回 chunk 索引的 settings+mappings（:104-174），`dynamic: "strict"` |
 | `app/search/opensearch.py` | `ensure_index` | 幂等建索引并把别名指过去（:69-110） |
 | | `build_alias_swap_body` / `alias_swap_is_safe` | 原子换别名（带 `is_write_index`，:122-133）；只在两侧文档数相等时允许切换（:136-138） |
 | | `build_chunk_document` / `bulk_index_chunks` | 行→文档（:141-173）；批量写 200/批（:176-235） |
@@ -140,16 +140,16 @@ venues ──CASCADE──> venue_editions
 |---|---|---|---|
 | `POSTGRES_DSN` | `postgresql+psycopg://postgres:postgres@localhost:5432/paperbox` | 唯一 DSN 来源，Alembic 也用它 | `app/core/config.py:44-47`；`migrations/env.py:31-37`；`alembic.ini:5-7` 留空 |
 | 连接池 | `pool_size=5` / `max_overflow=10` / `pool_recycle=1800` / `pool_pre_ping=True` | 引擎行为（非环境变量） | `app/db/session.py:26-33` |
-| `OPENSEARCH_INDEX` | `paper_chunks_v1` | 物理索引名 | `app/core/config.py:56`；`.env.example:17` 与实测 `.env` 均为 `paper_chunks_v2` |
+| `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名 | `app/core/config.py:56`；`.env.example:17` 与实测 `.env` 均为 `paper_chunks_v3` |
 | `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名 | `app/core/config.py:57`；`app/search/opensearch.py:24-27` |
-| `EMBEDDING_DIMENSION` | `1024` | 决定 `knn_vector.dimension` | `app/core/config.py:69`；`app/search/mappings.py:124` |
-| `MINIO_BUCKET` | `paperbox` | 默认桶 | `app/core/config.py:64`；`.env.example:25` |
-| `MINIO_SECURE` | `False` | 明文 HTTP | `app/core/config.py:63` |
+| `EMBEDDING_DIMENSION` | `1024` | 决定 `knn_vector.dimension` | `app/core/config.py:71`；`app/search/mappings.py:124` |
+| `MINIO_BUCKET` | `paperbox` | 默认桶 | `app/core/config.py:66`；`.env.example:25` |
+| `MINIO_SECURE` | `False` | 明文 HTTP | `app/core/config.py:65` |
 | `papers` / `uploads` / `original.pdf` | 常量 | 正式前缀、暂存前缀、正式文件名 | `app/services/object_storage.py:37-41` |
 | `BULK_BATCH_SIZE` | `200` | 批量索引批大小 | `app/search/opensearch.py:30` |
-| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:171`、`:235-239`；`.env.example:109` |
-| `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:173` |
-| `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:177`；`app/workers/housekeeping.py:323-334` |
+| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:173`、`:237-241`；`.env.example:109` |
+| `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:175` |
+| `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:179`；`app/workers/housekeeping.py:323-334` |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:41` |
 | 镜像/端口 | `postgres:15.2-alpine:5432`、`opensearchproject/opensearch:3.6.0:9200`、`minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1:9000/9001` | 依赖版本与端口 | `infra/docker-compose.yml:17`、`:35`、`:62`、`:24-25`、`:51-52`、`:69-71` |
 
@@ -176,7 +176,7 @@ venues ──CASCADE──> venue_editions
 
 ## 8. 未做 / 已知缺口
 
-- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:502` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:389` 说索引名 `paper_chunks_v1`，运行时由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v2`）。
+- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:502` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:389` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v3`）。
 - `build_extracted_key` / `build_figure_key` / `papers/<id>/supplementary/` 只是预留布局，无任何调用方（`object_storage.py:5-9`、`:114-119`）。
 - `papers.deleted_at` 之外没有清理机制：`paper_chunks` 行软删后长期保留，仅 `scripts/purge_deleted.py` 处理 OpenSearch/MinIO 遗留，需要人工触发。
 - `search_queries` 无分区、无 TTL、无清理脚本（仅 `app/services/search_log_service.py` 写入）——是否另有保留策略未确认。

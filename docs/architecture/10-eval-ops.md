@@ -188,7 +188,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `PAPER_API_BASE` / `PAPER_API_URL` / `PAPER_API_KEY` | `http://127.0.0.1:8077` / 空 | 评测与批量脚本的基址与 Bearer | `scripts/eval.py:52, 378-384` |
 | `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址与端口（容器 CMD 也读） | `.env.example:36-37`、`Dockerfile:33` |
 | `POSTGRES_DSN` | `postgresql+psycopg://…@127.0.0.1:5432/paperbox` | 权威 DSN，覆盖 `POSTGRES_*` 分项 | `.env.example:12-13` |
-| `OPENSEARCH_URL` / `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `http://127.0.0.1:9200` / `paper_chunks_v2` / `paper_chunks_current` | 索引与别名（读写走别名） | `.env.example:16-18` |
+| `OPENSEARCH_URL` / `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `http://127.0.0.1:9200` / `paper_chunks_v3` / `paper_chunks_current` | 索引与别名（读写走别名） | `.env.example:16-18` |
 | `MINIO_ENDPOINT` / `MINIO_BUCKET` | `127.0.0.1:9000` / `paperbox` | 原件存储 | `.env.example:21-25` |
 | `EMBEDDING_URL` / `EMBEDDING_BATCH_SIZE` | `http://127.0.0.1:8090` / `16` | 向量服务；批量必须与容器 `MAX_BATCH` 一致 | `.env.example:28-32` |
 | `RERANK_ENABLED` / `RERANK_MODEL` / `RERANK_MAX_BATCH` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `Xenova/ms-marco-MiniLM-L-6-v2` / `16` / `10` / `5` | 精排开关、模型、限批、超时、候选倍数 | `.env.example:41-55` |
