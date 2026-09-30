@@ -119,13 +119,13 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 3. **积压水位只拒多文件**：`should_throttle_batch()` 只在 `batch=True` 时被调用（316），单文件豁免（`upload_admission.py:128-136` 注释明说“一个人等一个答案”）；在途并发槽则不分单/多文件（321、533、612）。
 4. **判重靠内容哈希**：`/files` 必须把重复字节整份传完才能知道重复，随后立即删除已建的 staging 对象（172-175）；`/ingest/dir` 有传输前预哈希（`scan` 300-319）。
 5. **`dry_run` 零副作用**：不建作业、不入队（425-435、474 的 `and not payload.dry_run`）。
-6. **必须用 `local_scan.is_link()` 判链接**：`os.walk(followlinks=False)` 仍会进入 Windows 目录 junction，`Path.is_symlink()` 对 junction 返回 False；junction 是非特权用户（`mklink /J`）唯一能造的 reparse point，因此是最现实的逃逸口（`local_scan.py:186-198`、`AGENTS.md:227-230`）。本机实测：`os.path.isjunction` 在项目解释器 3.12.10 上存在（`pyproject.toml:5` 要求 `>=3.12,<3.13`）。
+6. **必须用 `local_scan.is_link()` 判链接**：`os.walk(followlinks=False)` 仍会进入 Windows 目录 junction，`Path.is_symlink()` 对 junction 返回 False；junction 是非特权用户（`mklink /J`）唯一能造的 reparse point，因此是最现实的逃逸口（`local_scan.py:186-198`、`AGENTS.md` §3.8）。本机实测：`os.path.isjunction` 在项目解释器 3.12.10 上存在（`pyproject.toml:5` 要求 `>=3.12,<3.13`）。
 7. **zip bomb 在建条目前判定**：三上限全部取自 `archive.infolist()` 的中央目录（`archive_service.py:271-293`），超限时 `dest` 里一个字节都没写；条目级上限在写入过程中再兜一层（346-370）。
 8. **zip-slip 双保险**：`unsafe_reason` 逐条拒（217-234：空名、绝对路径、盘符路径、`..`、符号链接、设备文件），写出前再用 `is_within(target, dest)` 复核一次（315-320）。
 9. **嵌套压缩包不递归**（304-306，计入 `entries_ignored`）；`.pdf` 后缀只是候选，最终靠 `%PDF` 魔数（前 1 KiB，`PDF_MAGIC_WINDOW=1024`，173-180），无魔数即 `UNSUPPORTED_TYPE` 拒收并删文件（697-707）。
 10. **GC 只删文件、不碰作业行**：`run_gc` 只对作业表做 `select`（85-115），测试用真实作业行验证 stage 与 `error_code` 不变（`tests/test_upload_gc.py:270-287`）；失败只进 `GcReport.errors`，绝不抛（156-159、215-222）。
 11. **staging 没有宽限期**：GC 判据只有 liveness（174-181），没有年龄检查；孤立即刻被删。历史事故：staging 只写不删，13 个作业留下 9 个对象 49.8 MB（`housekeeping.py:5-10`，该数字来自代码注释，本会话未复测）。
-12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md:224`），存储成功后才 `_cleanup_source`（`tasks.py:273-283`）。
+12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md` §3.8），存储成功后才 `_cleanup_source`（`tasks.py:273-283`）。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
 
