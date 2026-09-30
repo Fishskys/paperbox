@@ -14,12 +14,12 @@
 - 定标集的**可复现构建**：人工 spec → 解析到真实 `paper_id`（`scripts/build_eval_set.py`）；语料清单生成（`scripts/build_arxiv_ids.py`）。
 - **真机运维脚本**：健康检查、端到端验收、批量导入、重建索引、清理已删论文残留、索引迁移（`scripts/*.py`，见 §2 与 §5 总表）。
 - **部署两形态**的配置与陷阱：本机（WSL Docker + 宿主 app）与 Linux 服务器（宿主直跑或容器化），见 `AGENTS.md` §3.1。
-- **目录纪律**：运行日志一律进 `logs/{codex,app,eval}/`，仓库根不写 `*.log`（`AGENTS.md:327`、`.gitignore:23-24`）。
+- **目录纪律**：运行日志一律进 `logs/{codex,app,eval}/`，仓库根不写 `*.log`（`AGENTS.md` §6、`.gitignore:23-24`）。
 
 **不做**
 
 - 评测**不跑在应用进程里**：`scripts/eval.py` 是独立客户端，只发 `POST /api/search`（`scripts/eval.py:2-23`）。
-- 单元测试**不碰真机**：pytest 全程不连 PostgreSQL/OpenSearch/MinIO，真机验证只放 `scripts/`（`AGENTS.md:329-331`）。
+- 单元测试**不碰真机**：pytest 全程不连 PostgreSQL/OpenSearch/MinIO，真机验证只放 `scripts/`（`AGENTS.md` §6）。
 - 根 `docker-compose.yml` 只打包**应用**，四个依赖在 `infra/docker-compose.yml`（两份 compose 明确分离，`docker-compose.yml:1`、`infra/docker-compose.yml:2`）。
 - 不自动删数据：`create_index.py` 只切别名、旧索引保留供回滚（`scripts/create_index.py:23-28`）；`purge_deleted.py` 默认**只**清索引文档与对象、保留 PostgreSQL 行，只有显式 `--hard` 才删 PG 行（`scripts/purge_deleted.py:81`）。
 
@@ -168,10 +168,10 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `aggregate` 跳过脏值 | `bool` 与非数值不计入，`n` 反映实际观测数 | `metrics.py:163-166` |
 | 单个查询失败不中断整轮 | 记 `error` 字符串、指标置全 0，末尾打印 `success/failed` | `scripts/eval.py:442-445, 492` |
 | 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:164-165, 396-398` |
-| **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md:327-331`、`.gitignore:23-24`、`tests/conftest.py:62` |
-| `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md:90` |
+| **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:62` |
+| `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md` §3.1 |
 | 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:129-136` |
-| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md:126`、`.env.example:118-119` |
+| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:118-119` |
 | `Dockerfile` 的监听参数 | CMD 用 `sh -c exec` 展开 `PAPER_API_HOST/PORT`，此前写死导致 compose 传参**被静默忽略** | `Dockerfile:31-33`、`docs/progress/project.md:509` |
 | 评测脚本不硬编码 WSL | `_docker_argv` 按 `PAPERBOX_DOCKER_PREFIX` → `docker` → `wsl -e docker` 选择，Linux 上可用 | `build_eval_set.py:26-43`、`docs/progress/project.md:510` |
 | `--resume` 的键是**相对路径** | 报告里 `relative`（或退回 `path`）；`status=skipped` 的行不算已完成 | `bulk_ingest_dir.py:224-238` |
@@ -245,7 +245,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `tests/test_paper_list_filters.py` | `GET /api/papers` 过滤（venue/年份区间/paper_type/tag）+ `PaperOut` 新列序列化 |
 | `tests/test_purge_deleted.py` | `purge_deleted.py`：默认只对账不删 PG 行、`--hard` 逐表删净 |
 
-**无单元测试的真机脚本**：`scripts/eval.py`、`scripts/build_eval_set.py`、`scripts/build_arxiv_ids.py`、`scripts/healthcheck.py`、`scripts/acceptance.py`、`scripts/reindex.py`、`scripts/purge_deleted.py`、`scripts/bulk_ingest.py`、`scripts/create_index.py` —— 它们按 `AGENTS.md:331` 的设计全部依赖真实服务，验收靠实跑（`logs/app/*.log`、`logs/eval/`）。
+**无单元测试的真机脚本**：`scripts/eval.py`、`scripts/build_eval_set.py`、`scripts/build_arxiv_ids.py`、`scripts/healthcheck.py`、`scripts/acceptance.py`、`scripts/reindex.py`、`scripts/purge_deleted.py`、`scripts/bulk_ingest.py`、`scripts/create_index.py` —— 它们按 `AGENTS.md` §6 的设计全部依赖真实服务，验收靠实跑（`logs/app/*.log`、`logs/eval/`）。
 
 ## 8. 未做 / 已知缺口
 
@@ -254,7 +254,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 - **评测串行执行**：查询 × mode × rerank 逐次调用（`scripts/eval.py:414-419`），基线 300 次调用、开启精排时单次可达 ≈20–31s（`docs/progress/project.md:473, 488`）。
 - **`report-placeholder.*` 仅留档**：那是 6 篇语料时的占位跑，不可与基线直接比较（`evals/README.md:18`）。
 - **日志无轮转**：`logs/app/paperbox-api.log` 已 61 万字节级，仓库没有轮转/清理策略；`logs/` 整体 gitignore（`.gitignore:24`）。
-- **数据目录口径不一致（未确认）**：`infra/.env` 实测 `POSTGRES_DATA_DIR=/var/lib/paperbox-data/pg`，而 `AGENTS.md:121` 写“四个都在 `<仓库同级>/paperbox-data\{pg,…}`”（开发者本机绝对路径）；`infra/.env` 里其余三个确实是该目录。差异原因未核实（未跑 `docker compose config` 验证解析结果）。
+- **数据目录口径不一致（未确认）**：`infra/.env` 实测 `POSTGRES_DATA_DIR=/var/lib/paperbox-data/pg`，而 `AGENTS.md` §3.3 写“四个都在 `<仓库同级>/paperbox-data\{pg,…}`”（开发者本机绝对路径）；`infra/.env` 里其余三个确实是该目录。差异原因未核实（未跑 `docker compose config` 验证解析结果）。
 - **`healthcheck.py` 的 DSN 解析未确认**：读到的是 `host_port(env.get("POSTGRES_DSN", …)[-1])`（`scripts/healthcheck.py:79`），`[-1]` 的语义无法自文本解释——疑似读取工具对凭据片段做了脱敏遮盖，未在真机验证其实际行为。
 - **服务器侧动作未执行**（`docs/progress/project.md:531-532`）：`PAPERBOX_BIND_IP=127.0.0.1` 收敛依赖端口、按服务器内存放大 `ORT_THREADS`/`MAX_BATCH`/`RERANK_MAX_BATCH`/`OPENSEARCH_JAVA_OPTS`、三处数据搬迁（`pg_dump` / `mc mirror` / OpenSearch `_reindex`，**勿重算向量**）。
 - **`purge_deleted.py` 的边界 + 标注质量无工具**：前者只处理 `deleted_at` 非空的论文，报告里 `0 chunk doc(s)` 不代表异常；后者靠 `queries-spec.json` 的 `note` 人工把关，仓库没有标注审计工具（`evals/README.md:12`）。
