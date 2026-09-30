@@ -93,14 +93,14 @@
 | 默认超时偏小 | `RERANK_TIMEOUT` 默认 10s，但多语言档 ≈0.4–0.47 s/候选，`top_k=10`（50 候选）≈20s → **静默降级**（`rerank.model=null`、`rerank_score=null`），不报错 | `.env.example:49-53`；`evals/report-jina-rerank-comparison.md:47-57` |
 | 日志文案 | 降级 warning：`rerank request failed, falling back to first-stage order`（`:94`）、`rerank response was not JSON, falling back`（`:100`）、`rerank response was not an object`/`missing 'results'`/`returned %d scores for %d documents`/`index %s is out of range`（`:114-143`）；正常 info：`chunk search finished` 带 `rerank`/`rerank_took_ms`（`hybrid.py:623-635`） | 同上 |
 | `rerank_took_ms` 口径 | 客户端整段耗时（含网络与容器排队），容器自己的 `took_ms` 未被读取（只取 `results`） | `hybrid.py:661-663`；`rerank_service.py:105-108` |
-| `RERANK_MODEL` 不参与调用 | 它只出现在响应 `rerank.model` 里；实际模型由容器环境变量决定，两侧不一致不会被发现 | `config.py:75-80`；`api/search.py:103`；`infra/embedding/server.py:37` |
+| `RERANK_MODEL` 不参与调用 | 它只出现在响应 `rerank.model` 里；实际模型由容器环境变量决定，两侧不一致不会被发现 | `config.py:77-82`；`api/search.py:103`；`infra/embedding/server.py:37` |
 | 候选数放不大（OOM） | 容器单批上限 `RERANK_MAX_BATCH`（多语言档必须 4）；交叉编码器激活内存随 `token × 候选数` 线性增长，实测**单批 4 → 2.4GB、8 → 3.3GB、16 → 5.1GB**，3GB 封顶即被 OOM-kill；故 `RERANK_CANDIDATES` 调大只会线性拉长批次数与总时长（`top_k=10` 即 50 候选 ≈30.9s mean / 40.5s max），不能靠堆候选换精度 | `infra/embedding/server.py:39-43`、`:140-141`；`AGENTS.md:120`；`infra/.env.example:25-30`；`evals/report-jina-rerank-comparison.md:6`、`:47-57` |
 | 容器侧无候选上限 | `RerankRequest.documents` 不设 `max_length`（对比 `/embed` 的 `MAX_BATCH` 限批），长候选清单由容器内部切批，不会 422 | `infra/embedding/server.py:181-185`、`:69`、`:140-141` |
 | 改写触发条件 | 需同时满足：`QUERY_REWRITE_ENABLED=true`、查询非空、长度 ≤ `QUERY_REWRITE_MAX_CHARS`、命中 CJK 正则；**纯 ASCII 查询即使开启也不改** | `api/search.py:165-169`；`query_rewrite_service.py:56-68`；`tests/test_query_rewrite.py:362-374` |
 | 改写失败降级 | 非 200、JSON 解析失败、无 `choices`/`content`、清洗后为空、改写结果与原查询相同 → `applied=false`、原查询继续检索 | `query_rewrite_service.py:149-196`；`tests/test_query_rewrite.py:177-263` |
-| 启动即校验 | `QUERY_REWRITE_ENABLED=true` 时 `URL`/`MODEL`/`API_KEY` 任一为空 → `Settings()` 抛 `ValueError`，进程起不来（不静默降级） | `config.py:215-233`；`tests/test_query_rewrite.py:322-326` |
+| 启动即校验 | `QUERY_REWRITE_ENABLED=true` 时 `URL`/`MODEL`/`API_KEY` 任一为空 → `Settings()` 抛 `ValueError`，进程起不来（不静默降级） | `config.py:217-235`；`tests/test_query_rewrite.py:322-326` |
 | 改写契约 | 请求体固定 `model/messages/temperature=0/max_tokens`，`Authorization: Bearer <key>`，URL 为 `<base>/chat/completions`（尾斜杠被 `rstrip`） | `query_rewrite_service.py:130-141`；`tests/test_query_rewrite.py:160-176` |
-| 推理模型坑 | 64-token 上限时推理模型把预算花在隐藏 `reasoning_content` 上，可见 `content` 为空且 `finish_reason=length` → 静默降级；默认已抬到 512 | `config.py:106-111`；`.env.example:69-72` |
+| 推理模型坑 | 64-token 上限时推理模型把预算花在隐藏 `reasoning_content` 上，可见 `content` 为空且 `finish_reason=length` → 静默降级；默认已抬到 512 | `config.py:108-113`；`.env.example:69-72` |
 | 改写收益（外部实测） | 60 条查询：`hybrid|rerank=on` HR@1 0.700→0.900、MRR 0.850→0.950；中文改写后的另一组实测 ZH 语义命中从 0.30 提到 1.00（模块 docstring 引用的数字） | 出自 `evals/report-zh-llm-rewrite.md:12-17`；`query_rewrite_service.py:3-5` |
 | 精排收益（外部实测） | jina-v2 + `RERANK_MAX_BATCH=4`：`hybrid|on` HR@1 0.760→0.880、nDCG@10 0.853→0.934，增益全在跨语言 top-1（ZH HR@1 0.100→0.700），英文持平 | 出自 `evals/report-jina-rerank-comparison.md:15-17`、`:23-34` |
 | 组合未验证 | 改写与精排机制正交，但“`QUERY_REWRITE_ENABLED=true` + `rerank=true`”仍是待跑实验，无实测数字 | `evals/report-jina-rerank-comparison.md:35-37` |
@@ -109,20 +109,20 @@
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `RERANK_ENABLED` | `true` | 服务端是否具备精排能力；`false` 时 `rerank_texts` 直接返回 `None` | `app/core/config.py:85` |
-| `RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | 仅用于响应 `rerank.model`，不参与调用 | `app/core/config.py:86-88` |
-| `RERANK_URL` | `http://127.0.0.1:8090` | 精排容器基址，拼 `/rerank`、`/health` | `app/core/config.py:89` |
-| `RERANK_TIMEOUT` | `10.0` | httpx 超时（秒）；超时即静默降级 | `app/core/config.py:90` |
-| `RERANK_CANDIDATES` | `5` | 一阶段过取倍数，候选数 = `top_k × 此值` | `app/core/config.py:92` |
+| `RERANK_ENABLED` | `true` | 服务端是否具备精排能力；`false` 时 `rerank_texts` 直接返回 `None` | `app/core/config.py:87` |
+| `RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | 仅用于响应 `rerank.model`，不参与调用 | `app/core/config.py:88-90` |
+| `RERANK_URL` | `http://127.0.0.1:8090` | 精排容器基址，拼 `/rerank`、`/health` | `app/core/config.py:91` |
+| `RERANK_TIMEOUT` | `10.0` | httpx 超时（秒）；超时即静默降级 | `app/core/config.py:92` |
+| `RERANK_CANDIDATES` | `5` | 一阶段过取倍数，候选数 = `top_k × 此值` | `app/core/config.py:94` |
 | `RERANK_MAX_BATCH` | 无 app 侧默认；`infra/.env.example` 为 `4`，`docker-compose.yml` 兜底 `16` | 容器单次推理的文档上限，超出则切批 | `infra/embedding/server.py:43`、`infra/.env.example:30`、`infra/docker-compose.yml:94` |
-| `QUERY_REWRITE_ENABLED` | `false` | 改写总开关；关闭时零 HTTP 调用 | `app/core/config.py:104` |
-| `QUERY_REWRITE_URL` | `""` | OpenAI 兼容基址，拼 `/chat/completions` | `app/core/config.py:105` |
-| `QUERY_REWRITE_API_KEY` | `""` | Bearer 凭证 | `app/core/config.py:106` |
-| `QUERY_REWRITE_MODEL` | `""` | 请求体 `model` | `app/core/config.py:107` |
-| `QUERY_REWRITE_TIMEOUT` | `10.0` | httpx 超时（秒） | `app/core/config.py:108` |
-| `QUERY_REWRITE_MAX_CHARS` | `300` | 触发改写的输入长度上限 + 输出截断上限；校验必须为正 | `app/core/config.py:110`、`:198-203` |
-| `QUERY_REWRITE_TARGET_LANGUAGE` | `en` | 目标语言，**当前无代码读取** | `app/core/config.py:111-113` |
-| `QUERY_REWRITE_MAX_TOKENS` | `512` | 单次改写 `max_tokens`（留给推理模型的隐藏推理） | `app/core/config.py:119` |
+| `QUERY_REWRITE_ENABLED` | `false` | 改写总开关；关闭时零 HTTP 调用 | `app/core/config.py:106` |
+| `QUERY_REWRITE_URL` | `""` | OpenAI 兼容基址，拼 `/chat/completions` | `app/core/config.py:107` |
+| `QUERY_REWRITE_API_KEY` | `""` | Bearer 凭证 | `app/core/config.py:108` |
+| `QUERY_REWRITE_MODEL` | `""` | 请求体 `model` | `app/core/config.py:109` |
+| `QUERY_REWRITE_TIMEOUT` | `10.0` | httpx 超时（秒） | `app/core/config.py:110` |
+| `QUERY_REWRITE_MAX_CHARS` | `300` | 触发改写的输入长度上限 + 输出截断上限；校验必须为正 | `app/core/config.py:112`、`:200-205` |
+| `QUERY_REWRITE_TARGET_LANGUAGE` | `en` | 目标语言，**当前无代码读取** | `app/core/config.py:113-115` |
+| `QUERY_REWRITE_MAX_TOKENS` | `512` | 单次改写 `max_tokens`（留给推理模型的隐藏推理） | `app/core/config.py:121` |
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 
@@ -136,7 +136,7 @@
 | 缺口 | 说明 |
 |---|---|
 | 改写与精排组合无实测 | `report-jina-rerank-comparison.md:37` 把两者叠加列为“下一个实验”，仓库内无结果 |
-| `QUERY_REWRITE_TARGET_LANGUAGE` 是死配置 | `config.py:103-105` 定义、`.env.example:73` 暴露，但全仓无读取方；系统提示词硬编码英文（`query_rewrite_service.py:36-41`） |
+| `QUERY_REWRITE_TARGET_LANGUAGE` 是死配置 | `config.py:105-107` 定义、`.env.example:73` 暴露，但全仓无读取方；系统提示词硬编码英文（`query_rewrite_service.py:36-41`） |
 | `DEFAULT_MAX_TOKENS = 512` 未被使用 | 仅定义与导出（`query_rewrite_service.py:34`、`:213`），实际取值走 `settings.query_rewrite_max_tokens`（`:136`），两者可漂移 |
 | `rerank_service.is_available()` 无调用方 | 全仓仅 `rerank_service.py:150/:178` 出现，未接任何健康检查或启动自检 |
 | 改写失败原因不入响应 | `RewriteOutcome.reason` 只进日志（`query_rewrite_service.py:150-196`），API 只上报 `applied/model/took_ms`，调用方无法区分“未触发”与“调用失败” |

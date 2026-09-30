@@ -67,7 +67,7 @@
 | 取凭证 | `Authorization` 头优先；`partition(" ")` 后 scheme 必须为 `bearer`（忽略大小写）且凭证非空 | `app/core/security.py:25-30` |
 | 无 `Authorization` 时回退 | 读 `X-API-Key` | `app/core/security.py:19`, `:32-35` |
 | 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | `app/core/security.py:30` |
-| 比对 | `hmac.compare_digest`，期望值 `settings.paper_api_key` | `app/core/security.py:38-43`, `app/core/config.py:75` |
+| 比对 | `hmac.compare_digest`，期望值 `settings.paper_api_key` | `app/core/security.py:38-43`, `app/core/config.py:77` |
 | 缺凭证 | `401 {"detail":"Missing API key"}` + `WWW-Authenticate: Bearer` | `app/core/security.py:49-54` |
 | 凭证不符 | `403 {"detail":"Invalid API key"}` + 同头 | `app/core/security.py:55-60` |
 | 依赖挂载 | 每个 router 构造时 `dependencies=[Depends(require_api_key)]` | `ingestion.py:59-63`、`jobs.py:14-18`、`papers.py:31-35`、`metadata.py:40-44`、`search.py:39-43`、`search_logs.py:20-24` |
@@ -192,24 +192,24 @@
 
 | 键 | 默认 | 作用 | 出处 |
 |---|---|---|---|
-| `PAPER_API_KEY` | `change-me` | Bearer 密钥（比对对象）；空值 → 全部 403 | `app/core/config.py:75` |
-| `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址/端口（仅 uvicorn 启动参数使用） | `config.py:75-75` |
+| `PAPER_API_KEY` | `change-me` | Bearer 密钥（比对对象）；空值 → 全部 403 | `app/core/config.py:77` |
+| `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址/端口（仅 uvicorn 启动参数使用） | `config.py:77-77` |
 | `APP_ENV` / `LOG_LEVEL` | `local` / `INFO` | 启动日志内容与级别（lifespan 首行） | `config.py:40-41` |
-| `INGEST_MAX_FILE_MB` | `100` | 单文件上限（超限 → `rejected`/422） | `config.py:119` |
-| `INGEST_MAX_FILES_PER_REQUEST` | `20` | `/files` 文件数上限（超 → 422） | `config.py:139` |
-| `INGEST_MAX_REQUEST_MB` | `200` | `/files` 单请求总字节上限（超 → 413） | `config.py:143` |
-| `INGEST_UPLOAD_CONCURRENCY` | `2` | 在途上传请求上限（超 → 429） | `config.py:131` |
-| `INGEST_QUEUE_HIGH_WATERMARK` | `50` | 积压水位，仅拒多文件（0 = 关闭） | `config.py:135` |
-| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单（空 = 端点 404） | `config.py:149`, `:230-233` |
-| `INGEST_ARCHIVE_MAX_MB` | `500` | 上传 zip 体积上限 | `config.py:153` |
-| `INGEST_ARCHIVE_MAX_FILES` / `_MAX_UNCOMPRESSED_MB` / `_MAX_RATIO` | `2000` / `5000` / `100` | zip-bomb 三重上限 | `config.py:155-161` |
-| `INGEST_ARCHIVE_TMP_DIR` / `INGEST_ARCHIVE_TTL_HOURS` | `""`（系统 temp）/ `24` | 解包位置与保留时长（GC 用） | `config.py:163-165` |
-| `INGEST_GC_INTERVAL_S` | `300` | housekeeping 间隔（首轮启动即跑） | `config.py:169` |
-| `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:125` |
-| `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:55`, `:59`, `:62`；`health.py:60-76` |
-| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:114-115` |
-| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:75`, `:81`；`search.py:101-105` |
-| `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:96-98`, `:205-223` |
+| `INGEST_MAX_FILE_MB` | `100` | 单文件上限（超限 → `rejected`/422） | `config.py:121` |
+| `INGEST_MAX_FILES_PER_REQUEST` | `20` | `/files` 文件数上限（超 → 422） | `config.py:141` |
+| `INGEST_MAX_REQUEST_MB` | `200` | `/files` 单请求总字节上限（超 → 413） | `config.py:145` |
+| `INGEST_UPLOAD_CONCURRENCY` | `2` | 在途上传请求上限（超 → 429） | `config.py:133` |
+| `INGEST_QUEUE_HIGH_WATERMARK` | `50` | 积压水位，仅拒多文件（0 = 关闭） | `config.py:137` |
+| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单（空 = 端点 404） | `config.py:151`, `:232-235` |
+| `INGEST_ARCHIVE_MAX_MB` | `500` | 上传 zip 体积上限 | `config.py:155` |
+| `INGEST_ARCHIVE_MAX_FILES` / `_MAX_UNCOMPRESSED_MB` / `_MAX_RATIO` | `2000` / `5000` / `100` | zip-bomb 三重上限 | `config.py:157-163` |
+| `INGEST_ARCHIVE_TMP_DIR` / `INGEST_ARCHIVE_TTL_HOURS` | `""`（系统 temp）/ `24` | 解包位置与保留时长（GC 用） | `config.py:165-167` |
+| `INGEST_GC_INTERVAL_S` | `300` | housekeeping 间隔（首轮启动即跑） | `config.py:171` |
+| `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:127` |
+| `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:55`, `:59`, `:64`；`health.py:60-76` |
+| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:116-117` |
+| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:77`, `:83`；`search.py:101-105` |
+| `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:98-100`, `:207-225` |
 
 非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py:36`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py:27`）（原先还有 `CANDIDATE_FACTOR = 5` = 「请求时估算的候选池」，2026-09-30 随 T-A2 删除：候选数改由检索实际结果给出）、chunk 分页上限 200（`app/api/papers.py:178`）。
 

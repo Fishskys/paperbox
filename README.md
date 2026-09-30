@@ -488,13 +488,13 @@ curl -X POST http://127.0.0.1:8077/api/search \
 - **精排超时必须跟着放大（`RERANK_TIMEOUT`）**：应用侧候选数 = `top_k × RERANK_CANDIDATES`（默认 5），精排后保留 `top_k × 2`。多语言档实测 ≈ **0.4–0.47 s/候选**（文档截断 2000 字符）⇒ `top_k=1` 约 2.3s、`top_k=10`（50 条候选）约 20s。默认 10 秒会让精排**静默降级**（响应里 `rerank.model=null`、`rerank_score=null`，日志 `rerank request failed ... {"error":"timed out"}`，结果仍是"能搜到但没重排"）→ 本机设 `RERANK_TIMEOUT=60`，覆盖到约 `top_k ≤ 28`；`top_k=50`（250 条候选 ≈100s）会超时降级，需要继续调大超时或调小 `RERANK_CANDIDATES`。实测端到端：`top_k=3` → 6.9s（精排 6.05s）、`top_k=10` → 20.4s（精排 19.7s），响应正常回报 `model` 与 `took_ms`
 - **查询改写（可选开关，P1 I，默认关闭）**：`QUERY_REWRITE_ENABLED=true` 时，含 CJK 的查询先经 `POST {QUERY_REWRITE_URL}/chat/completions` 改写成英文检索式再检索；响应多出 `rewritten_query`（实际检索文本）与 `rewrite{enabled,applied,model,took_ms}`，`query` 始终返回原始值（不入日志表之外的任何替换）。只对含 CJK 的查询改写，纯英文查询零额外调用；LLM 不可达/超时自动降级为原查询（仍 200，`rewrite.applied=false`）。开启时 `QUERY_REWRITE_URL`/`QUERY_REWRITE_API_KEY`/`QUERY_REWRITE_MODEL` 必须齐备，否则启动即报错（不会静默失效）。实测收益（10 条中文定标查询）：HR@1 **0.30 → 0.90**、MRR 0.473 → 0.950（真实 LLM 改写，`evals/report-zh-llm-rewrite.md`；阈值细节与配置键见 `docs/progress/project.md` §12）
 
-只用一个 embedding space：换模型时必须新建 `paper_chunks_v2` 并切别名，不要覆盖旧向量。当前生产索引正是 `paper_chunks_v2`（CJK 分词），别名 `paper_chunks_current` → v2。
+只用一个 embedding space：换模型时必须新建 `paper_chunks_v4` 并切别名，不要覆盖旧向量。当前生产索引正是 `paper_chunks_v3`（CJK 分词 + `dynamic: "strict"`），别名 `paper_chunks_current` → v3；`v1`/`v2` 已于 2026-09-30 删除（语料清零后不再需要回滚索引，兜底是冻结的 PDF 副本）。
 
 ## 6. 脚本
 
 | 脚本 | 用途 |
 |------|------|
-| `scripts/create_index.py` | 幂等创建 `paper_chunks_v1` + 别名 `paper_chunks_current`；`--index/--alias` 可指定，`--migrate-from <old>` 服务端 `_reindex` 整批拷贝（**不重新 embedding**）后原子切别名，旧索引保留供回滚 |
+| `scripts/create_index.py` | 幂等创建 `paper_chunks_v3` + 别名 `paper_chunks_current`；`--index/--alias` 可指定，`--migrate-from <old>` 服务端 `_reindex` 整批拷贝（**不重新 embedding**）后原子切别名（旧索引是否保留由调用方决定，2026-09-30 的 v3 重建后旧索引已删） |
 | `scripts/reindex.py` | 全量/指定论文重建；选谁：`--missing`（没有 chunks）、`--degraded`（有未解决降级，可配 `--degraded-stage`/`--degraded-code`）、`--parser-backend pypdf\|docling\|unknown`（按解析戳，含「当时就配成该后端」的论文）；`--degradations` 只列账本，`--dry-run` 只列选中项（含戳与降级原因） |
 | `scripts/purge_deleted.py` | 清理已删论文遗留的索引文档与 MinIO 对象（`--dry-run` 可先预览）；`--hard` **连 PostgreSQL 行一起删**（chunks/files/identifiers/sources/provenance/authors/tags/jobs + 论文行，逐表打印计数；**不可逆**，安全网是 `backups/` 里的 `pg_dump`） |
 | `scripts/check_consistency.py` | 三端（PG / MinIO / OpenSearch）只读对账：逐篇核对文件行↔对象、chunk 行↔文档，报出缺失索引/缺失 chunk/缺失文档/孤儿对象/孤儿文档/删除残留；`--no-fail` 只报告不返回非 0，`--parser-papers` 连每个后端戳下的论文 id 一起列（`reindex.py --parser-backend` 的工作清单） |
@@ -593,7 +593,7 @@ tests/        单元测试
 Redis/Celery；**压缩包只支持 zip**（7z/rar/tar 不做：7z 无本机二进制、rar 需外部工具，
 上传即 415）；presign 直传（客户端直传 MinIO）不做，上传一律走 proxy；
 `/ingest/dir` 只在 PDF 与 app 同机/同挂载卷时可用（容器化部署需挂卷 + 配白名单）。
-这些属于 plan 的 P1/P2，接口已为其预留（`rerank`、`paper_chunks_v2` 别名切换、
+这些属于 plan 的 P1/P2，接口已为其预留（`rerank`、`paper_chunks_current` 别名切换、
 `ingestion_jobs` 状态机）。**注意**：两阶段精排、评测闭环、查询改写、作业重试、失败归因已在
 P1 落地（见 §5 与 `docs/progress/project.md`），不在"不做"之列。
 
@@ -626,7 +626,7 @@ cp infra/.env.example infra/.env      # 容器侧：compose **只读** compose �
 
 # 4) schema 与索引
 uv run alembic upgrade head          # 14 张表（papers.fingerprint 是部分唯一索引；T7.3 新增 paper_degradations）
-uv run python scripts/create_index.py  # 建 paper_chunks_v2（CJK 分词）+ 别名 paper_chunks_current
+uv run python scripts/create_index.py  # 建 paper_chunks_v3（CJK 分词 + dynamic: strict）+ 别名 paper_chunks_current
 
 # 5) 启动 / 自检 / 测试
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077   # 监听由 PAPER_API_HOST / PAPER_API_PORT 决定

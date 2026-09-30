@@ -197,17 +197,17 @@ COMPLETED(100) 直接赋值 + commit tasks.py:546-551 → 轮询终止
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `INGEST_CONCURRENCY` | 2 | 同时运行的流水线数 = worker 协程数；`<=0` 启动即报错 | `core/config.py:129`（校验 L190-195）→ `queue.py:96-97`、`130-133` |
-| `INGEST_DOWNLOAD_TIMEOUT` | 120.0 | URL 下载超时（httpx） | `config.py:118` → `ingestion_service.py:476` |
-| `INGEST_MAX_FILE_MB` | 100 | 单文件上限；`max_file_bytes()` 换算 | `config.py:119` → `ingestion_service.py:115-117`、`138-144` |
-| `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途**上传请求**数上限（`429 + Retry-After: 2`） | `config.py:131` → `upload_admission.py:71-79` |
-| `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 处理积压达到该深度时**只拒多文件**请求；0 关闭 | `config.py:135-137` → `upload_admission.py:128-136` |
-| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数（超出 `422`） | `config.py:139-141` → `api/ingestion.py:286-294` |
-| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节（超出 `413`） | `config.py:143` → `api/ingestion.py:296-309` |
-| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单；空 = 端点 404 | `config.py:149` |
-| `INGEST_ARCHIVE_*` | `500 MB` / `2000` / `5000 MB` / `100` / `""` / `24h` | zip 大小、条目数、解压总量、压缩比、解包目录、TTL | `config.py:153-165` |
-| `INGEST_GC_INTERVAL_S` | 300 | housekeeping 周期；启动另跑一次 | `config.py:169` → `housekeeping.py:307`、`:330-341`、`main.py:52` |
-| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `BAAI/bge-m3` / 1024 | 写入 chunk 行、论文行与索引文档 | `config.py:68-69` → `tasks.py:275-276`、`959-960`、`1025-1026` |
+| `INGEST_CONCURRENCY` | 2 | 同时运行的流水线数 = worker 协程数；`<=0` 启动即报错 | `core/config.py:131`（校验 L190-195）→ `queue.py:96-97`、`130-133` |
+| `INGEST_DOWNLOAD_TIMEOUT` | 120.0 | URL 下载超时（httpx） | `config.py:120` → `ingestion_service.py:476` |
+| `INGEST_MAX_FILE_MB` | 100 | 单文件上限；`max_file_bytes()` 换算 | `config.py:121` → `ingestion_service.py:115-117`、`138-144` |
+| `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途**上传请求**数上限（`429 + Retry-After: 2`） | `config.py:133` → `upload_admission.py:71-79` |
+| `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 处理积压达到该深度时**只拒多文件**请求；0 关闭 | `config.py:137-139` → `upload_admission.py:128-136` |
+| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数（超出 `422`） | `config.py:141-143` → `api/ingestion.py:286-294` |
+| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节（超出 `413`） | `config.py:145` → `api/ingestion.py:296-309` |
+| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单；空 = 端点 404 | `config.py:151` |
+| `INGEST_ARCHIVE_*` | `500 MB` / `2000` / `5000 MB` / `100` / `""` / `24h` | zip 大小、条目数、解压总量、压缩比、解包目录、TTL | `config.py:155-167` |
+| `INGEST_GC_INTERVAL_S` | 300 | housekeeping 周期；启动另跑一次 | `config.py:171` → `housekeeping.py:307`、`:332-343`、`main.py:52` |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `BAAI/bge-m3` / 1024 | 写入 chunk 行、论文行与索引文档 | `config.py:70-71` → `tasks.py:275-276`、`959-960`、`1025-1026` |
 
 优先级阈值（`1 文件=交互、≥2=批`）**没有配置项**，是入口函数里的硬编码判断：`api/ingestion.py:311-314`（files）、`475-479`（dir）、`657-661`（compressed）、`539`（单文件固定交互）。重试与 reindex 共用同一个 `INGEST_CONCURRENCY` 上限，重试走 `KIND_RETRY`（`api/jobs.py:71`），reindex 走 `KIND_REINDEX`，优先级取默认值 `PRIORITY_INTERACTIVE`（`queue.py:59`）。
 

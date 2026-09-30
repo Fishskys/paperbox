@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 #: Alias used for every read and write (plan sections 9/15/24).
 ALIAS = settings.opensearch_alias
-#: Physical index name; a future reindex writes ``paper_chunks_v2``.
+#: Physical index name; a future reindex writes ``paper_chunks_v4`` (v3 is current).
 INDEX = settings.opensearch_index
 
 #: Bulk request size (spec: 100-500 documents per batch).

@@ -164,16 +164,16 @@ POST /api/search                                    app/api/search.py:49（路�
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
 | `OPENSEARCH_URL` | `http://localhost:9200` | 集群地址（无鉴权/无 TLS） | `app/core/config.py:55` |
-| `OPENSEARCH_INDEX` | `paper_chunks_v1` | 物理索引名（`INDEX`） | `config.py:56`；`opensearch.py:27` |
+| `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名（`INDEX`） | `config.py:56`；`opensearch.py:27` |
 | `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名（`ALIAS`） | `config.py:57`；`opensearch.py:25` |
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 文档/查询向量模型标记 | `config.py:68` |
-| `EMBEDDING_DIMENSION` | `1024` | `knn_vector` 维度 | `config.py:69`；`mappings.py:124` |
-| `RERANK_CANDIDATES` | `5` | 一阶段候选窗倍数 `top_k × N` | `config.py:84`；`hybrid.py:643` |
-| `RRF_KEYWORD_WEIGHT` | `1.0` | keyword 腿在 RRF 中的权重（0 即废掉该腿） | `config.py:89`；`hybrid.py:600` |
-| `RRF_SEMANTIC_WEIGHT` | `1.0` | semantic 腿权重 | `config.py:91`；`hybrid.py:600` |
-| `SEARCH_LOG_ENABLED` | `true` | 关掉即不写 `search_queries` | `config.py:114`；`search_log_service.py:121` |
-| `SEARCH_LOG_RESULTS_LIMIT` | `20` | 每行日志最多记多少条论文 | `config.py:115`；`search_log_service.py:138` |
-| `QUERY_REWRITE_ENABLED` | `false` | 检索前改写开关（细节见 06） | `config.py:96`；`api/search.py:165` |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 文档/查询向量模型标记 | `config.py:70` |
+| `EMBEDDING_DIMENSION` | `1024` | `knn_vector` 维度 | `config.py:71`；`mappings.py:124` |
+| `RERANK_CANDIDATES` | `5` | 一阶段候选窗倍数 `top_k × N` | `config.py:86`；`hybrid.py:643` |
+| `RRF_KEYWORD_WEIGHT` | `1.0` | keyword 腿在 RRF 中的权重（0 即废掉该腿） | `config.py:91`；`hybrid.py:600` |
+| `RRF_SEMANTIC_WEIGHT` | `1.0` | semantic 腿权重 | `config.py:93`；`hybrid.py:600` |
+| `SEARCH_LOG_ENABLED` | `true` | 关掉即不写 `search_queries` | `config.py:116`；`search_log_service.py:121` |
+| `SEARCH_LOG_RESULTS_LIMIT` | `20` | 每行日志最多记多少条论文 | `config.py:117`；`search_log_service.py:138` |
+| `QUERY_REWRITE_ENABLED` | `false` | 检索前改写开关（细节见 06） | `config.py:98`；`api/search.py:165` |
 
 代码内常量（非环境变量）：
 
@@ -190,7 +190,7 @@ POST /api/search                                    app/api/search.py:49（路�
 | `BULK_BATCH_SIZE` | `200` | 写入批量 | `opensearch.py:30` |
 | `DEFAULT_LIMIT` / `MAX_LIMIT` | `50` / `200` | `GET /api/search-logs` 的 limit | `search_log_service.py:42-43` |
 
-> 注意：配置默认索引是 `paper_chunks_v1`，但真机 `.env` 已把物理索引切到 `paper_chunks_v2`（CJK bigram），别名指向 v2 且 `v1` 保留供回滚（`AGENTS.md:176`、`docs/progress/project.md:43`）。以 `.env` 为准。
+> 注意：配置默认索引与真机 `.env` 现均为 `paper_chunks_v3`（CJK bigram + `dynamic: "strict"`），别名 `paper_chunks_current` → v3；`v1`/`v2` 已于 2026-09-30 删除（`AGENTS.md` §3.5、`docs/progress/project.md:43`）。**以 `.env` 为准**。
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 

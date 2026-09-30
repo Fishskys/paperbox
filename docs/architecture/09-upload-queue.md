@@ -131,20 +131,20 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 
 | 键 | 默认 | 作用 | 出处 |
 |---|---|---|---|
-| `INGEST_MAX_FILE_MB` | 100 | 单文件上限，超限 `OVERSIZED` / 目录扫描 `OVERSIZED` | `config.py:119`；`ingestion_service.py:115-117` |
-| `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途上传请求上限，超出 429 | `config.py:131`；`upload_admission.py:71-79` |
-| `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 积压水位；只拒多文件请求，0 = 关闭 | `config.py:135-137`；`upload_admission.py:80-81`、`134-136` |
-| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数上限 → 422 | `config.py:139-141`；`ingestion.py:286-294` |
-| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节上限 → 413 | `config.py:143`；`ingestion.py:296-309` |
-| `INGEST_LOCAL_ROOTS` | 空 | 目录导入白名单（`;`/`,`/`os.pathsep` 分隔，realpath 归一化去重）；空 = 端点 404 | `config.py:149`、`241-265`；`local_scan.py:131-134` |
-| `INGEST_ARCHIVE_MAX_MB` | 500 | 压缩包本体上限 → 422 | `config.py:153`；`archive_service.py:186-211` |
-| `INGEST_ARCHIVE_MAX_FILES` | 2000 | 解包条目数上限（zip bomb #1） | `config.py:155`；`archive_service.py:276-280` |
-| `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:157-159`；`archive_service.py:281-286` |
-| `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:161`；`archive_service.py:287-293` |
-| `INGEST_ARCHIVE_TMP_DIR` | 空 | 解包目录（空 = 系统 temp） | `config.py:163`；`archive_service.py:127-135` |
-| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:165`；`housekeeping.py:198`、`:232-256` |
-| `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:169`；`housekeeping.py:307`、`323-334` |
-| `INGEST_CONCURRENCY` | 2 | 并发流水线数（处理腿，本文只引用） | `config.py:125`；见 `02-ingestion-pipeline.md` |
+| `INGEST_MAX_FILE_MB` | 100 | 单文件上限，超限 `OVERSIZED` / 目录扫描 `OVERSIZED` | `config.py:121`；`ingestion_service.py:115-117` |
+| `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途上传请求上限，超出 429 | `config.py:133`；`upload_admission.py:71-79` |
+| `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 积压水位；只拒多文件请求，0 = 关闭 | `config.py:137-139`；`upload_admission.py:80-81`、`134-136` |
+| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数上限 → 422 | `config.py:141-143`；`ingestion.py:286-294` |
+| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节上限 → 413 | `config.py:145`；`ingestion.py:296-309` |
+| `INGEST_LOCAL_ROOTS` | 空 | 目录导入白名单（`;`/`,`/`os.pathsep` 分隔，realpath 归一化去重）；空 = 端点 404 | `config.py:151`、`241-265`；`local_scan.py:131-134` |
+| `INGEST_ARCHIVE_MAX_MB` | 500 | 压缩包本体上限 → 422 | `config.py:155`；`archive_service.py:186-211` |
+| `INGEST_ARCHIVE_MAX_FILES` | 2000 | 解包条目数上限（zip bomb #1） | `config.py:157`；`archive_service.py:276-280` |
+| `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:159-161`；`archive_service.py:281-286` |
+| `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:163`；`archive_service.py:287-293` |
+| `INGEST_ARCHIVE_TMP_DIR` | 空 | 解包目录（空 = 系统 temp） | `config.py:165`；`archive_service.py:127-135` |
+| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:167`；`housekeeping.py:198`、`:234-258` |
+| `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:171`；`housekeeping.py:307`、`323-334` |
+| `INGEST_CONCURRENCY` | 2 | 并发流水线数（处理腿，本文只引用） | `config.py:127`；见 `02-ingestion-pipeline.md` |
 
 `Retry-After` 固定 2 秒：`upload_admission.RETRY_AFTER_SECONDS = 2`（`upload_admission.py:36`）。
 
