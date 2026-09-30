@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.models import Paper, PaperFieldProvenance, PaperSource, new_uuid
+from app.db.models import Paper, PaperFieldProvenance, PaperIdentifier, PaperSource, new_uuid
 from app.services import metadata_identifiers as ids
 from app.services import metadata_tags as tags
 from app.services import provenance_service as prov
@@ -36,6 +36,40 @@ def make_source(session, paper_id=None, source_type="ieee_api", ref=None) -> Pap
     session.add(source)
     session.flush()
     return source
+
+
+def test_a_structural_correction_replaces_the_identifier_and_the_mirror(db_session) -> None:  # noqa: ANN001
+    """``override=True`` means the previous value is wrong (AGENTS §3.9).
+
+    Two things have to follow, or the paper keeps an identity nobody believes in:
+    the identifier row of that scheme (a second row would stay ``is_primary``,
+    because the oldest row of a scheme wins) and the mirrored column.
+    """
+    paper = make_paper(db_session)
+    weak = make_source(db_session, paper.id, source_type="filename")
+    structured = make_source(db_session, paper.id, source_type="pdf_embedded")
+
+    prov.set_field(db_session, paper, "identifier:arxiv", "2105.11453", source_id=weak.id)
+    assert paper.arxiv_id == "2105.11453"
+
+    prov.set_field(
+        db_session,
+        paper,
+        "identifier:arxiv",
+        "2105.11499",
+        source_id=structured.id,
+        override=True,
+    )
+    db_session.flush()
+
+    rows = [
+        row.normalized_value
+        for row in db_session.query(PaperIdentifier).filter_by(paper_id=paper.id, scheme="arxiv")
+    ]
+    assert rows == ["2105.11499"]  # the rejected value is gone, not kept alongside
+    assert paper.arxiv_id == "2105.11499"
+    winner = ids.primary_identifier(ids.identifiers_for_paper(db_session, paper.id))
+    assert winner is not None and winner.normalized_value == "2105.11499"
 
 
 # --------------------------------------------------------------------------- #

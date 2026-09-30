@@ -320,7 +320,12 @@ def write_field(
 
     scheme = scheme_of_identifier_field(field)
     if scheme is not None:
-        return _write_identifier(session, paper, scheme, value)
+        # ``override=True`` means the caller knows the previous value is wrong (a
+        # manual edit, a rollback, or a structured source correcting a weak one),
+        # so the mirrored column has to follow the new identifier. Fill-only here
+        # kept the superseded value: ``paper_identifiers``/``fingerprint`` already
+        # said 2105.11499 while ``papers.arxiv_id`` still said 2105.11453.
+        return _write_identifier(session, paper, scheme, value, correct=override)
 
     if kind_of_tag_field(field) is not None:
         return _write_tags(session, paper, field, value)
@@ -429,15 +434,29 @@ def _names_equal(paper: Paper, names: Sequence[str]) -> bool:
 
 
 def _write_identifier(
-    session: Session, paper: Paper, scheme: str, value: Any, *, replace: bool = False
+    session: Session,
+    paper: Paper,
+    scheme: str,
+    value: Any,
+    *,
+    replace: bool = False,
+    correct: bool = False,
 ) -> bool:
     """Identifier claims keep the table and the mirrored columns in step.
 
     ``replace=True`` (rollback) also drops the other values of the same scheme: the
     claim being restored was the value in force at that time, so any later DOI for
     the same paper is what the rollback is undoing.
+
+    ``correct=True`` is for every correction path (``write_field(...,
+    override=True)``: a manual edit, a rollback, or a structured source overwriting
+    a weak guess such as a file name). The superseded value is *wrong*, so it is
+    replaced instead of being kept next to the new one -- ``primary_identifier``
+    returns the oldest row of a scheme, so a second row would leave
+    ``papers.arxiv_id`` and the fingerprint pointing at the value the correction
+    just rejected (2026-09-30).
     """
-    if replace:
+    if replace or correct:
         row = identifiers.replace_identifier(
             session, paper_id=paper.id, scheme=scheme, value=str(value)
         )
@@ -448,7 +467,9 @@ def _write_identifier(
     if row is None:
         return False
     identifiers.refresh_primary(session, paper.id)
-    identifiers.mirror_legacy_columns(session, paper)
+    identifiers.mirror_legacy_columns(
+        session, paper, force_scheme=scheme if (correct or replace) else None
+    )
     return True
 
 

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import re
 from collections import Counter, OrderedDict
+from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
 from app.parsing.pdf import EmbeddedMetadata, PageText
+from app.services.paper_service import normalize_arxiv_id
 
 _ARXIV_IN_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/([A-Za-z0-9.\-/]+)", re.IGNORECASE)
 _ARXIV_LINE = re.compile(
@@ -400,6 +402,40 @@ def heuristic_claim_values(metadata: Mapping[str, object]) -> dict[str, object]:
     if isinstance(arxiv_id, str) and arxiv_id.strip():
         values["identifier:arxiv"] = arxiv_id.strip()
     return values
+
+
+#: ``1706.03762`` / ``2105.11453v2`` as they turn up inside a file name. The
+#: leading ``YYMM`` must be a real month -- that is what keeps a version-ish
+#: tail such as ``notes-2024.12345.pdf`` from being read as an identifier --
+#: and the lookarounds stop a match inside a longer digit run.
+ARXIV_ID_TOKEN = re.compile(r"(?<![\d.])(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?(?![\d.])")
+
+
+def arxiv_id_from_filename(filename: str | None) -> str | None:
+    """The arXiv id carried by a file name, or ``None``.
+
+    The corpus convention is ``<arxiv_id>__<topic>.pdf`` (see the master plan),
+    and dropped-in files are often named the same way. A name is only ever a
+    *hint* -- it says which paper a file holds, not what the paper's metadata
+    is -- so this feeds the identifier ladder and nothing else.
+    """
+    if not filename:
+        return None
+    stem = re.sub(r"\.pdf$", "", Path(filename).name, flags=re.IGNORECASE)
+    for match in ARXIV_ID_TOKEN.finditer(stem):
+        if 1 <= int(match.group(2)) <= 12:
+            return normalize_arxiv_id(match.group(0))
+    return None
+
+
+def filename_claim_values(filename: str | None) -> dict[str, object]:
+    """File-name claims -- discovery layer 3, the weakest one.
+
+    Only the identifier: titles, authors and years come from the document
+    itself (layers 1 and 2), never from whatever the file happens to be called.
+    """
+    arxiv_id = arxiv_id_from_filename(filename)
+    return {"identifier:arxiv": arxiv_id} if arxiv_id else {}
 
 
 def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:

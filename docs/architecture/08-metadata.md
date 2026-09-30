@@ -96,11 +96,11 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 |---|---|---|
 | `id` | UUID PK | |
 | `paper_id` | UUID，FK→`papers.id`，**可空** | 空 = 还没归属到任何论文（复核清单的数据源） |
-| `source_type` | VARCHAR(32) NOT NULL | `ieee_api` / `arxiv_api` / `crossref` / `pdf_embedded` / `pdf_heuristic` / `import_file` / `manual`（`metadata_sources.py:27-33`） |
-| `source_ref` | VARCHAR(512) NOT NULL | 来源内的稳定引用：`doi:…` / `arxiv:…` / `ieee:<article_number>` / 路径+sha256 / `heuristic:<sha>` 等（`metadata_sources.py:69-95`） |
+| `source_type` | VARCHAR(32) NOT NULL | `ieee_api` / `arxiv_api` / `crossref` / `pdf_embedded` / `pdf_heuristic` / `import_file` / `manual`（`metadata_sources.py:27-36`） |
+| `source_ref` | VARCHAR(512) NOT NULL | 来源内的稳定引用：`doi:…` / `arxiv:…` / `ieee:<article_number>` / 路径+sha256 / `heuristic:<sha>` 等（`metadata_sources.py:73-104`） |
 | `content_type` | VARCHAR(32) | `ieee_raw` / `csl_json` / `generic_json` 等 |
 | `raw` | JSONB NOT NULL，默认 `{}` | **来源原样**（IEEE 一条约 8KB），只在 PG |
-| `match_status` | VARCHAR(16) NOT NULL，默认 `pending` | `matched` / `pending` / `ambiguous` / `rejected`（`:45-48`）；复核队列取 `pending` + `ambiguous`（`:58`） |
+| `match_status` | VARCHAR(16) NOT NULL，默认 `pending` | `matched` / `pending` / `ambiguous` / `rejected`（`:49-52`）；复核队列取 `pending` + `ambiguous`（`:62`） |
 | `match_method` | VARCHAR(32) | 怎么匹配上的，见 §4.4 |
 | `match_confidence` | FLOAT | 0.5 / 0.8 / 1.0 |
 | `fetched_at` | DATETIME | 来源侧取数时间 |
@@ -148,7 +148,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 - `identifier:<scheme>`，如 `identifier:doi`
 - `tag:<kind>`，如 `tag:ieee_terms`
 
-约束与索引：**部分唯一** `UNIQUE(paper_id, field) WHERE is_current`（`uq_paper_field_provenance_current`，`:583`）；`ix_paper_field_provenance_paper_field`。历史行永不删除——回滚 = 把历史某行置回 `is_current=true` 并写回 `papers` 列（`rollback_field`，`provenance_service.py:253`）。
+约束与索引：**部分唯一** `UNIQUE(paper_id, field) WHERE is_current`（`uq_paper_field_provenance_current`，`:604`）；`ix_paper_field_provenance_paper_field`。历史行永不删除——回滚 = 把历史某行置回 `is_current=true` 并写回 `papers` 列（`rollback_field`，`provenance_service.py:253`）。
 
 ### 3.4 `venues`（`models.py:206-231`）与 `venue_editions`（`:659-688`）
 
@@ -248,7 +248,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ### 4.3 合并规则 R2（现状）
 
-三类来源集合（`metadata_merge.py:53-68`）：
+三类来源集合（`metadata_merge.py:54-76`）：
 
 | 集合 | 取值 |
 |---|---|
@@ -280,9 +280,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ### 4.5 摄取链：PDF → 归属哪篇论文 → 主版本 → 元数据回填
 
-1. `_run_pipeline`（`tasks.py:442`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`（`:734`）。
-2. `_match_existing_paper`（`:783`）：先读 PDF 内嵌元数据（Info / XMP）匹配，失败再跑首页启发式匹配；命中已有论文（含壳）→ `metadata_shell.adopt_paper`，把 `reused_paper_id` / `match_method` 写进 `job.payload`。
-3. `apply_primary_selection`（`paper_service.py:465`）判主版本；非主版本立刻 `_finish_non_primary`（`tasks.py:853`）结束。
+1. `_run_pipeline`（`tasks.py:446`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`（`:738`）。
+2. `_match_existing_paper`（`:787`）：先读 PDF 内嵌元数据（Info / XMP）匹配，失败再跑首页启发式匹配；命中已有论文（含壳）→ `metadata_shell.adopt_paper`，把 `reused_paper_id` / `match_method` 写进 `job.payload`。
+3. `apply_primary_selection`（`paper_service.py:465`）判主版本；非主版本立刻 `_finish_non_primary`（`tasks.py:857`）结束。
 4. 主版本继续：`_reset_placeholder_title`（`:843`）→ `_backfill_metadata`（`:869`）→ `_restore_placeholder_title`（`:859`）→ 指纹升级（`sha256` 撞车则丢弃本次论文）→ 切块 → 嵌入 → `delete_by_paper_id` + `bulk_index_chunks` → `INDEXED`。
 5. `_backfill_metadata` 按层写声明：第 1 层 `pdf_embedded`（结构化，confidence 1.0）→ 第 2 层 `pdf_heuristic`（confidence 0.5），每层各自 `upsert_source` 后 `merge_values`。
 
@@ -330,7 +330,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 - **索引快照**：`app/search/snapshot.py::paper_metadata_snapshot`（`:74`）把当前值写成 chunk 文档上的可过滤字段
   （`venue`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers`/四个 tag kind），INDEXING 阶段由
-  `_index_rows`（`tasks.py:1051`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`
+  `_index_rows`（`tasks.py:1135`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`
   （重算向量，≈1 chunk/s），要么 `uv run python scripts/refresh_index_metadata.py`（只改快照、秒级；2026-09-22
   真机 2883 文档全部更新、0 失败）。
 - **读接口**：`PaperOut`（`app/schemas/paper.py:24`）直接输出当前值列 `volume/issue/pages/publication_date/
@@ -378,7 +378,7 @@ CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_m
 
 **不做**：
 
-- **网络抓取**：`ieee_api` / `arxiv_api` / `crossref` 只有取值与落库路径，没有任何调用代码（`metadata_sources.py:27-33` 只是常量）。
+- **网络抓取**：`ieee_api` / `arxiv_api` / `crossref` 只有取值与落库路径，没有任何调用代码（`metadata_sources.py:27-36` 只是常量）。
 - **站点专用 translator、RIS / BibTeX 解析**：只认 IEEE Xplore raw / CSL-JSON / 通用 JSON。
 - **自动合并重复论文**：重复只被报告（`backfill_metadata.py` 的 `duplicate_identifiers`），由人决定。
 - **`author_identifiers`**：作者只存名字，IEEE 的作者 id 丢弃。

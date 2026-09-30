@@ -160,6 +160,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 |---|---|---|
 | 1 | **PDF 内嵌元数据**（Info 字典 + XMP：`dc:title`、`prism:doi`…），零网络 | ✅ 做（`source_type='pdf_embedded'`） |
 | 2 | 首页文本启发式（现有：字号判标题、作者块、摘要、年份、DOI/arXiv 正则） | ✅ 已有（`source_type='pdf_heuristic'`） |
+| 2b | **文件名标识符提示**：`1706.03762__topic.pdf` 的主干给出 arXiv id | ✅ 做（`source_type='filename'`，2026-09-30） |
 | 3 | **外部导入**（IEEE 批量 JSON / CSL-JSON / 本项目通用 JSON） | ✅ 做（`import_file`） |
 | 4 | DOI 内容协商（`Accept: application/vnd.citationstyles.csl+json`） | ⏳ 列入计划，本期不做（`crossref`） |
 | 5 | 平台 API：IEEE Xplore（`article_number`/`doi`）、arXiv API（Atom） | ⏳ 列入计划，本期不做（`ieee_api` / `arxiv_api`） |
@@ -167,6 +168,9 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | 7 | 人工（单篇手动更新 / 人工归属） | ✅ 预留（`manual`） |
 
 > 关键点：**本期不做网络层，但存储模型已经为它们留好位置**——接入时只加一个 importer，不动表。
+
+摄取时管道按 **1 → 2 → 2b** 的顺序跑（`app/workers/tasks.py::_backfill_metadata`，代码注释里称这三步为 layer 1/2/3）：
+先读 PDF 自己的说法，再读首页，最后才看文件名。2b 是**最低权威**的一层，理由见 §6 与 §8。
 
 ---
 
@@ -177,6 +181,9 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 - **兜底链**（无 DOI 时）：`DOI > arXiv > 规范化标题 + 首作者 + 年 > 文件 sha256`——这条链**已经存在**于 `papers.fingerprint`，
   本次只是把它的输入从"两个固定列"改为"`paper_identifiers` 的主标识符"。
 - 标识符变更（如导入带来 DOI）→ **指纹升级**，复用既有 `_upgrade_fingerprint` 路径（含 reindex 的 `dedupe=False` 守卫）。
+- **文件名给的 id 是最低一档证据**（2026-09-30 加）：只在论文还不知道任何 arXiv id 时补空，而且**当这个 id 已属于另一篇活论文时直接丢弃**（不写声明、不写来源行）——
+  标识符表本来就会拒绝挂载（`uq` 约束），但声明会被留下来，形成"论文声称自己持有某个不属于它的 id"，回滚时还会被写到 `papers.arxiv_id` 上。
+  名称与身份表打架属于**查重信号**，交给五步匹配器（§7 步 5），不属于元数据填充。
 
 ---
 
@@ -198,13 +205,18 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 ## 8. 合并规则 R2（**不引入来源权威性排序**）
 
 1. **只填空**：目标字段已有值 → 不覆盖，只写 provenance（`is_current=false`）并登记冲突。
-2. **唯一例外**：现有值的来源是 `pdf_heuristic`，而新值是**结构化来源**（`ieee_api`/`arxiv_api`/`crossref`/`import_file`/`pdf_embedded`/`manual`）→ 覆盖，`decided_by='structured_override'`，旧值保留为历史行。
+2. **唯一例外**：现有值的来源是**弱来源**（`pdf_heuristic`、`filename`），而新值是**结构化来源**（`ieee_api`/`arxiv_api`/`crossref`/`import_file`/`pdf_embedded`/`manual`）→ 覆盖，`decided_by='structured_override'`，旧值保留为历史行。
+   两个弱来源互相矛盾时按规则 3 处理（只填空 + 登记冲突），不比较谁更可信。
 3. **结构化来源之间**：只填空 + 登记冲突，**不比较谁更权威**。
 4. **字段特例**：`abstract` 取最长；`authors` 取条数最多的一份；`year` 冲突保留现值并登记。
 5. **回滚**：把某条历史 provenance 置回 `is_current=true`，并把当时的 `papers` 列写回；不删历史。
 
 > 为什么这样：现有 68 篇的历史元数据全部由启发式写入（回填时统一标 `pdf_heuristic`），因此 IEEE 导入能修正它们；
 > 同时避免了维护一张"谁比谁权威"的排序表。
+
+**更正 = 替换，不是并存**（2026-09-30）：R2 判成覆盖（或回滚、手动改）时，`provenance_service._write_identifier` 走
+`replace_identifier`——**删掉同 scheme 的旧行**并强制镜像列跟随。只插入新行是不够的：`primary_identifier` 取"同 scheme 里最早的那一行"，
+于是 `papers.arxiv_id` 与 `papers.fingerprint` 会继续指向刚被否定的旧值（指纹还直接决定查重）。
 
 ---
 
@@ -355,4 +367,5 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 |---|---|
 | 2026-09-21 | 建立本文件：三层模型、4 张新表、R2 合并规则、主版本规则、两种导入顺序、IEEE 映射（定稿，待实现） |
 | 2026-09-21 | **实现完成并真机验收通过**：迁移 `7a2f4c9d51be`（4 张新表 + `papers`/`paper_files`/`papers_tags`/`venues` 加列）、服务 `metadata_{identifiers,sources,tags,merge,matcher,shell,import,manual}.py`、端点 8 个、脚本 3 个（`backfill_metadata` / `import_metadata` / `acceptance_metadata`）。两处与初稿的实现细化：① 删除论文时**释放**其 `paper_identifiers`（否则墓碑永久占住 DOI，与 `papers.fingerprint` 的"删除即释放"一致）；② 元数据改动后要经 `POST /api/papers/{id}/reindex` 才能进检索过滤字段（过滤字段在 chunk 文档上）。 |
+| 2026-09-30 | 加**文件名标识符提示**（§5 层 2b、§6、§8）：`source_type='filename'`、`metadata_service.arxiv_id_from_filename`（`YYMM` 必须是真月份，`notes-2024.12345.pdf` 不算）、`tasks._may_offer_arxiv_id` 两道守卫（论文已知 arXiv id / 该 id 已属于别的活论文）；同时把"更正 = 替换 + 镜像跟随"写成 R2 的正式语义。 |
 | 2026-09-23 | 补 §12.1：三种可导入格式（`ieee_raw` / `csl_json` / `generic`）的字段清单、别名表、值形状、`source_ref` 去重阶梯与 `source_type` 取值（此前只在 §12 末尾一句话带过）。 |

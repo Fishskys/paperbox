@@ -125,7 +125,7 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 9. **嵌套压缩包不递归**（304-306，计入 `entries_ignored`）；`.pdf` 后缀只是候选，最终靠 `%PDF` 魔数（前 1 KiB，`PDF_MAGIC_WINDOW=1024`，173-180），无魔数即 `UNSUPPORTED_TYPE` 拒收并删文件（697-707）。
 10. **GC 只删文件、不碰作业行**：`run_gc` 只对作业表做 `select`（85-115），测试用真实作业行验证 stage 与 `error_code` 不变（`tests/test_upload_gc.py:270-287`）；失败只进 `GcReport.errors`，绝不抛（156-159、215-222）。
 11. **staging 没有宽限期**：GC 判据只有 liveness（174-181），没有年龄检查；孤立即刻被删。历史事故：staging 只写不删，13 个作业留下 9 个对象 49.8 MB（`housekeeping.py:5-10`，该数字来自代码注释，本会话未复测）。
-12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md` §3.8），存储成功后才 `_cleanup_source`（`tasks.py:273-283`）。
+12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md` §3.8），存储成功后才 `_cleanup_source`（`tasks.py:277-287`）。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
 

@@ -42,7 +42,7 @@
 | | `delete_prefix` / `move_object` / `safe_filename` | 按前缀删（:426-434）/ 重定位对象（:389-423）/ 净化文件名（:245-259） |
 | `app/services/paper_service.py` | `soft_delete_paper` | 标记论文与文件删除，并物理删除 `paper_identifiers`（:634-656） |
 | `app/services/archive_service.py` | `extraction_root` / `archive_path` | `<tmp>/paperbox-<request_id>/` 与 `<tmp>/paperbox-<request_id>.zip`（:132-140） |
-| `app/workers/tasks.py` | `_store_source` / `_cleanup_source` / `remove_local_file` | 落到 `papers/<id>/original.pdf`（:374-396）；STORED 后删 staging 与解包文件（:399-417）；删文件并修剪空目录（:420-438） |
+| `app/workers/tasks.py` | `_store_source` / `_cleanup_source` / `remove_local_file` | 落到 `papers/<id>/original.pdf`（:378-400）；STORED 后删 staging 与解包文件（:403-421）；删文件并修剪空目录（:424-442） |
 | `app/workers/housekeeping.py` | `run_gc` | 回收孤儿/过期 staging 与超过 TTL 的解包目录（:136-212） |
 | `scripts/create_index.py` | `verify` / `wait_for_task` / `migrate` | 幂等建索引并报告（:91-118）／轮询 `GET _tasks/<id>`（:120-142）／`_reindex` 后原子切别名（:145-247） |
 
@@ -106,9 +106,9 @@ venues ──CASCADE──> venue_editions
 
 1. `POST /api/papers/ingest/files` → `app/api/ingestion.py:161` `object_storage.build_staging_key(request_id, index, filename)` → `uploads/<req>/<i>-<name>.pdf`；
 2. `object_storage.upload_stream_hashed`（`:276-326`）经 `_HashingReader`（`:72-106`）落盘并得到 `sha256`，用于内容去重；
-3. worker `_store_source`（`app/workers/tasks.py:374-396`）→ `object_storage.build_object_key(paper_id)` → `papers/<paper_id>/original.pdf`；
+3. worker `_store_source`（`app/workers/tasks.py:378-400`）→ `object_storage.build_object_key(paper_id)` → `papers/<paper_id>/original.pdf`；
 4. `paper_service.register_original_file`（`app/services/paper_service.py:591-631`）写 `paper_files` 行（`bucket`、`object_key`、`sha256`、`is_primary`）；
-5. `_cleanup_source`（`tasks.py:399-417`）删 staging 对象（失败交给 housekeeping），有 `cleanup_after` 时 `remove_local_file`（`:420-438`）删解包文件并修剪空目录；
+5. `_cleanup_source`（`tasks.py:403-421`）删 staging 对象（失败交给 housekeeping），有 `cleanup_after` 时 `remove_local_file`（`:424-442`）删解包文件并修剪空目录；
 6. 解析/embedding 后 `opensearch.bulk_index_chunks`（`app/search/opensearch.py:302-361`）写别名 `paper_chunks_current`，文档 `_id = chunk_id`。
 
 删除（`DELETE /api/papers/{id}`，`app/api/papers.py:302-342`）：
