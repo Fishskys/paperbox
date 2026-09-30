@@ -47,7 +47,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 字段级账本 | PostgreSQL `paper_field_provenance` | 历史行永不删除，回滚靠翻 `is_current` |
 | 标识符、venue、标签 | PostgreSQL 对应表 | 见 §3 |
 | PDF 原件 | MinIO（`papers/<paper_id>/…`） | 元数据层只存 `paper_files.object_key` / `sha256` |
-| 可检索文本 + 向量 + **过滤字段快照** | OpenSearch chunk 文档 | 过滤字段（venue/year/tags/doi）是**索引时的快照**，所以改元数据要 `POST /api/papers/{id}/reindex` 才影响过滤（`README.md:272`） |
+| 可检索文本 + 向量 + **过滤字段快照** | OpenSearch chunk 文档 | 过滤字段（venue/year/tags/doi）是**索引时的快照**，所以改元数据要 `POST /api/papers/{id}/reindex` 才影响过滤（`README.md:282`） |
 
 ---
 

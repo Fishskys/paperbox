@@ -180,7 +180,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:546-551 → 轮询终止
 | **删源一律在 `commit` 之后**。顺序颠倒会让失败的作业失去唯一输入 | `tasks.py:279`（commit）→ `284`（`_cleanup_source`） |
 | **判重命中立即删**，三处：流水线内判重、`/ingest/files` 暂存后判重、压缩包解包后判重。暂存副本唯一的用途（算 sha256）已经用完 | `tasks.py:243`；`api/ingestion.py:175-176`；`api/ingestion.py:716-717` |
 | `_cleanup_source` 只删两类东西：`payload["object_key"]`（staging）与 `cleanup_after=true` 的本地文件；其余本地文件（`/ingest/dir` 导入的原始 PDF）**永不删** | `tasks.py:399-417`、`346-372`；测试 `tests/test_local_source.py:195` |
-| **`mark_failed` 的 docstring 与代码不符**：docstring（L359-363）称"`stage`/`progress` 保留失败发生的阶段"，代码 L364 实际把 `stage` 写成 `FAILED`，只有 `progress` 保留 | 代码 `ingestion_service.py:364`；测试 `tests/test_job_progress.py:445-447`（`stage == "FAILED"` 且 `progress == PROGRESS_EMBEDDING`）。`README.md:289` 的同一说法同样不准 → 以代码为准 |
+| **`mark_failed` 的 docstring 与代码不符**：docstring（L359-363）称"`stage`/`progress` 保留失败发生的阶段"，代码 L364 实际把 `stage` 写成 `FAILED`，只有 `progress` 保留 | 代码 `ingestion_service.py:364`；测试 `tests/test_job_progress.py:445-447`（`stage == "FAILED"` 且 `progress == PROGRESS_EMBEDDING`）。`README.md:299` 的同一说法同样不准 → 以代码为准 |
 | **`mark_queued` 是单向闸门**：只接受 `RECEIVED`/`QUEUED`，运行中的作业绝不会被倒回 `QUEUED` | `ingestion_service.py:411-418`；测试 `tests/test_ingest_queue.py:214-227` |
 | **`prepare_retry` 的 `rowcount == 1` 是重试并发闸门**：双击/并发调用只有一个能把作业翻出 `FAILED`，不会起两个 worker | `ingestion_service.py:384-400`；测试 `tests/test_job_retry.py:82-90` |
 | **`enqueue` 幂等**：已在 `_pending` 或 `_running` 中则返回 `False` 且不重复入队 | `queue.py:186-188`；测试 `tests/test_ingest_queue.py:167-189` |
@@ -190,7 +190,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:546-551 → 轮询终止
 | `dedupe=False` 还顺带跳过 `_resolve_target_paper`（条件是 `dedupe and file_record is not None`，reindex 两者都不满足）→ reindex 不会走非主版本分支 | `tasks.py:478-478`；`reindex_paper` 未传 `file_record`（L111） |
 | **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:453-455` |
 | **同名常量两处定义**：`tasks.py:52-59` 定义了自己的 `STAGE_DOWNLOADING`/`STAGE_STORED`/`PROGRESS_DOWNLOADING`/`PROGRESS_STORED`，但这两阶段实际用的是 `ingest.*`（L227、L274-275）；两处值相同，暂无行为差异，但改一处会漏另一处 | `tasks.py:52-59` vs `226-228`、`273-275` |
-| 队列是**进程内**的：只有 `--workers 1` 的前提下成立 | `queue.py:20-24`；`README.md:125-127` |
+| 队列是**进程内**的：只有 `--workers 1` 的前提下成立 | `queue.py:20-24`；`README.md:135-137` |
 | `stop()` 不会杀线程里的流水线；该作业行停在中间态，下次启动被 `recover` 标 `INTERRUPTED` | `queue.py:139-154` |
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
@@ -227,7 +227,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:546-551 → 轮询终止
 
 ## 8. 未做 / 已知缺口
 
-- **无外部队列**：队列在进程内，横向扩 worker/多副本必须先换外部队列（当前明确不做）。`queue.py:20-24`；`README.md:125-127`；`docs/progress/project.md:583`。
+- **无外部队列**：队列在进程内，横向扩 worker/多副本必须先换外部队列（当前明确不做）。`queue.py:20-24`；`README.md:135-137`；`docs/progress/project.md:583`。
 - **重启恢复只处理 `ingestion_jobs` 行，不做 MinIO/OpenSearch 对账**：`recover_jobs` 不检查"论文行有、对象缺失"这类不一致；对账仍是 `scripts/purge_deleted.py`。`ingestion_service.py:426-462`；`docs/progress/project.md:584`。
 - **`INTERRUPTED` 不会自动重跑**：恢复只是把作业标成 `FAILED`，重新驱动必须人工 `POST /api/jobs/{id}/retry`。`ingestion_service.py:452-458`、`api/jobs.py:53-59`。
 - **`run_reindex_job` 的"无 paper_id"失败不带错误码**：`mark_failed` 未传 `code`，于是 `stage=FAILED` 而 `error_code=NULL`，与其它失败不一致。`tasks.py:125-128`。

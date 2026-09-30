@@ -203,11 +203,11 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 |---|---|---|---|
 | `POSTGRES_DATA_DIR` | `./data/postgres` | PG 数据卷挂载 | `infra/docker-compose.yml:27` |
 | `OPENSEARCH_DATA_DIR` | `./data/opensearch` | OpenSearch 数据卷 | `infra/docker-compose.yml:54` |
-| `MINIO_DATA_DIR` | `./data/minio` | MinIO 数据卷 | `infra/docker-compose.yml:73` |
-| `EMBEDDING_MODELS_DIR` | `./data/embedding-models` | 模型缓存卷（`FASTEMBED_CACHE_PATH=/models`） | `infra/docker-compose.yml:104, 90` |
+| `MINIO_DATA_DIR` | `./data/minio` | MinIO 数据卷 | `infra/docker-compose.yml:78` |
+| `EMBEDDING_MODELS_DIR` | `./data/embedding-models` | 模型缓存卷（`FASTEMBED_CACHE_PATH=/models`） | `infra/docker-compose.yml:109, 90` |
 | `PAPERBOX_BIND_IP` | `0.0.0.0` | 依赖端口绑定地址；服务器可设 `127.0.0.1` | `infra/docker-compose.yml:25, 52, 70-71, 102` |
 | `POSTGRES_PASSWORD` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | 必填 | 凭据 | `infra/.env.example:7-9` |
-| `EMBEDDING_MODEL` / `RERANK_MODEL` / `RERANK_MAX_BATCH` / `ORT_THREADS` / `MAX_BATCH` | 见文件 | 模型与资源（本机 9GB WSL 实测安全值） | `infra/.env.example:24-33` |
+| `EMBEDDING_MODEL` / `RERANK_MODEL` / `RERANK_MAX_BATCH` / `ORT_THREADS` / `MAX_BATCH` | 见文件 | 模型与资源（本机 9GB WSL 实测安全值） | `infra/.env.example:25-34` |
 | `OPENSEARCH_ADMIN_PASSWORD` | `ChangeMe-Initial-Admin-2026!` | 安全插件关闭时**不参与校验**，仅防明文进仓库 | `infra/docker-compose.yml:46` |
 
 **脚本级环境变量**

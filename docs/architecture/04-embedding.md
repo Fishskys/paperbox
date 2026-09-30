@@ -108,7 +108,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 
 | # | 不变量 / 坑 | 证据 |
 |---|---|---|
-| 1 | 应用 batch 必须等于容器 `MAX_BATCH`，但两侧分属两个 env 文件、代码无一致性校验；不等即 422、导入整体失败 | 应用 `config.py:72`=.env 16；容器 `infra/docker-compose.yml:99`=16；告警写在 `infra/.env.example:32` |
+| 1 | 应用 batch 必须等于容器 `MAX_BATCH`，但两侧分属两个 env 文件、代码无一致性校验；不等即 422、导入整体失败 | 应用 `config.py:72`=.env 16；容器 `infra/docker-compose.yml:104`=16；告警写在 `infra/.env.example:33` |
 | 2 | embedding 与精排的限批必须解耦：`MAX_BATCH` 同时管 `/embed` 上限，压小会让导入全 422 | `server.py:38-43` 注释；`docker-compose.yml:96-98` |
 | 3 | 每批新建 `httpx.Client`，无连接复用；批次串行、批内重试，单条流水线内部无并发（并发来自多条流水线） | `embedding_service.py:37`（with 块）、:108-121（顺序循环） |
 | 4 | 重试 = `EMBEDDING_MAX_RETRIES`(2) 次额外尝试，退避 `0.5 * 2**attempt`（0.5s、1.0s）；超时 = 单批 `EMBEDDING_TIMEOUT`(**300s**，T7.3 起：服务端排队后它必须大于最坏排队时间，否则排队会变成失败) | `embedding_service.py:111`、:129；`config.py:77-81` |

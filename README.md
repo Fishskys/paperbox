@@ -120,6 +120,16 @@ PG 用 `pg_dump`/`pg_restore`；MinIO 用 `mc mirror`；OpenSearch 可照 `scrip
 的 `--migrate-from` 做服务端 `_reindex`（复制文档、不重算 embedding，~2883 docs 仅数秒），
 或对索引做 snapshot/restore。**66 篇论文的向量已经算好（2883 chunks，重算约 1.2h），迁移时务必搬运而非重建。**
 
+**备份与恢复（OpenSearch 快照，2026-09-30 起）**：仓库 `paperbox_backup`（`fs` 类型，落盘`OPENSEARCH_BACKUP_DIR`），策略 `paperbox-daily` 每天 03:30（`Asia/Shanghai`）给 `paper_chunks_*,search-relevance-*` 取快照，保留 14 份 / 30 天（`partial=false`，红索引会显式失败）：
+
+```bash
+uv run python scripts/setup_snapshots.py --list                  # 仓库 / 快照 / 策略状态
+uv run python scripts/setup_snapshots.py --baseline 20260930     # 一次手工基线（不受策略清理）
+uv run python scripts/setup_snapshots.py --restore-check <SNAP>  # 恢复演练：临时索引比对后自删
+```
+
+`path.repo` 只能在**容器启动时**用 `-Epath.repo=/mnt/backups` 给出（见 `infra/docker-compose.yml`，与 `OPENSEARCH_BACKUP_DIR` 成对），改了必须 `docker compose up -d --force-recreate opensearch` —— `docker compose restart` 或改运行时设置都不生效。**只覆盖 OpenSearch**：PostgreSQL 要 `pg_dump`（数据在 WSL 的 ext4，`paperbox-data/` 备份不覆盖它），MinIO 里是原始 PDF（另有冻结副本）。
+
 **内存/并发调参**（下表是本机 9GB WSL 上的实测安全值，服务器按物理内存放大）：
 `ORT_THREADS=4`、`MAX_BATCH=16`（/embed 限批）、`RERANK_MAX_BATCH=4`（多语言精排 jina 的激活内存
 随 `token × 候选数` 增长，16 条候选峰值 5.1GB）、`OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g`。
@@ -495,6 +505,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 脚本 | 用途 |
 |------|------|
 | `scripts/create_index.py` | 幂等创建 `paper_chunks_v3` + 别名 `paper_chunks_current`；`--index/--alias` 可指定，`--migrate-from <old>` 服务端 `_reindex` 整批拷贝（**不重新 embedding**）后原子切别名（旧索引是否保留由调用方决定，2026-09-30 的 v3 重建后旧索引已删） |
+| `scripts/setup_snapshots.py` | 幂等建/核对 OpenSearch **快照仓库** + **定时快照策略**（SM）：`--list` 只读看仓库/快照/策略；`--baseline <TAG>` 取一份手工基线快照；`--restore-check <SNAPSHOT>` 把索引还原成临时索引、比对文档数后自动删临时索引（**恢复演练**）；`--dry-run` 不动手。仓库落点由 `infra/.env` 的 `OPENSEARCH_BACKUP_DIR`（容器内 `/mnt/backups`）决定 |
 | `scripts/reindex.py` | 全量/指定论文重建；选谁：`--missing`（没有 chunks）、`--degraded`（有未解决降级，可配 `--degraded-stage`/`--degraded-code`）、`--parser-backend pypdf\|docling\|unknown`（按解析戳，含「当时就配成该后端」的论文）；`--degradations` 只列账本，`--dry-run` 只列选中项（含戳与降级原因） |
 | `scripts/purge_deleted.py` | 清理已删论文遗留的索引文档与 MinIO 对象（`--dry-run` 可先预览）；`--hard` **连 PostgreSQL 行一起删**（chunks/files/identifiers/sources/provenance/authors/tags/jobs + 论文行，逐表打印计数；**不可逆**，安全网是 `backups/` 里的 `pg_dump`） |
 | `scripts/check_consistency.py` | 三端（PG / MinIO / OpenSearch）只读对账：逐篇核对文件行↔对象、chunk 行↔文档，报出缺失索引/缺失 chunk/缺失文档/孤儿对象/孤儿文档/删除残留；`--no-fail` 只报告不返回非 0，`--parser-papers` 连每个后端戳下的论文 id 一起列（`reindex.py --parser-backend` 的工作清单） |
