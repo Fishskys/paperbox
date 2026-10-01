@@ -23,10 +23,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: ``pypdf`` the degradation backend (and the default until the acceptance run).
 PARSER_BACKENDS = frozenset({"pypdf", "docling"})
 
-#: Accepted values of ``SEARCH_BACKEND`` (plan §7, M5). ``python`` = the two-leg
-#: retriever whose legs are fused in-process (deployed default); ``native`` = one
-#: ``hybrid`` request fused by the ``paperbox-rrf60`` search pipeline and collapsed
-#: to papers (``app/search/native.py``). Only ``mode=hybrid`` is affected.
+#: Accepted values of ``SEARCH_BACKEND`` (plan §7, M5). ``native`` = one ``hybrid``
+#: request fused by the ``paperbox-rrf60`` search pipeline and collapsed to papers
+#: (**deployed default**, ``app/search/native.py``); ``python`` = the two-leg
+#: retriever whose legs are fused in-process. Both passed the M5 gate and the
+#: python path is kept as the A/B baseline and the fallback. Only ``mode=hybrid``
+#: is affected -- keyword/semantic are single-leg and always use the Python path.
 SEARCH_BACKENDS = frozenset({"python", "native"})
 
 #: Accepted values of ``CHUNK_MODE``. Kept here rather than imported from
@@ -115,7 +117,7 @@ class Settings(BaseSettings):
     #: (``SearchRequest.backend``), which is how the A/B drives both paths
     #: against the same process. An unknown value fails at startup, not at
     #: query time.
-    search_backend: str = Field(default="python", alias="SEARCH_BACKEND")
+    search_backend: str = Field(default="native", alias="SEARCH_BACKEND")
 
     # --- query rewrite (SPEC-P1 section I1) ---
     #: Off by default: when disabled the search path behaves exactly as before

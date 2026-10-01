@@ -483,7 +483,9 @@ curl -X POST http://127.0.0.1:8077/api/search \
 
 - `keyword`：OpenSearch BM25（`title^2` + `text`）
 - `semantic`：查询向量 → `knn`（hnsw/l2，1024 维）
-- `hybrid`（默认）：两路各取 `top_k*5` 后用 **RRF(k=60)** 融合
+- `hybrid`（默认）：**引擎侧融合** —— 一次 `hybrid` 请求由 search pipeline `paperbox-rrf60` 做 **RRF(k=60)**，
+  `collapse(paper_id)` 直接返回**论文**（每篇带 3 条 evidence 兄弟块），较旧的「两路各取 `top_k*5` + 进程内
+  RRF 聚合」路径保留在 `backend=python` 下（A/B 基线与降级路径）。切换见下面 `SEARCH_BACKEND` 一条
 - 过滤器：`year_from`、`year_to`、`authors`、`venue`、`doi`、`arxiv_id`、`tag`，以及元数据层带来的
   `venue_year`（会议/期刊**那一届**的年份——与论文自身的 `year` 是两回事，早录用/晚收录时两者不同）、
   `paper_type`、`identifier`（`<scheme>:<值>`，如 `ieee_article_number:7065247`、`doi:10.1109/...`；
@@ -494,6 +496,11 @@ curl -X POST http://127.0.0.1:8077/api/search \
   `uv run python scripts/refresh_index_metadata.py` 批量改写快照——**2883 个文档实测秒级**，不重算向量；
   `POST /api/papers/{id}/reindex` 同样能生效，但要把 chunk 重新 embedding（≈1 chunk/s，一篇论文几十秒）
 - `facets=true`（`POST /api/search`）：**额外一次 `size: 0` 聚合**，按**论文数**回显每个过滤键的可用取值（`venue` / `paper_type` / `year` / `ieee_terms` / `author_terms` / `dynamic_index_terms` / `source_tags`），形状 `[{key, count}]`。它描述的是"当前**过滤条件**下库里有什么"，**与查询词无关**（体里不带 BM25/kNN 腿），所以数字不随 `top_k`/rerank 变化，并与 `GET /api/papers` 的等价过滤计数一致；`terms` 取 top-N（上限 50），聚合失败只写 warning、响应 `facets` 为 `null`（不会把检索变成 503）
+- **融合后端开关（`SEARCH_BACKEND`，默认 `native`，2026-10-01 定档）**：`native` = 引擎侧一次 `hybrid` 请求
+  （管道做 RRF + `collapse` 折叠成论文）；`python` = 应用侧两条腿 + 进程内 RRF。**请求体 `backend` 可逐次覆盖**
+  （响应回显实际跑的那条），只影响 `mode=hybrid`。定档依据（60 查询配对 bootstrap）：`ndcg@1/3/5`、`mrr`、
+  `HR@1`、同深度 `ndcg@K*` 全部 CI 跨 0，`ndcg@10` +0.0231（CI 不含 0）、`recall@10` +0.0944，p50 快 17.8%；
+  跑法与判据见 `docs/architecture/10-eval-ops.md` §10，契约见 `AGENTS.md` §3.15
 - `rerank=true`（`POST /api/search`）：两阶段精排——先按 `top_k * RERANK_CANDIDATES` 扩大候选，再用交叉编码器（`RERANK_MODEL`）重排，取 `top_k * 2` 交给论文级聚合；服务不可用时自动降级为原顺序（`rerank_score` 为 `null`），不报错
 - **精排模型与限批（`RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH`）**：交叉编码器的激活内存随 `(token × 候选数)` 增长，所以精排有独立上限，与 embedding 的 `MAX_BATCH` 解耦（共用一个旋钮要么撑爆精排、要么让正常导入吃 422）。**本机现用 int8 量化多语言档** `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8`（0.4GB）+ `RERANK_MAX_BATCH=4`（2026-10-01 主人拍板全量换档）：50 条真实候选下 **3.2s（0.064 s/候选）**、精排自身内存 **824 MiB**，对照 jina 的 **13.8s（0.276 s/候选）/ 1742 MiB**；走应用真实路径（`top_k=10`、候选按 2000 字符截断）实测 **5.67s vs jina ~19.7s**。**代价是中文**：定标集（n=10）HR@1 0.800 → 0.700（z001 LoRA / z007 GAA 两条的 grade-2 目标被压到第 2，第 1 换成未标注的相邻综述；英文组 n=50 持平）—— 已记录、可见、可回退，逐条证据在 `docs/progress/project.md` §22.u。**批量不是越大越好**：int8 档按批 4/8/16 实测 = 3.2 / 4.0 / 4.8 秒每调用、匿名峰值 2351 / 2555 / 3199 MiB（批内按最长补齐，大批等于给短文档多算），所以限批是 4。换模型不需要改代码：清单外的 ONNX 交叉编码器只用 `RERANK_MODEL` + `RERANK_MODEL_FILE` 两个变量（后者指出仓库内文件路径；多数导出在 `onnx/` 子目录，量化导出常在仓库根）。**内存/CPU 宽裕且中文优先的机器**可换回 `jinaai/jina-reranker-v2-base-multilingual`（注释里有一行切换说明，1.1GB 旧档仍在本机缓存）。
 - **精排超时（`RERANK_TIMEOUT`）**：应用侧候选数 = `top_k × RERANK_CANDIDATES`（默认 5），精排后保留 `top_k × 2`。超时会让精排**静默降级**（响应里 `rerank.model=null`、`rerank_score=null`，日志 `rerank request failed ... {"error":"timed out"}`，结果仍是"能搜到但没重排"），所以超时必须大于最坏等待。现役 int8 档 0.064 s/候选（隔离测量）⇒ `top_k=10` 约 3.2s，默认 10 秒已经够用；但队列是单线程（`INFERENCE_WORKERS=1`，见 `docs/architecture/04-embedding.md` §4b），批量导入排在前面时等待时间由队列决定、不由模型速度决定，所以本机仍保留 `.env` 的 `RERANK_TIMEOUT=60`。换回 jina（0.276 s/候选，`top_k=10` ≈14s）时它更是必需 —— 默认 10 会让精排**静默降级**
@@ -515,8 +522,9 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | `scripts/acceptance.py` | 端到端验收：跑 plan §38 的 8 条 MVP 标准（真实导入/检索/鉴权） |
 | `scripts/bulk_ingest.py` | 批量导入语料（`evals/arxiv_ids.txt`，逐条串行 + 轮询作业；`--resume` 跳过已入库，`--dry-run` 只清单） |
 | `scripts/bulk_ingest_dir.py` | 导入**一个文件夹**：默认走 `/ingest/dir`（同机零传输），`--via-http` 改走 `/ingest/files`（每请求 1 个文件 + 429 退避）；`--glob/--limit/--no-recursive` 筛文件，`--resume` 读上次报告跳过已完成，`--dry-run` 只清单 |
-| `scripts/eval.py` | 检索评测：对运行中的服务跑 `evals/queries.jsonl` + `labels.jsonl`，出 Hit Rate / Recall / MRR / NDCG 报告（JSON + Markdown） |
-| `scripts/eval.py` | 检索评测：对**运行中**的服务跑 Hit Rate@K / Recall@K / MRR / NDCG@K，按 mode × rerank 分组，产出 JSON + Markdown 报告（`--out` / `--markdown`） |
+| `scripts/eval.py` | 检索评测：对**运行中**的服务跑 `evals/queries.jsonl` + `labels.jsonl`，出 Hit Rate@K / Recall@K / MRR / NDCG@K，按 mode × rerank × **backend** 分组（`--backend python,native`，或 `default` = 不发该字段、测部署默认），产出 JSON + Markdown 报告（`--out` / `--markdown`） |
+| `scripts/compare_backends.py` | 把 eval 报告里的两条后端路径**按查询配对**做 bootstrap 95% CI 对撞（Δ = 候选 − 基线，基线固定 `python`），并给同深度指标与 p50/p95；退出码即结论（见 `docs/architecture/10-eval-ops.md` §10） |
+| `scripts/ensure_search_pipelines.py` | 幂等写入/核对原生后端要用的 search pipeline（`paperbox-rrf60` / `paperbox-norm-minmax`，体定义在 `app/search/native.py`）；`--check` 只比对不上写，被 `scripts/healthcheck.py` 调用 |
 
 验收（对着真实服务跑，约 1 分钟）：
 

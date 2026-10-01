@@ -155,21 +155,21 @@ POST /api/search                                    app/api/search.py:50（路�
 由 search pipeline `paperbox-rrf60` 在协调节点做 RRF（`rank_constant=60`，与 `ranking.rrf_fuse` 同值），
 再用 `collapse(paper_id)` 直接返回**论文**（每篇附带 `inner_hits` 里的兄弟 chunk 当 evidence）。
 v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两条路径的出口都是 `list[ChunkHit]`，
-(`app/search/native.py:268` ← `app/search/hybrid.py:721`)
+(`app/search/native.py:269` ← `app/search/hybrid.py:721`)
 
-**开关**：`SEARCH_BACKEND`（`app/core/config.py:131`，默认 `python`）是部署默认；请求体 `backend` 可**逐次覆盖**
+**开关**：`SEARCH_BACKEND`（`app/core/config.py:120`，**默认 `native`，2026-10-01 定档**）是部署默认；请求体 `backend` 可**逐次覆盖**
 （`app/schemas/search.py:159`），响应回显实际跑的那条（`app/schemas/search.py:327`、`app/api/search.py:158`）。
 只影响 `mode=hybrid`：keyword/semantic 是单腿，永远走应用侧（`app/search/hybrid.py:758`）。
 
 **关键事实（真机实测，改这块前先读）**：
 
-- **`pagination_depth` 必须写在 `hybrid` 子句里**（`app/search/native.py:135`）：作为顶层 body 键或 URL 参数都是 400
+- **`pagination_depth` 必须写在 `hybrid` 子句里**（`app/search/native.py:136`）：作为顶层 body 键或 URL 参数都是 400
   （OpenSearch 2.19 引入，本机 3.6 实测）。它限制**每条子查询**向融合贡献多少文档，是 v2 `CANDIDATE_MULTIPLIER`
-  的对应物（`app/search/native.py:174` 默认取 `size × 5`）。取小了会**返回不足 `size` 篇**：实测 `size=10` 时
+  的对应物（`app/search/native.py:175` 默认取 `size × 5`）。取小了会**返回不足 `size` 篇**：实测 `size=10` 时
   depth 25 → 7 篇、depth 50 → 10 篇（融合窗里的论文数不够折叠）。
 - **`inner_hits` 的分数是原始子查询分（BM25/kNN 单位），不是融合分**：实测同一个 chunk 作兄弟时报 `13.44`、
   作折叠赢家时报 `0.0328`（=2/61）。`parse_native_response` 因此让兄弟**继承赢家的融合分**
-  （`app/search/native.py:221`）——否则 `aggregate_papers` 会挑出一个以 BM25 为单位的「论文分」，
+  （`app/search/native.py:222`）——否则 `aggregate_papers` 会挑出一个以 BM25 为单位的「论文分」，
   evidence 分也会与排序列表量纲不一致。
 - **`hits.total` 是折叠前的文档数**（实测 454/458，且随 `pagination_depth` 变），**不是论文数**：
   `total` 仍由 `cardinality(paper_id)` 给出（§5 第 14 条），native 路径不改这条口径。
@@ -193,10 +193,18 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
   并同步分数（`_regroup_by_paper`，`app/search/hybrid.py:877`），与不精排时「兄弟继承融合分」同一条规矩。
 - **`keyword_score` / `semantic_score` 在 native 下恒为 `null`**（T-E2「保简化」决定）：原生只给一个融合 `_score`；
   `retrieval_score` / `rerank_score` / `rerank` 块 / `total` / `candidates` / evidence 规则**全部不变**。
-- **管道是部署态对象**：`paperbox-rrf60` / `paperbox-norm-minmax` 的体在 `app/search/native.py:89` 定义，
+- **管道是部署态对象**：`paperbox-rrf60` / `paperbox-norm-minmax` 的体在 `app/search/native.py:90` 定义，
   `scripts/ensure_search_pipelines.py` 负责写入/校验（`--check` 给 `scripts/healthcheck.py` 用），
   `scripts/srw_setup.py` 复用同一份定义（**别在脚本里再抄一份 body**）。被实验引用过的管道**删不掉**
   （集群回 500 并点名实验 id），所以只做幂等 upsert，不做删建。
+
+**定档依据（2026-10-01，`SEARCH_BACKEND` 默认改为 `native`）**：`hybrid|off` 组两条路径**逐位相同**
+（同深度 `ndcg@K*`/`recall@K*`/`hit_rate@1` 的 Δ 恰好 `+0.0000`、CI 宽度 0）；`hybrid|on` 组在修完精排池后
+`ndcg@1`/`ndcg@3`/`ndcg@5`/`mrr`/`hit_rate@1`/同深度 `ndcg@K*` **全部 CI 跨 0（无法区分）**，
+而 `ndcg@10` **+0.0231（CI [+0.0042, +0.0431]）**、`recall@10` +0.0944、`recall@5` +0.0444 均为 native 胜出，
+`p50` 6640 → 5458 ms（**−17.8%**）。修前那批显著劣势（`ndcg@1 −0.10`、同深度 `ndcg@K* −0.0745`）已在
+§4b 的「篇内过取」修复中消失。`python` 路径因此**保留**作 A/B 基线与降级路径。数字与修前/修后对照见
+`docs/progress/search-native.md` §8.9–§8.11，判据与跑法见 `AGENTS.md` §3.15。
 
 ## 5. 不变量与踩过的坑
 
@@ -230,7 +238,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 | `RERANK_CANDIDATES` | `5` | 一阶段候选窗倍数 `top_k × N` | `config.py:92`；`hybrid.py:846` |
 | `RRF_KEYWORD_WEIGHT` | `1.0` | keyword 腿在 RRF 中的权重（0 即废掉该腿） | `config.py:97`；`hybrid.py:745` |
 | `RRF_SEMANTIC_WEIGHT` | `1.0` | semantic 腿权重 | `config.py:99`；`hybrid.py:745` |
-| `SEARCH_BACKEND` | `python` | hybrid 融合后端：`python`（应用侧 RRF）/ `native`（管道 RRF + `collapse`）；请求体 `backend` 可逐次覆盖，只影响 `mode=hybrid` | `config.py:118`；`hybrid.py:694` |
+| `SEARCH_BACKEND` | `native` | hybrid 融合后端：`native`（管道 RRF + `collapse`，**2026-10-01 定档默认**）/ `python`（应用侧 RRF，A/B 基线兼降级）；请求体 `backend` 可逐次覆盖，只影响 `mode=hybrid` | `config.py:120`；`hybrid.py:694` |
 | `SEARCH_LOG_ENABLED` | `true` | 关掉即不写 `search_queries` | `config.py:129`；`search_log_service.py:121` |
 | `SEARCH_LOG_RESULTS_LIMIT` | `20` | 每行日志最多记多少条论文 | `config.py:130`；`search_log_service.py:138` |
 | `QUERY_REWRITE_ENABLED` | `false` | 检索前改写开关（细节见 06） | `config.py:104`；`api/search.py:173` |
@@ -244,8 +252,8 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 | `SEMANTIC_K_MULTIPLIER` | `3` | 纯 semantic 模式的 kNN 过取倍数 | `hybrid.py:73` |
 | `DEFAULT_RRF_K` | `60` | RRF 常数（`1/(k+rank+1)`） | `ranking.py:19`、`:28` |
 | `MAX_EVIDENCE` / `EVIDENCE_TEXT_LIMIT` / `MIN_EVIDENCE_CHARS` | `3` / `500` / `200` | evidence 条数、文本长度、噪声阈值 | `search_service.py:31/32/35` |
-| `DEFAULT_INNER_HITS` / `INNER_HITS_NAME` | `3` / `evidence` | native 每篇论文附带的兄弟 chunk 数（**必须等于** `MAX_EVIDENCE`，`tests/test_native_hybrid.py` 钉住）与其 `inner_hits` 名 | `native.py:123` / `:117` |
-| `PIPELINE_RRF` / `PIPELINE_NORM` | `paperbox-rrf60` / `paperbox-norm-minmax` | 管道名（部署态对象，见 §4b） | `native.py:81` |
+| `DEFAULT_INNER_HITS` / `INNER_HITS_NAME` | `3` / `evidence` | native 每篇论文附带的兄弟 chunk 数（**必须等于** `MAX_EVIDENCE`，`tests/test_native_hybrid.py` 钉住）与其 `inner_hits` 名 | `native.py:124` / `:118` |
+| `PIPELINE_RRF` / `PIPELINE_NORM` | `paperbox-rrf60` / `paperbox-norm-minmax` | 管道名（部署态对象，见 §4b） | `native.py:82` |
 | `HIGH_THRESHOLD` / `MEDIUM_THRESHOLD` | `0.9` / `0.6` | `relevance` 分档 | `search_service.py:44-45` |
 | `MIN_TOP_K` / `MAX_TOP_K` | `1` / `50` | `top_k` 边界 | `schemas/search.py:43-44` |
 | `CANDIDATE_FACTOR` | `5` | 日志 `candidates` 的系数 | `api/search.py:47` |
@@ -284,9 +292,11 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 8. **过滤不暴露 `section` / `paper_id` / `chunk_id`**：这些在映射里是 keyword 字段（`mappings.py:61`），但 `build_filters` 未生成对应子句（`hybrid.py:232-257`），`KEYWORD_FIELDS` 是映射层清单、不是 API 能力清单。
 9. ~~**`tag` 过滤实际返回空**~~ **已随元数据层落地（2026-09-21 起）**：`papers_tags` 由元数据层写入，`_index_rows` 把四个 kind 快照进索引（`snapshot.py:39`），过滤现在能命中真实数据；但**改元数据后要刷新快照**（`scripts/refresh_index_metadata.py`）才可见。
 10. **查询侧 e5 前缀（`query:`）未做**：`embed_text(query)` 直接送原文（`hybrid.py:633`），`docs/progress/project.md:§11` 把前缀列为未实施的备选方向。
-11. **native 后端未定档（M5 A/B 待裁）**：`SEARCH_BACKEND` 默认仍是 `python`，两条路径都在，靠开关切换。
-若采纳 native，**可删的胶水代码**是 `app/search/ranking.py`（93 行）、`app/search/hybrid.py` 的融合分支（37 行）、
-`aggregate_papers` + `_select_evidence` + `_best_score`（111 行），外加 `tests/test_rrf.py`（70 行）；
-**代价**是新增 `app/search/native.py`（374 行）——**净收益是「融合与折叠不再由我们维护」，不是行数变少**。
-实测质量/延迟/CI 见 `docs/progress/search-native.md` §9。
+11. ~~**native 后端未定档**~~ **已定档（2026-10-01）**：`SEARCH_BACKEND` 默认 `native`；`python` 路径保留为 A/B 基线与降级路径（`backend=python` 逐次覆盖即可切回）。定档依据见 §4b 与 `docs/progress/search-native.md` §8.9–§8.11。
+**已定档，但没删这两百多行胶水**：native 成为默认后，`python` 路径**故意保留**（A/B 基线 + 降级路径，
+`backend=python` 逐次覆盖即可切回），所以 `app/search/ranking.py`（`rrf_fuse`，93 行）、
+`hybrid.py` 的融合分支（37 行）、`aggregate_papers` + `_select_evidence` + `_best_score`（111 行）
+与 `tests/test_rrf.py`（70 行）**仍在服役**——它们同时是 native 路径的公共服务（聚合、evidence、归一）。
+**收益记在「融合与折叠不再由我们维护」这条上，不是行数变少**；代价是新增 `app/search/native.py`（380 行）。
+实测质量/延迟/CI 见 `docs/progress/search-native.md` §8.9–§8.11。
 12. **未知项（未确认）**：本会话未连真机，`knn` 参数在 Lucene engine 下的实际候选行为（是否隐式使用 `num_candidates`）、以及真机索引文档数与别名指向，均未实测；正文只断言代码里写了什么。
