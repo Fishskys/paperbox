@@ -18,7 +18,7 @@
 
 **不做**
 
-- 评测**不跑在应用进程里**：`scripts/eval.py` 是独立客户端，只发 `POST /api/search`（`scripts/eval.py:2-23`）。
+- 评测**不跑在应用进程里**：`scripts/eval.py` 是独立客户端，只发 `POST /api/search`（`scripts/eval.py:2-31`）。
 - 单元测试**不碰真机**：pytest 全程不连 PostgreSQL/OpenSearch/MinIO，真机验证只放 `scripts/`（`AGENTS.md` §6）。
 - 根 `docker-compose.yml` 只打包**应用**，四个依赖在 `infra/docker-compose.yml`（两份 compose 明确分离，`docker-compose.yml:1`、`infra/docker-compose.yml:2`）。
 - 不自动删数据：`create_index.py` 只切别名、旧索引保留供回滚（`scripts/create_index.py:23-28`）；`purge_deleted.py` 默认**只**清索引文档与对象、保留 PostgreSQL 行，只有显式 `--hard` 才删 PG 行（`scripts/purge_deleted.py:81`）。
@@ -84,20 +84,20 @@
 | 文件 | 结构 | 实测规模（本工作树） |
 |---|---|---|
 | `queries-spec.json` | 顶层 `{note, queries[]}`；每条含 `id`/`query`/`language`/`note`/`labels[{arxiv\|title_like, grade}]` | 50 条查询 |
-| `queries.jsonl` | `{"id","query","language","note"}`（`scripts/eval.py:12`） | 50 行（`en` 40 / `zh` 10） |
-| `labels.jsonl` | `{"query_id","paper_id","grade"}`（`scripts/eval.py:13`） | 77 行（`grade=2` 64 条 / `grade=1` 13 条），覆盖全部 50 个查询 |
+| `queries.jsonl` | `{"id","query","language","note"}`（`scripts/eval.py:20`） | 50 行（`en` 40 / `zh` 10） |
+| `labels.jsonl` | `{"query_id","paper_id","grade"}`（`scripts/eval.py:21`） | 77 行（`grade=2` 64 条 / `grade=1` 13 条），覆盖全部 50 个查询 |
 | `queries-zh-en.jsonl` | 与 `queries.jsonl` 同形，10 条中文查询的英文改写 | 10 行 |
 | `arxiv_ids.txt` | `id<TAB>主题<TAB>标题`，`#` 注释（`scripts/bulk_ingest.py:72-98`） | 62 行（含 2 行注释） |
 | `arxiv_ids_retry.txt` | 同上，首批失败后的重导清单 | 9 行 |
 
-**评测报告 JSON**（`scripts/eval.py:464-483`）
+**评测报告 JSON**（`scripts/eval.py:541-562`）
 
 | 键 | 内容 |
 |---|---|
 | `generated_at` / `base_url` / `top_k` | 运行元信息 |
 | `total` / `success` / `failed` | 总行数 = 查询 × mode × rerank；成功/失败数 |
 | `params` | `k`、`modes`、`rerank`、`rerank_variants`、`queries`、`labels`、`metric_names`、`labelled_queries` |
-| `summary` | `{"mode\|on": {metric: {"mean","n"}}}`（`scripts/eval.py:234`） |
+| `summary` | `{"mode\|on": {metric: {"mean","n"}}}`（`scripts/eval.py:275`） |
 | `per_query` | 每行 `query_id/query/mode/rerank/group/ranked_ids/ranked_papers/metrics/took_ms/error/labels/relevance`（`scripts/eval.py:420-433`） |
 
 **批量导入报告**
@@ -113,16 +113,16 @@
 
 ```
 uv run python scripts/eval.py [--modes ...] [--rerank both] [--k 1,3,5,10]
- └─ main (eval.py:374)
-     ├─ load_env → base_url = --base-url > PAPER_API_BASE > PAPER_API_URL > http://127.0.0.1:8077 (:378-383)
-     ├─ load_queries / load_labels (:393-394)
-     ├─ httpx.Client(base_url, Bearer PAPER_API_KEY) (:405-413)
+ └─ main (eval.py:424)
+     ├─ load_env → base_url = --base-url > PAPER_API_BASE > PAPER_API_URL > http://127.0.0.1:8077 (:428-433)
+     ├─ load_queries / load_labels (:443-444)
+     ├─ httpx.Client(base_url, Bearer PAPER_API_KEY) (:455-470)
      └─ 每个 query × mode × rerank：
-         search_once → POST /api/search (:192-213)
-         → ranked_paper_ids（去重）(:171-189)
-         → score_query → hit_rate_at_k / recall_at_k / mrr / ndcg_at_k (:216-225)
-     ├─ group_summary (:231-257)
-     └─ 写 report-*.json (:486) + report-*.md (:487) → 退出码 0/1 (:495)
+         search_once → POST /api/search (:226-254)
+         → ranked_paper_ids（去重）(:205-223)
+         → score_query → hit_rate_at_k / recall_at_k / mrr / ndcg_at_k (:257-266)
+     ├─ group_summary (:272-298)
+     └─ 写 report-*.json (:565) + report-*.md (:566) → 退出码 0/1 (:574)
 ```
 
 **定标集重建**
@@ -167,7 +167,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | NDCG 的 0/0 保护 | `ideal <= 0` 时返回 `0.0` | `metrics.py:142-143` |
 | `aggregate` 跳过脏值 | `bool` 与非数值不计入，`n` 反映实际观测数 | `metrics.py:163-166` |
 | 单个查询失败不中断整轮 | 记 `error` 字符串、指标置全 0，末尾打印 `success/failed` | `scripts/eval.py:442-445, 492` |
-| 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:164-165, 396-398` |
+| 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:198-199, 396-398` |
 | **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:62` |
 | `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md` §3.1 |
 | 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:139-146` |
@@ -185,7 +185,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `PAPER_API_BASE` / `PAPER_API_URL` / `PAPER_API_KEY` | `http://127.0.0.1:8077` / 空 | 评测与批量脚本的基址与 Bearer | `scripts/eval.py:52, 378-384` |
+| `PAPER_API_BASE` / `PAPER_API_URL` / `PAPER_API_KEY` | `http://127.0.0.1:8077` / 空 | 评测与批量脚本的基址与 Bearer | `scripts/eval.py:61, 378-384` |
 | `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址与端口（容器 CMD 也读） | `.env.example:36-37`、`Dockerfile:33` |
 | `POSTGRES_DSN` | `postgresql+psycopg://…@127.0.0.1:5432/paperbox` | 权威 DSN，覆盖 `POSTGRES_*` 分项 | `.env.example:12-13` |
 | `OPENSEARCH_URL` / `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `http://127.0.0.1:9200` / `paper_chunks_v3` / `paper_chunks_current` | 索引与别名（读写走别名） | `.env.example:16-18` |
@@ -220,7 +220,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 
 | 脚本 | 作用 | 主要参数 | 幂等 | 碰真机数据 | 退出码 |
 |---|---|---|---|---|---|
-| `healthcheck.py` | 四依赖 + API 健康检查与文档数 | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py:103`） |
+| `healthcheck.py` | 四依赖 + API 健康检查与文档数 | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py:123`） |
 | `acceptance.py` | plan §38 端到端验收 9 项 | `--api`、`--url` | 否（会真导入一篇 arXiv PDF，判重则复用） | **写**：导入论文 | `0` 全 PASS / `1` 有 FAIL（`acceptance.py:61, 118`） |
 | `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing`、`--degraded`（+`--degraded-stage`/`--degraded-code`）、`--degradations`、`--parser-backend`、`--dry-run` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引（`--dry-run`/`--degradations` 只读不写） | `0` 无失败 / `1` 有失败（`reindex.py:222, 228`） |
 | `purge_deleted.py` | 清已删论文的索引文档与 MinIO 对象 | `--dry-run` | 是 | **写**：删索引文档 + 对象（PG 行保留） | 无残留 `0`；有失败 `1`；`--dry-run` 恒 `0`（`purge_deleted.py:126-128, 96, 101`） |
@@ -249,9 +249,9 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 
 ## 8. 未做 / 已知缺口
 
-- **报告缺语言维度**：`format_markdown` / `group_summary` 只按 `mode|rerank` 分组（`scripts/eval.py:231-295`），`docs/progress/project.md` §10/§11 里按 EN/ZH 拆的数字是在报告之外另行聚合的，脚本本身不产出。
-- **无指标阈值门禁**：评测退出码只反映“有没有 HTTP 失败”，不反映指标是否达标（`scripts/eval.py:495`），回归需要人读报告。
-- **评测串行执行**：查询 × mode × rerank 逐次调用（`scripts/eval.py:414-419`），基线 300 次调用、开启精排时单次可达 ≈20–31s（`docs/progress/project.md:473, 488`）。
+- **报告缺语言维度**：`format_markdown` / `group_summary` 只按 `mode|rerank` 分组（`scripts/eval.py:272-336`），`docs/progress/project.md` §10/§11 里按 EN/ZH 拆的数字是在报告之外另行聚合的，脚本本身不产出。
+- **无指标阈值门禁**：评测退出码只反映“有没有 HTTP 失败”，不反映指标是否达标（`scripts/eval.py:574`），回归需要人读报告。
+- **评测串行执行**：查询 × mode × rerank 逐次调用（`scripts/eval.py:471-476`），基线 300 次调用、开启精排时单次可达 ≈20–31s（`docs/progress/project.md:473, 488`）。
 - **`report-placeholder.*` 仅留档**：那是 6 篇语料时的占位跑，不可与基线直接比较（`evals/README.md:18`）。
 - **日志无轮转**：`logs/app/paperbox-api.log` 已 61 万字节级，仓库没有轮转/清理策略；`logs/` 整体 gitignore（`.gitignore:24`）。
 - **数据目录口径不一致（未确认）**：`infra/.env` 实测 `POSTGRES_DATA_DIR=/var/lib/paperbox-data/pg`，而 `AGENTS.md` §3.3 写“四个都在 `<仓库同级>/paperbox-data\{pg,…}`”（开发者本机绝对路径）；`infra/.env` 里其余三个确实是该目录。差异原因未核实（未跑 `docker compose config` 验证解析结果）。

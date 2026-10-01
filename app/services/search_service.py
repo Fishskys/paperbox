@@ -328,6 +328,7 @@ def search_papers(
     *,
     rerank: bool = False,
     telemetry: dict[str, Any] | None = None,
+    backend: str | None = None,
     client: Any = None,
     index: str | None = None,
     count_total: bool = True,
@@ -362,6 +363,7 @@ def search_papers(
         index=index or ALIAS,
         rerank=rerank,
         telemetry=telemetry,
+        backend=backend,
         **search_kwargs,
     )
     results = normalize_scores(aggregate_papers(hits, top_k=top_k))

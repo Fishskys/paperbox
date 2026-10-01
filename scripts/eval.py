@@ -8,6 +8,14 @@ writes a JSON report plus a Markdown report:
     uv run python scripts/eval.py
     uv run python scripts/eval.py --modes hybrid --rerank both --k 1,3,5,10
     uv run python scripts/eval.py --out evals/report-baseline.json
+    uv run python scripts/eval.py --modes hybrid --rerank both --backend python,native
+
+``--backend`` (plan §7 M5) selects the hybrid fusion backend **per request**: the
+default is to send nothing and let the server use ``SEARCH_BACKEND``, while
+``python,native`` asks for both paths in one run -- paired per query, so the A/B
+in ``scripts/compare_backends.py`` compares like with like. With more than one
+backend the group name grows a third field (``hybrid|on|native``); with one it
+stays ``hybrid|on`` so the existing reports keep comparing.
 
 The query set is ``evals/queries.jsonl`` (``{"id","query","language","note"}``)
 and the labels are ``evals/labels.jsonl`` (``{"query_id","paper_id","grade"}``,
@@ -45,6 +53,7 @@ from app.eval.metrics import (  # noqa: E402  (path bootstrap above)
     ndcg_at_k,
     recall_at_k,
 )
+from app.search.native import BACKENDS as native_backend_names  # noqa: E402
 
 ENV = ROOT / ".env"
 DEFAULT_QUERIES = ROOT / "evals" / "queries.jsonl"
@@ -54,6 +63,9 @@ DEFAULT_K = "1,3,5,10"
 DEFAULT_TOP_K = 10
 MODES = ("keyword", "semantic", "hybrid")
 RERANK_MODES = ("both", "on", "off")
+#: Retrieval backends accepted by ``--backend`` (names come from the app so a
+#: rename cannot leave this script behind).
+BACKENDS = tuple(native_backend_names)
 SEARCH_TIMEOUT = 60.0
 PAPER_IDS_PER_ROW = 5
 
@@ -152,6 +164,28 @@ def parse_modes(raw: str) -> list[str]:
     return modes
 
 
+def parse_backends(raw: str) -> list[str | None]:
+    """``python,native`` -> ``["python", "native"]``; ``default`` -> ``[None]``.
+
+    ``None`` means "let the server decide" -- the request then carries no
+    ``backend`` field, so ``SEARCH_BACKEND`` applies and reports taken before M5
+    stay reproducible.
+    """
+    items = [chunk.strip().lower() for chunk in str(raw).split(",") if chunk.strip()]
+    if not items:
+        return [None]
+    if "default" in items:
+        if len(items) > 1:
+            raise argparse.ArgumentTypeError("default cannot be combined with a backend")
+        return [None]
+    unknown = [item for item in items if item not in BACKENDS]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown backend {unknown[0]!r} (choose from {', '.join(BACKENDS)} or default)"
+        )
+    return items
+
+
 def rerank_variants(raw: str) -> list[bool]:
     """``both`` -> ``[False, True]`` so the report shows the delta."""
     if raw == "on":
@@ -196,14 +230,21 @@ def search_once(
     mode: str,
     rerank: bool,
     top_k: int,
+    backend: str | None = None,
 ) -> tuple[list[str], list[dict[str, Any]], int, dict[str, Any]]:
-    """One ``POST /api/search`` call; returns ids, raw results, took_ms, payload."""
+    """One ``POST /api/search`` call; returns ids, raw results, took_ms, payload.
+
+    ``backend=None`` sends no backend at all, so the server's ``SEARCH_BACKEND``
+    decides -- that keeps every pre-M5 report reproducible byte for byte.
+    """
     body: dict[str, Any] = {
         "query": query,
         "mode": mode,
         "top_k": top_k,
         "rerank": rerank,
     }
+    if backend:
+        body["backend"] = backend
     started = time.perf_counter()
     response = client.post("/api/search", json=body)
     took_ms = int((time.perf_counter() - started) * 1000)
@@ -362,6 +403,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--k", default=DEFAULT_K, type=parse_k, help="cut-offs, e.g. 1,3,5,10")
     parser.add_argument("--modes", default=",".join(MODES), type=parse_modes, help="keyword,semantic,hybrid")
     parser.add_argument("--rerank", default="both", choices=RERANK_MODES, help="both|on|off")
+    parser.add_argument(
+        "--backend",
+        default="default",
+        type=parse_backends,
+        help=(
+            "hybrid fusion backend per request: default (send nothing), or a "
+            f"comma list from {', '.join(BACKENDS)}"
+        ),
+    )
     parser.add_argument("--top-k", default=DEFAULT_TOP_K, type=int, help="top_k sent to POST /api/search")
     parser.add_argument("--out", default=None, help="JSON report path (default evals/report-<utc>.json)")
     parser.add_argument("--markdown", default=None, help="Markdown report path (default: same stem + .md)")
@@ -408,7 +458,14 @@ def main(argv: list[str] | None = None) -> int:
 
     per_query: list[dict[str, Any]] = []
     variants = rerank_variants(args.rerank)
-    print(f"eval: {len(queries)} queries x {len(args.modes)} modes x {len(variants)} rerank -> {base_url}")
+    backends: list[str | None] = args.backend
+    # One backend keeps the historical group name (``hybrid|on``) so reports
+    # taken before M5 still line up; an A/B run gets a third field.
+    multi_backend = len(backends) > 1
+    print(
+        f"eval: {len(queries)} queries x {len(args.modes)} modes x {len(variants)} rerank"
+        f" x {len(backends)} backend -> {base_url}"
+    )
 
     with httpx.Client(base_url=base_url, headers=headers, timeout=args.timeout) as client:
         for query_row in queries:
@@ -417,47 +474,67 @@ def main(argv: list[str] | None = None) -> int:
             relevance = labels.get(query_id, {})
             for mode in args.modes:
                 for rerank in variants:
-                    row: dict[str, Any] = {
-                        "query_id": query_id,
-                        "query": query_text,
-                        "mode": mode,
-                        "rerank": rerank,
-                        "group": f"{mode}|{'on' if rerank else 'off'}",
-                        "ranked_ids": [],
-                        "ranked_papers": [],
-                        "metrics": {},
-                        "took_ms": None,
-                        "error": None,
-                        "labels": relevance,
-                        "relevance": relevance,
-                    }
-                    try:
-                        ids, results, took_ms, _payload = search_once(
-                            client,
-                            query_text,
-                            mode=mode,
-                            rerank=rerank,
-                            top_k=args.top_k,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - one query must not kill the run
-                        row["error"] = f"{type(exc).__name__}: {exc}"
-                        row["metrics"] = score_query([], relevance, ks)
-                        print(f"  FAIL {query_id} {mode} rerank={rerank}: {row['error']}")
-                    else:
-                        row["ranked_ids"] = ids
-                        row["ranked_papers"] = [
-                            {
-                                "paper_id": str(item.get("paper_id") or ""),
-                                "title": item.get("title"),
-                                "score": item.get("score"),
-                                "retrieval_score": item.get("retrieval_score"),
-                                "rerank_score": item.get("rerank_score"),
-                            }
-                            for item in results
-                        ]
-                        row["took_ms"] = took_ms
-                        row["metrics"] = score_query(ids, relevance, ks)
-                    per_query.append(row)
+                    for backend in backends:
+                        group = f"{mode}|{'on' if rerank else 'off'}"
+                        if multi_backend:
+                            group = f"{group}|{backend or 'default'}"
+                        row: dict[str, Any] = {
+                            "query_id": query_id,
+                            "query": query_text,
+                            "mode": mode,
+                            "rerank": rerank,
+                            "backend": backend,
+                            "group": group,
+                            "ranked_ids": [],
+                            "ranked_papers": [],
+                            "metrics": {},
+                            "took_ms": None,
+                            "returned": None,
+                            "total": None,
+                            "candidates": None,
+                            "backend_echo": None,
+                            "error": None,
+                            "labels": relevance,
+                            "relevance": relevance,
+                        }
+                        try:
+                            ids, results, took_ms, payload = search_once(
+                                client,
+                                query_text,
+                                mode=mode,
+                                rerank=rerank,
+                                top_k=args.top_k,
+                                backend=backend,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - one query must not kill the run
+                            row["error"] = f"{type(exc).__name__}: {exc}"
+                            row["metrics"] = score_query([], relevance, ks)
+                            print(
+                                f"  FAIL {query_id} {mode} rerank={rerank} "
+                                f"backend={backend or 'default'}: {row['error']}"
+                            )
+                        else:
+                            row["ranked_ids"] = ids
+                            row["ranked_papers"] = [
+                                {
+                                    "paper_id": str(item.get("paper_id") or ""),
+                                    "title": item.get("title"),
+                                    "score": item.get("score"),
+                                    "retrieval_score": item.get("retrieval_score"),
+                                    "rerank_score": item.get("rerank_score"),
+                                }
+                                for item in results
+                            ]
+                            row["took_ms"] = took_ms
+                            row["metrics"] = score_query(ids, relevance, ks)
+                            # Kept for the A/B diagnostics: how many papers each
+                            # path returned (the two backends disagree wildly),
+                            # and what the server says it actually ran.
+                            row["returned"] = len(ids)
+                            row["total"] = payload.get("total")
+                            row["candidates"] = payload.get("candidates")
+                            row["backend_echo"] = payload.get("backend")
+                        per_query.append(row)
 
     successes = [row for row in per_query if not row["error"]]
     failures = [row for row in per_query if row["error"]]
@@ -473,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
             "modes": args.modes,
             "rerank": args.rerank,
             "rerank_variants": ["on" if v else "off" for v in variants],
+            # ``None`` = the request carried no backend, so SEARCH_BACKEND applied.
+            "backends": args.backend,
             "queries": str(queries_path),
             "labels": str(labels_path),
             "metric_names": metric_names,

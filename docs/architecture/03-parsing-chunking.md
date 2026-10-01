@@ -370,38 +370,38 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 写进 chunk 与索引文档 | `config.py:74`；使用 `tasks.py:1090`、`:1089` |
-| `EMBEDDING_DIMENSION` | 1024 | 向量维度校验 + 落库 | `config.py:75`；`embedding_service.py:67-74` |
-| `EMBEDDING_BATCH_SIZE` | 32 | 单请求文本数 | `config.py:76`；`embedding_service.py:98-99` |
-| `EMBEDDING_URL` | `http://localhost:8090` | 服务地址（`/embed`） | `config.py:73`；`embedding_service.py:21` |
-| `EMBEDDING_TIMEOUT` / `EMBEDDING_MAX_RETRIES` | **300.0** / 2 | 超时与重试（T7.3 由 120 上调，须大于服务端排队时间） | `config.py:81-82` |
-| `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `paper_chunks_v3` / `paper_chunks_current` | chunk 文档落点（实际索引见 `AGENTS.md` §3.5） | `config.py:62-63` |
-| `INGEST_MAX_FILE_MB` | 100 | 上游大小闸门（超限在解析之前就失败） | `config.py:133`；`ingestion_service.py:490` |
-| `INGEST_CONCURRENCY` | 2 | 同时在跑的流水线条数 | `config.py:139` |
-| `CHUNK_MODE` | `length` | 切块边界策略（`length` / `semantic`，T7.2） | `config.py:208`；`chunking.py:48-50`；`tasks.py:518-553` |
-| `CHUNK_SEMANTIC_THRESHOLD` | 0.80 | 语义模式：判定低谷的余弦阈值 | `config.py:213`；`chunking.py:58` |
-| `CHUNK_SEMANTIC_MIN_TOKENS` | 200 | 语义模式：低谷处允许 flush 的最小块长 | `config.py:218`；`chunking.py:65` |
-| `PARSER_BACKEND` | **`docling`** | `docling`（主后端）/ `pypdf`（降级侧）；非法值启动即报错（`config.py:24` 的 `PARSER_BACKENDS`）。2026-09-30 接线时翻默认 | `config.py:190`；`parser_service.py:233` |
-| `PARSER_CONCURRENCY` | 1 | docling 转换的在途上限（模块级 `Semaphore`；**别调大** —— docling 是 CPU-bound 且容器有上限，并发只会一起变慢并撞内存天花板） | `config.py:194`；`parser_service.py:276` |
-| `PARSER_CACHE` | true | 解析产物是否缓存到 MinIO（T7.1）；**部分解析既不读也不写**（§5.28） | `config.py:196`；`parser_service.py:308` |
-| `PARSER_MAX_PAGES` | 0（不限） | >0 时 **docling 分支**只解析前 N 页（`page_range="1-N"` + `pages=1-N` + 账本 `pagination_truncated`）；pypdf 分支不截断 | `config.py:199`；`parser_service.py:196` |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 写进 chunk 与索引文档 | `config.py:80`；使用 `tasks.py:1090`、`:1089` |
+| `EMBEDDING_DIMENSION` | 1024 | 向量维度校验 + 落库 | `config.py:81`；`embedding_service.py:67-74` |
+| `EMBEDDING_BATCH_SIZE` | 32 | 单请求文本数 | `config.py:82`；`embedding_service.py:98-99` |
+| `EMBEDDING_URL` | `http://localhost:8090` | 服务地址（`/embed`） | `config.py:79`；`embedding_service.py:21` |
+| `EMBEDDING_TIMEOUT` / `EMBEDDING_MAX_RETRIES` | **300.0** / 2 | 超时与重试（T7.3 由 120 上调，须大于服务端排队时间） | `config.py:87-88` |
+| `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `paper_chunks_v3` / `paper_chunks_current` | chunk 文档落点（实际索引见 `AGENTS.md` §3.5） | `config.py:68-69` |
+| `INGEST_MAX_FILE_MB` | 100 | 上游大小闸门（超限在解析之前就失败） | `config.py:146`；`ingestion_service.py:490` |
+| `INGEST_CONCURRENCY` | 2 | 同时在跑的流水线条数 | `config.py:152` |
+| `CHUNK_MODE` | `length` | 切块边界策略（`length` / `semantic`，T7.2） | `config.py:221`；`chunking.py:48-50`；`tasks.py:518-553` |
+| `CHUNK_SEMANTIC_THRESHOLD` | 0.80 | 语义模式：判定低谷的余弦阈值 | `config.py:226`；`chunking.py:58` |
+| `CHUNK_SEMANTIC_MIN_TOKENS` | 200 | 语义模式：低谷处允许 flush 的最小块长 | `config.py:231`；`chunking.py:65` |
+| `PARSER_BACKEND` | **`docling`** | `docling`（主后端）/ `pypdf`（降级侧）；非法值启动即报错（`config.py:24` 的 `PARSER_BACKENDS`）。2026-09-30 接线时翻默认 | `config.py:203`；`parser_service.py:233` |
+| `PARSER_CONCURRENCY` | 1 | docling 转换的在途上限（模块级 `Semaphore`；**别调大** —— docling 是 CPU-bound 且容器有上限，并发只会一起变慢并撞内存天花板） | `config.py:207`；`parser_service.py:276` |
+| `PARSER_CACHE` | true | 解析产物是否缓存到 MinIO（T7.1）；**部分解析既不读也不写**（§5.28） | `config.py:209`；`parser_service.py:308` |
+| `PARSER_MAX_PAGES` | 0（不限） | >0 时 **docling 分支**只解析前 N 页（`page_range="1-N"` + `pages=1-N` + 账本 `pagination_truncated`）；pypdf 分支不截断 | `config.py:212`；`parser_service.py:196` |
 
 docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `README.md` §3.6）：
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `DOCLING_URL` | `http://127.0.0.1:8091` | docling-serve 地址（本机部署在 **fnOS NAS**，`.env` 写 `http://192.168.31.53:8091`；缺这个键会回落到死端口 → 100% 降级） | `config.py:228` |
-| `DOCLING_TIMEOUT` | 660.0 | 客户端读超时，**必须大于** `DOCLING_DOCUMENT_TIMEOUT`（否则会把快要跑完的解析扔掉） | `config.py:232` |
-| `DOCLING_DOCUMENT_TIMEOUT` | 600.0 | 服务端 `document_timeout`（默认无期限会把 5 页论文烧 17 分钟；600 s 覆盖实测最差 252 s / T8 最慢 371 s） | `config.py:236` |
-| `DOCLING_MAX_RETRIES` | 1 | 只作用于「去公式」那次：最坏请求数 `1+(1+retries)`（§5.26） | `config.py:241` |
-| `DOCLING_OCR` | false | **OCR 默认关**（语料是原生数字版；服务端默认开，所以显式关掉 —— 实测 OCR 掉一半以上吞吐） | `config.py:244` |
-| `DOCLING_TABLE_MODE` | `accurate` | `accurate` / `fast` | `config.py:246` |
-| `DOCLING_FORMULA_ENRICHMENT` | **false** | 公式 → LaTeX（T3 决策 5）。**默认关**（2026-09-30）：最贵的一项（5 页 5.9s→39.2s、最坏 252s、5.9MB 论文整篇 ~310s vs pypdf ~52s）；关时请求发 `do_formula_enrichment=false` 且不发 preset。属于**缓存身份**（§5.27） | `config.py:256` |
-| `DOCLING_FORMULA_PRESET` | `codeformulav2` | **公式开时必须同时给**：单独给会 404（服务端报 `Preset 'default' not found`）；公式关时不下发。同样属于**缓存身份**（§5.27） | `config.py:262` |
-| `DOCLING_PAGE_BREAK` | `<!-- page-break -->` | 页标记字面量（两侧同一份方言；数量恒为 页数−1） | `config.py:267` |
-| `DOCLING_IMAGE_TAG` | 空 | 组件镜像 tag；也是 `GET /version` 不可达时的 parser 版本回落值 | `config.py:272` |
+| `DOCLING_URL` | `http://127.0.0.1:8091` | docling-serve 地址（本机部署在 **fnOS NAS**，`.env` 写 `http://192.168.31.53:8091`；缺这个键会回落到死端口 → 100% 降级） | `config.py:241` |
+| `DOCLING_TIMEOUT` | 660.0 | 客户端读超时，**必须大于** `DOCLING_DOCUMENT_TIMEOUT`（否则会把快要跑完的解析扔掉） | `config.py:245` |
+| `DOCLING_DOCUMENT_TIMEOUT` | 600.0 | 服务端 `document_timeout`（默认无期限会把 5 页论文烧 17 分钟；600 s 覆盖实测最差 252 s / T8 最慢 371 s） | `config.py:249` |
+| `DOCLING_MAX_RETRIES` | 1 | 只作用于「去公式」那次：最坏请求数 `1+(1+retries)`（§5.26） | `config.py:254` |
+| `DOCLING_OCR` | false | **OCR 默认关**（语料是原生数字版；服务端默认开，所以显式关掉 —— 实测 OCR 掉一半以上吞吐） | `config.py:257` |
+| `DOCLING_TABLE_MODE` | `accurate` | `accurate` / `fast` | `config.py:259` |
+| `DOCLING_FORMULA_ENRICHMENT` | **false** | 公式 → LaTeX（T3 决策 5）。**默认关**（2026-09-30）：最贵的一项（5 页 5.9s→39.2s、最坏 252s、5.9MB 论文整篇 ~310s vs pypdf ~52s）；关时请求发 `do_formula_enrichment=false` 且不发 preset。属于**缓存身份**（§5.27） | `config.py:269` |
+| `DOCLING_FORMULA_PRESET` | `codeformulav2` | **公式开时必须同时给**：单独给会 404（服务端报 `Preset 'default' not found`）；公式关时不下发。同样属于**缓存身份**（§5.27） | `config.py:275` |
+| `DOCLING_PAGE_BREAK` | `<!-- page-break -->` | 页标记字面量（两侧同一份方言；数量恒为 页数−1） | `config.py:280` |
+| `DOCLING_IMAGE_TAG` | 空 | 组件镜像 tag；也是 `GET /version` 不可达时的 parser 版本回落值 | `config.py:285` |
 
-**文档与代码不一致（以代码为准；2026-09-22 已对齐 AGENTS.md 措辞）**：`AGENTS.md` §3.7 原写"模型 `intfloat/multilingual-e5-large`""batch 默认 16""`CHUNK_TARGET_TOKENS≈400`"；代码里 `EMBEDDING_MODEL` 默认 `BAAI/bge-m3`（`config.py:76`）、batch 默认 32（`config.py:74`）、`CHUNK_TARGET_TOKENS` 这个键**不存在**（只有常量 `DEFAULT_TARGET_TOKENS=400`）。差异原因是文档写的是**部署值**（根 `.env`：e5-large / 16），代码写的是**默认值**；现已改成"部署值 X / 代码默认 Y"的写法。512 token 上限在本仓代码中仍无断言或校验，出处只有模型本身 —— 标**未确认**。
+**文档与代码不一致（以代码为准；2026-09-22 已对齐 AGENTS.md 措辞）**：`AGENTS.md` §3.7 原写"模型 `intfloat/multilingual-e5-large`""batch 默认 16""`CHUNK_TARGET_TOKENS≈400`"；代码里 `EMBEDDING_MODEL` 默认 `BAAI/bge-m3`（`config.py:82`）、batch 默认 32（`config.py:80`）、`CHUNK_TARGET_TOKENS` 这个键**不存在**（只有常量 `DEFAULT_TARGET_TOKENS=400`）。差异原因是文档写的是**部署值**（根 `.env`：e5-large / 16），代码写的是**默认值**；现已改成"部署值 X / 代码默认 Y"的写法。512 token 上限在本仓代码中仍无断言或校验，出处只有模型本身 —— 标**未确认**。
 
 ## 7. 测试位置与覆盖
 
@@ -461,7 +461,7 @@ docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `READ
 | 降级侧 **3 列版面**只在最宽的中间空格串处切分，前两列可能同处一块（保证不乱序、不丢内容，但不保证理想顺序） | `layout.py:535-577`；`docs/progress/parser.md` §6.3 |
 | 页眉页脚剔除是**启发式**（≥60% 页重复 + <120 字符），非常规版式可能漏剔或误剔位置固定的正文行 | `layout.py:702-795`；`docs/progress/parser.md` §6.4 |
 | **docling 侧公式降级没有真机样本**（要人为调小 `DOCLING_DOCUMENT_TIMEOUT` 才能造）；扫描版 PDF（`DOCLING_OCR` 默认关）、>15 页大论文、`PARSER_CONCURRENCY>1` 的行为也都没覆盖 | `docs/progress/parser.md` §5.9「本期没覆盖」 |
-| ~~`PARSER_BACKEND` 未翻默认 / 流水线未接线~~ **2026-09-30 已完成**：默认翻了 `docling`，流水线走 `parse_paper_file` + `chunk_markdown`，解析戳入库入索引 | `tasks.py:524`、`:546`；`config.py:190`；本文件 §4 |
+| ~~`PARSER_BACKEND` 未翻默认 / 流水线未接线~~ **2026-09-30 已完成**：默认翻了 `docling`，流水线走 `parse_paper_file` + `chunk_markdown`，解析戳入库入索引 | `tasks.py:524`、`:546`；`config.py:203`；本文件 §4 |
 | **存量论文要 reindex 才会换后端**：改 `PARSER_BACKEND` 只影响新导入与 reindex（缓存按 `(paper_id, backend)` 分目录，换后端必然未命中）；混库状态看 `GET /api/consistency` 的 `parser_backends`，批量换后端用 `scripts/reindex.py --parser-backend pypdf\|unknown`（先 `--dry-run`）。**已提供入口，仍缺的是「全量重索引 + 检索侧 A/B」的实测数字**（plan §6.1 ③） | §5.34/§5.35 |
 | **标题层级规范化 + pypdf 假标题过滤未做**：pypdf 侧的"标题"大量是假阳性（`# IEEE`、页码、全大写短行），反推适配器照单全收；两侧层级语义一致化留后续 | `structure.py:120-121`；`docs/progress/parser.md` §6 |
 | **反推适配器只认自己写出的方言**：`#` 之外的层级记号（docling 将来若新增标签）不会翻译，遇到即退化成段落 | `markdown.py:311-413` |

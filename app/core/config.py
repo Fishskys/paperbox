@@ -23,6 +23,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: ``pypdf`` the degradation backend (and the default until the acceptance run).
 PARSER_BACKENDS = frozenset({"pypdf", "docling"})
 
+#: Accepted values of ``SEARCH_BACKEND`` (plan §7, M5). ``python`` = the two-leg
+#: retriever whose legs are fused in-process (deployed default); ``native`` = one
+#: ``hybrid`` request fused by the ``paperbox-rrf60`` search pipeline and collapsed
+#: to papers (``app/search/native.py``). Only ``mode=hybrid`` is affected.
+SEARCH_BACKENDS = frozenset({"python", "native"})
+
 #: Accepted values of ``CHUNK_MODE``. Kept here rather than imported from
 #: ``app.parsing.chunking``: that module imports ``app.core.logging``, which
 #: imports this one, so the dependency has to point this way.
@@ -103,6 +109,13 @@ class Settings(BaseSettings):
     rrf_keyword_weight: float = Field(default=1.0, alias="RRF_KEYWORD_WEIGHT")
     #: Weight of the semantic (kNN) leg in RRF fusion.
     rrf_semantic_weight: float = Field(default=1.0, alias="RRF_SEMANTIC_WEIGHT")
+
+    # --- retrieval backend (plan §7, M5) ---
+    #: Effective hybrid backend; a request may override it for one call
+    #: (``SearchRequest.backend``), which is how the A/B drives both paths
+    #: against the same process. An unknown value fails at startup, not at
+    #: query time.
+    search_backend: str = Field(default="python", alias="SEARCH_BACKEND")
 
     # --- query rewrite (SPEC-P1 section I1) ---
     #: Off by default: when disabled the search path behaves exactly as before
@@ -306,6 +319,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"PARSER_BACKEND must be one of {sorted(PARSER_BACKENDS)}"
             )
+        return normalized
+
+    @field_validator("search_backend")
+    @classmethod
+    def _check_search_backend(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in SEARCH_BACKENDS:
+            raise ValueError(f"SEARCH_BACKEND must be one of {sorted(SEARCH_BACKENDS)}")
         return normalized
 
     @field_validator("parser_concurrency")

@@ -138,18 +138,18 @@ venues ──CASCADE──> venue_editions
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `POSTGRES_DSN` | `postgresql+psycopg://postgres:postgres@localhost:5432/paperbox` | 唯一 DSN 来源，Alembic 也用它 | `app/core/config.py:44-47`；`migrations/env.py:31-37`；`alembic.ini:5-7` 留空 |
+| `POSTGRES_DSN` | `postgresql+psycopg://postgres:postgres@localhost:5432/paperbox` | 唯一 DSN 来源，Alembic 也用它 | `app/core/config.py:50-53`；`migrations/env.py:31-37`；`alembic.ini:5-7` 留空 |
 | 连接池 | `pool_size=5` / `max_overflow=10` / `pool_recycle=1800` / `pool_pre_ping=True` | 引擎行为（非环境变量） | `app/db/session.py:26-33` |
-| `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名 | `app/core/config.py:56`；`.env.example:17` 与实测 `.env` 均为 `paper_chunks_v3` |
-| `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名 | `app/core/config.py:57`；`app/search/opensearch.py:24-27` |
-| `EMBEDDING_DIMENSION` | `1024` | 决定 `knn_vector.dimension` | `app/core/config.py:71`；`app/search/mappings.py:124` |
-| `MINIO_BUCKET` | `paperbox` | 默认桶 | `app/core/config.py:66`；`.env.example:25` |
-| `MINIO_SECURE` | `False` | 明文 HTTP | `app/core/config.py:65` |
+| `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名 | `app/core/config.py:62`；`.env.example:17` 与实测 `.env` 均为 `paper_chunks_v3` |
+| `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名 | `app/core/config.py:63`；`app/search/opensearch.py:24-27` |
+| `EMBEDDING_DIMENSION` | `1024` | 决定 `knn_vector.dimension` | `app/core/config.py:77`；`app/search/mappings.py:124` |
+| `MINIO_BUCKET` | `paperbox` | 默认桶 | `app/core/config.py:72`；`.env.example:25` |
+| `MINIO_SECURE` | `False` | 明文 HTTP | `app/core/config.py:71` |
 | `papers` / `uploads` / `original.pdf` | 常量 | 正式前缀、暂存前缀、正式文件名 | `app/services/object_storage.py:37-41` |
 | `BULK_BATCH_SIZE` | `200` | 批量索引批大小 | `app/search/opensearch.py:30` |
-| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:173`、`:237-241`；`.env.example:119` |
-| `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:175` |
-| `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:179`；`app/workers/housekeeping.py:323-334` |
+| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:186`、`:250-254`；`.env.example:119` |
+| `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:188` |
+| `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:192`；`app/workers/housekeeping.py:323-334` |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:41` |
 | `OPENSEARCH_BACKUP_DIR` | `./data/opensearch-backups` | 快照仓库落点（挂到容器 `/mnt/backups`，与 `-Epath.repo` 成对） | `infra/docker-compose.yml:60-65`；`infra/.env:15` |
 | 快照策略 | `paperbox-daily`（`30 3 * * *` Asia/Shanghai，留 14 份/30 天） | SM 定时快照：`paper_chunks_*,search-relevance-*` | `scripts/setup_snapshots.py:41-56`；真机 `_plugins/_sm/policies` |
