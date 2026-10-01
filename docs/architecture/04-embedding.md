@@ -139,12 +139,12 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | `EMBEDDING_TIMEOUT` | **300.0**（T7.3 由 120 上调） | 单批 HTTP 超时；必须大于服务端最坏排队时间 | `config.py:77-81`、`.env.example:35` |
 | `EMBEDDING_MAX_RETRIES` | 2 | 每批额外重试次数 | `config.py:82`、`.env.example:36` |
 | `MAX_BATCH` | 代码 64；compose `16`（`infra/.env` 未设） | `/embed` 入参上限（超批 422） | `server.py:42`、`docker-compose.yml:99` |
-| `RERANK_MAX_BATCH` | 代码 = `MAX_BATCH`；compose 兜底 `16`；`infra/.env` **4** | 单次精排推理的候选上限（服务内分片）。**批越大越慢越占内存**：50 候选实测批 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB（int8 档） | `server.py:47`、`docker-compose.yml:103`、`infra/.env:18` |
+| `RERANK_MAX_BATCH` | 代码 = `MAX_BATCH`；compose 兜底 `16`；`infra/.env` **4** | 单次精排推理的候选上限（服务内分片）。**批越大越慢越占内存**：50 候选实测批 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB（int8 档） | `server.py:47`、`docker-compose.yml:103`、`infra/.env:22` |
 | `ORT_THREADS` | 代码 2；compose `4` | ONNX Runtime 线程数（embedding 与 rerank 共用） | `server.py:53`、`docker-compose.yml:98` |
 | `INFERENCE_WORKERS` | 代码 1；compose `1`；`infra/.env` 1 | **T7.3** 同时执行推理的工作线程数（=1 即完全串行） | `server.py:56`、`docker-compose.yml:105`、`infra/.env:24` |
 | `INFERENCE_QUEUE_DEPTH` | 代码 32；compose `32`；`infra/.env` 32 | **T7.3** 允许排队等待的请求数上限，超出直接 503 | `server.py:59`、`docker-compose.yml:106` |
-| `RERANK_MODEL` | 代码 `Xenova/ms-marco-MiniLM-L-6-v2`；`infra/.env` `jinaai/jina-reranker-v2-base-multilingual`（2026-10-01 试过 int8 档，中文质量门槛不达标已回滚，见 `docs/progress/project.md` §22.u） | 交叉编码器；名字在应用侧与容器侧**必须一致**（应用只用它回显 `rerank.model`，容器才真正加载） | `server.py:41`、`config.py:86`、`infra/.env:12` |
-| `RERANK_MODEL_FILE` | 代码 `onnx/model.onnx`；`infra/.env` **注释掉**（现役 jina 是内置模型，不读它） | **只对不在 fastembed 清单里的模型生效**：仓库内 ONNX 文件路径。多数 HF 导出在 `onnx/` 子目录，动态 int8 量化导出常放仓库根（试过的那个档就是 `model.onnx`） | `server.py:52`、`docker-compose.yml:96`、`infra/.env:14` |
+| `RERANK_MODEL` | 代码 `Xenova/ms-marco-MiniLM-L-6-v2`；`infra/.env` `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8`（2026-10-01 全量换档；jina 作为高配机器选项留在注释里，见 `docs/progress/project.md` §22.u） | 交叉编码器；名字在应用侧与容器侧**必须一致**（应用只用它回显 `rerank.model`，容器才真正加载）。**改完要重启应用**（`.env` 启动时读入，否则响应会报旧模型名） | `server.py:41`、`config.py:86`、`infra/.env:13`、`.env:29` |
+| `RERANK_MODEL_FILE` | 代码 `onnx/model.onnx`；`infra/.env` `model.onnx`（现役 int8 档需要它） | **只对不在 fastembed 清单里的模型生效**：仓库内 ONNX 文件路径。多数 HF 导出在 `onnx/` 子目录，动态 int8 量化导出常放仓库根（就是这个档）。换回内置档（jina/ms-marco）时注释掉 | `server.py:52`、`docker-compose.yml:96`、`infra/.env:14` |
 | `RERANK_ENABLED` / `RERANK_URL` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `http://127.0.0.1:8090` / `10.0`（`.env:49`=60）/ `5` | 精排开关、地址、超时、候选倍数（细节见 06） | `config.py:85-97` |
 | `FASTEMBED_CACHE_PATH` | `/models` | 模型缓存目录（挂载宿主目录） | `docker-compose.yml:90`、:109 |
 | `HF_ENDPOINT` / `HF_HUB_DISABLE_XET` | `https://hf-mirror.com` / `1` | 首次下载的镜像与传输开关 | `docker-compose.yml:88-89` |
