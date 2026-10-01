@@ -3,7 +3,10 @@
 模型: 由 EMBEDDING_MODEL 指定, 默认 BAAI/bge-m3 (1024 维, 多语言)。
 后端: fastembed (ONNX Runtime, 无 torch, CPU 友好)。
 
-Rerank 模型: 由 RERANK_MODEL 指定, 默认 Xenova/ms-marco-MiniLM-L-6-v2
+Rerank 模型: 由 RERANK_MODEL 指定, 默认 Xenova/ms-marco-MiniLM-L-6-v2。
+             不在 fastembed 内置清单里的模型，用 RERANK_MODEL_FILE 指出仓库内的
+             ONNX 文件路径（默认 onnx/model.onnx），启动时按 add_custom_model 注册：
+             换任何 ONNX 导出都只是换环境变量，不动代码。
 (交叉编码器精排, 供 app 侧两阶段检索使用)。
 
 API:
@@ -31,6 +34,7 @@ from concurrent.futures import Future
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 from fastembed import TextEmbedding
+from fastembed.common.model_description import ModelSource
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 MODEL = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
@@ -41,6 +45,11 @@ MAX_BATCH = int(os.environ.get("MAX_BATCH", "64"))
 # (measured: 16 docs ~ 5.1GB peak vs 4 docs ~ 2.4GB). Embedding stays on
 # MAX_BATCH -- sharing one knob would either OOM rerank or 422 normal ingests.
 RERANK_MAX_BATCH = int(os.environ.get("RERANK_MAX_BATCH", str(MAX_BATCH)))
+# 自定义（不在 fastembed 清单里的）交叉编码器：仓库内 ONNX 文件路径。
+# 默认是多数 HF 导出的布局；量化导出常常把文件放在仓库根（例如
+# temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8 的 model.onnx），
+# 那时把 RERANK_MODEL_FILE 设成 model.onnx 即可 —— 不必改代码。
+RERANK_MODEL_FILE = os.environ.get("RERANK_MODEL_FILE", "onnx/model.onnx")
 THREADS = int(os.environ.get("ORT_THREADS", "2"))
 # 一个容器里同时跑几次 ONNX 推理。ONNX Runtime 自己就有 ORT_THREADS 条 lane，
 # 再叠上 N 个并发请求，CPU 只会互相抢（本机 6 vCPU；精排模型单次峰值已 2.4GB）。
@@ -154,10 +163,38 @@ def get_model() -> TextEmbedding:
     return _model
 
 
+def register_custom_reranker(model: str, model_file: str) -> bool:
+    """把不在 fastembed 清单里的交叉编码器教给它；返回是否发生了注册。
+
+    fastembed 只认它内置的 6 个精排模型，其余一律要 ``add_custom_model`` ——
+    但那只影响"注册"这一步：加载与推理仍然是同一条 ONNX Runtime 路径，
+    所以换模型（含动态 int8 量化导出）只是换环境变量，不是换架构。
+    幂等：已在清单里就什么都不做，部署时无需知道当前是哪个模型。
+    """
+    if model in {item["model"] for item in TextCrossEncoder.list_supported_models()}:
+        return False
+    TextCrossEncoder.add_custom_model(
+        model=model,
+        sources=ModelSource(hf=model),
+        model_file=model_file,
+        description=f"{model} (custom cross-encoder, file={model_file})",
+        license="see model card",
+        size_in_gb=0.0,
+    )
+    return True
+
+
 def get_reranker() -> TextCrossEncoder:
     """Lazily build the cross-encoder (first call downloads and caches it)."""
     global _reranker
     if _reranker is None:
+        registered = register_custom_reranker(RERANK_MODEL, RERANK_MODEL_FILE)
+        if registered:
+            print(
+                f"[rerank] registered custom cross-encoder {RERANK_MODEL} "
+                f"(file={RERANK_MODEL_FILE})",
+                flush=True,
+            )
         _reranker = TextCrossEncoder(
             model_name=RERANK_MODEL,
             cache_dir=os.environ.get("FASTEMBED_CACHE_PATH", "~/.cache/fastembed"),
@@ -193,6 +230,7 @@ def health():
         "dimension": 1024,
         "loaded": _model is not None,
         "rerank_model": RERANK_MODEL,
+        "rerank_model_file": RERANK_MODEL_FILE,
         "rerank_loaded": _reranker is not None,
         "queue": QUEUE.stats(),
     }
@@ -205,6 +243,7 @@ def info():
         "dimension": 1024,
         "max_batch": MAX_BATCH,
         "rerank_model": RERANK_MODEL,
+        "rerank_model_file": RERANK_MODEL_FILE,
         "rerank_max_batch": RERANK_MAX_BATCH,
         "inference": QUEUE.stats(),
     }

@@ -90,6 +90,10 @@ services:
     environment:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
       RERANK_MODEL: ${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
+      # 不在 fastembed 内置清单里的精排模型要指出仓库内的 ONNX 文件：多数导出是
+      # onnx/model.onnx，动态 int8 量化导出常在仓库根（model.onnx）—— 见
+      # docs/architecture/06-rerank-rewrite.md §6
+      RERANK_MODEL_FILE: ${RERANK_MODEL_FILE:-onnx/model.onnx}
       HF_ENDPOINT: "https://hf-mirror.com"
       HF_HUB_DISABLE_XET: "1"
       FASTEMBED_CACHE_PATH: /models

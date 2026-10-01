@@ -32,6 +32,14 @@ class FakeTextEmbedding:
         return [[0.0, 1.0] for _ in texts]
 
 
+class FakeModelSource:
+    """Stub for ``fastembed.common.model_description.ModelSource``."""
+
+    def __init__(self, hf=None, url=None, **_kwargs) -> None:
+        self.hf = hf
+        self.url = url
+
+
 class FakeCrossEncoder:
     def __init__(self, *args, **kwargs) -> None:
         pass
@@ -39,17 +47,29 @@ class FakeCrossEncoder:
     def rerank(self, query, documents):
         return [0.5 for _ in documents]
 
+    @classmethod
+    def list_supported_models(cls):
+        # The default RERANK_MODEL must look built-in here: this file is about the
+        # queue, and a custom-model registration would send it through
+        # ``add_custom_model`` for reasons that have their own test file.
+        return [{"model": "Xenova/ms-marco-MiniLM-L-6-v2"}]
+
 
 def load_server(monkeypatch: pytest.MonkeyPatch, *, workers: int = 1, depth: int = 32):
     """Import ``infra/embedding/server.py`` with ``fastembed`` stubbed."""
     fastembed = types.ModuleType("fastembed")
     fastembed.TextEmbedding = FakeTextEmbedding
+    common = types.ModuleType("fastembed.common")
+    model_description = types.ModuleType("fastembed.common.model_description")
+    model_description.ModelSource = FakeModelSource
     rerank_module = types.ModuleType("fastembed.rerank")
     cross_encoder = types.ModuleType("fastembed.rerank.cross_encoder")
     cross_encoder.TextCrossEncoder = FakeCrossEncoder
     rerank_module.cross_encoder = cross_encoder
 
     monkeypatch.setitem(sys.modules, "fastembed", fastembed)
+    monkeypatch.setitem(sys.modules, "fastembed.common", common)
+    monkeypatch.setitem(sys.modules, "fastembed.common.model_description", model_description)
     monkeypatch.setitem(sys.modules, "fastembed.rerank", rerank_module)
     monkeypatch.setitem(sys.modules, "fastembed.rerank.cross_encoder", cross_encoder)
     monkeypatch.setenv("INFERENCE_WORKERS", str(workers))
