@@ -258,3 +258,82 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 - **`healthcheck.py` 的 DSN 解析未确认**：读到的是 `host_port(env.get("POSTGRES_DSN", …)[-1])`（`scripts/healthcheck.py:79`），`[-1]` 的语义无法自文本解释——疑似读取工具对凭据片段做了脱敏遮盖，未在真机验证其实际行为。
 - **服务器侧动作未执行**（`docs/progress/project.md:531-532`）：`PAPERBOX_BIND_IP=127.0.0.1` 收敛依赖端口、按服务器内存放大 `ORT_THREADS`/`MAX_BATCH`/`RERANK_MAX_BATCH`/`OPENSEARCH_JAVA_OPTS`、三处数据搬迁（`pg_dump` / `mc mirror` / OpenSearch `_reindex`，**勿重算向量**）。
 - **`purge_deleted.py` 的边界 + 标注质量无工具**：前者只处理 `deleted_at` 非空的论文，报告里 `0 chunk doc(s)` 不代表异常；后者靠 `queries-spec.json` 的 `note` 人工把关，仓库没有标注审计工具（`evals/README.md:12`）。
+
+## 9. SRW 评测旁路（M4，2026-10-01）
+
+OpenSearch 自带 Search Relevance Workbench（插件 `opensearch-search-relevance` + `opensearch-ubi` 3.6.0；
+UI 未部署，只用 REST）。**定位是第二套独立工具，用来交叉验证 `scripts/eval.py` 的结论，不替换它**：
+SRW 没有 PG join、没有 EN/ZH 分组、没有 per-query 明细，粒度也只能是"一篇论文一个文档"。
+
+### 9.1 对象与脚本
+
+| 对象 | 名字 | 说明 |
+|---|---|---|
+| 代表索引 | `paper_repr` | 30 文档，`_id = paper_id`，`title/abstract/text/embedding`（text = 前 3 个 chunk 拼接） |
+| 查询集 | `paperbox-{all-60,en-50,zh-10}` | 从 `evals/queries.jsonl` 1:1 导入 |
+| 判定集 | `paperbox-labels-{all,en,zh}` | 从 `evals/labels.jsonl` 1:1 导入（论文级 grade 1\|2） |
+| 检索配置 | `paperbox-bm25`（title^2+abstract+text）/ `paperbox-knn`（`neural` 走远程模型）/ `paperbox-hybrid-plain`（无管道）/ `paperbox-hybrid-minmax`（管道 `paperbox-norm-minmax`）/ `paperbox-hybrid-rrf60`（管道 `paperbox-rrf60`，`rank_constant=60`） | 应用侧的 hybrid 是**应用里算的 RRF**，SRW 复现不了，只能用 OS 原生管道作近似 |
+| 远程模型 | connector `paperbox-fastembed-e5` + 模型 `paperbox-e5-local` | 转发本机 fastembed `/v1/embeddings`，OS 内不加载模型、不动 1GB 堆 |
+
+- `scripts/srw_setup.py build|status|cleanup`：幂等建房。`cleanup` 只删 manifest 登记过的对象（`--with-model`/`--with-index` 才动模型/索引）。
+- `scripts/srw_experiments.py run [--optimizer]|collect|compare`：跑实验 → 聚合到 `evals/report-srw.json|md` → 与生产基线对撞（`--baseline`）。
+- 本地状态 `evals/srw/`（manifest 记 id、compare 记对撞结果）**不入 git**，与 `evals/report-*.json` 同规矩。
+
+### 9.2 实测（2026-10-01，30 篇语料，NDCG@10 / MRR）
+
+点测（每配置 × 每查询一个变体，变体全部 `COMPLETED`）：
+
+| 配置 | all(60) | en(50) | zh(10) |
+|---|---|---|---|
+| `bm25` | 0.8888 / 0.9069（n=51，**9 条零命中**） | 0.89 / 0.905 | 0.83 / 1.0（**n=1**，9 条零命中） |
+| `knn` | 0.9292 / 0.9342 | 0.929 / 0.931 | 0.93 / 0.95 |
+| `hybrid_minmax` | 0.9267 / **0.9417** | 0.926 / **0.94** | 0.93 / 0.95 |
+| `hybrid_rrf60` | 0.9258 / 0.9408 | 0.925 / 0.939 | 0.93 / 0.95 |
+
+HYBRID_OPTIMIZER（3 归一化 × 3 组合方式 × 权重 0.0→1.0 步长 0.1 = 66 组合；变体 660/3300/3960 **全部 COMPLETED，零 ERROR**）：
+
+| 集合 | 最佳（NDCG@10） | 最差 |
+|---|---|---|
+| zh | 0.93 `geometric_mean + min_max + [0.3,0.7]`（多组并列 0.93） | **0.539**（任何组合方式的 `[1.0,0.0]` 纯词法） |
+| en | **0.9362** `arithmetic_mean + l2 + [0.1,0.9]`（纯语义 0.9292） | 0.885 `[0.9,0.1]` |
+| all | 0.9352 `arithmetic_mean + l2 + [0.1,0.9]` | 0.8315 |
+
+en 的权重曲线（`l2 + arithmetic_mean`，`[词法, 语义]`）：
+`[0.0,1.0]=0.929 → [0.1,0.9]=0.9362 → [0.3,0.7]=0.9276 → [0.5,0.5]=0.918 → [0.7,0.3]=0.9066 → [1.0,0.0]=0.89`。
+
+**怎么读这两张表**：
+
+1. **配置族排序两边一致**：SRW `knn > hybrid > bm25`，生产 `semantic > hybrid > keyword`（`evals/srw/compare.json` 的 `order_agrees=true`）。
+2. **融合的收益/代价两边也一致**：两个工具都是"融合提高 top-1/MRR、降低 NDCG@10 与 recall"。SRW en：`hybrid_minmax` MRR 0.94 > `knn` 0.931，NDCG@10 0.926 < 0.929；生产：hybrid MRR 0.9006 > semantic 0.8611、HR@1 0.85 > 0.767，而 NDCG@10 0.7611 < 0.8106。**只看 NDCG@10 会把融合判成"退步"**，这个口径差异要在 M5 的验收里写明。
+3. **词法侧权重的最优点在语义端**：score 级融合最佳点是词法 0.1（en 0.9362 / all 0.9352），词法权重再涨就单调掉；中文侧任何语义权重 ≥0.1 都饱和在 0.93，纯词法塌到 0.539。这是 M5 调权重的先验，但**不能直接搬**：生产用的是 RRF（秩级），与这里的 score 级归一化融合不是一回事。
+
+### 9.3 交叉验证的**口径**（引用时必带）
+
+两套工具评的是不同表面（生产 = chunk 索引 + 论文聚合；SRW = 合成代表索引 `paper_repr`），
+所以**绝对值不可比**（SRW 系统性偏高：en 上 bm25 0.89 vs 生产 keyword 0.6396，knn 0.929 vs semantic 0.8106）。
+
+逐查询 NDCG@10 的 Spearman（en 50 条）：`bm25/keyword` 0.405、`knn/semantic` 0.387、`hybrid_rrf60/hybrid` 0.471。
+**同工具内部**的参照系：`keyword↔semantic` **0.224**、`semantic↔hybrid` 0.477、`keyword↔hybrid` 0.712 ——
+也就是说"两条不同检索路径的逐查询难度排序"本来就不怎么相关，0.4 这个量级是这类指标的常态，
+不是工具缺陷。**"逐查询相关性 ≥0.8"这种门槛是拍脑袋的，别写进验收**；SRW 能用的是
+①配置族排序 ②参数扫描的相对趋势。绝对指标永远看 `scripts/eval.py`。
+
+### 9.4 跑之前必须满足的前提（都是踩出来的）
+
+1. **推理队列要够深**：`INFERENCE_QUEUE_DEPTH` 原来是 32（按单次交互检索定的），参数扫描一次几百个并发神经检索
+   瞬间打满 → `/info` 的 `rejected` 累计到 10141、SRW 变体 90% 报 `inference queue full (depth=32, workers=1)`；
+   **放远端连接池完全没用，瓶颈在这条队列**。2026-10-01 提到 512（实测扫描期峰值 `waiting=38`，提档后 `rejected` 归零，三集合 660/3300/3960 变体零 ERROR）。定值规矩见 `04-embedding.md` §4b。
+2. **ml-commons 两个设置**：`trusted_connector_endpoints_regex` 追加本机域（**整列表替换语义**，脚本先读当前生效值再追加，别手写列表）、`connector.private_ip_enabled=true`。
+3. **connector 要有 `client_config`**：默认 `max_connection=30 / read_timeout=30 / max_retry_times=0`；改它必须**先退服模型**（否则 400 `models are still using this connector`）。`description` 只能 ASCII、`credential` 不能为空。
+4. **创建调用是 PUT**（`query_sets` 的采样变体才是 POST，缺 `ubi_queries` 会 409；其余 POST → 405）；**被实验引用的对象删不掉**，所以 setup 是"同名复用"，重建要先 `cleanup`（先删实验再删对象）。
+5. **零命中 ≠ 出错**：某配置对某查询返回 0 命中时 SRW 不落评测结果，`collect` 把它们记进 `no_result_queries`
+   （BM25 对 10 条中文查询 9 条零命中，就是这个现象，不是 bug，也不是"小样本平均"）。
+6. **取数要用 scroll**：优化器实验有 `查询数 × 66` 条结果（en 3300 条），写死 `?size=` 会**静默截断**，
+   让报告出现"n=33/50"和"只剩 42 个组合"的假象。`srw_experiments.py::scan()` 已改为 scroll 并核对 `total`。
+
+### 9.5 缺口
+
+- **LLM-as-a-Judge（T-D6）未做**：需要一条 LLM connector，而根 `.env` 里目前没有可用的 LLM 凭据
+  （`QUERY_REWRITE_*` 键不存在，只有 `PAPER_API_KEY`）。
+- **`paper_repr` 是合成物**：它比真实 chunk 索引好检索，任何来自 SRW 的绝对数字都不进 progress/验收。
+- **不支持 `size` 查询参数**（要放 body）、**等待时间不可观测**（只有计数）。

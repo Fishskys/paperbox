@@ -29,6 +29,9 @@ evals/report-*.md
 #   （含本机绝对路径的派生产物不入库：corpus30.json 带源文档路径、corpus30-download.json 带 30 条 PDF 路径）
 evals/report-*.json
 evals/ingest-report*.json
+# SRW 评测旁路（M4）的本地状态：manifest 里是**本集群**的对象 id、compare 里是两套工具的对撞结果，
+# 都能用 scripts/srw_setup.py / srw_experiments.py 复现 —— 与 report-*.json 同一条规矩，不入库。
+evals/srw/
 # 库里导出的复用表（原始数据，可由 backups/paperbox-pre-wipe-*.sql.gz 复现，不入库）
 evals/corpus30.json
 evals/corpus30-download.json

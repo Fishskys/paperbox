@@ -89,7 +89,11 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 
 **做法**：容器内部加一条 FIFO 队列 `InferenceQueue`（`server.py:66-140`）。`/embed`、`/v1/embeddings`、`/rerank` 三处都改成 `QUEUE.submit(fn)`：调用线程把 `(fn, args, future)` 入队，`INFERENCE_WORKERS`(默认 1) 个工作线程依次取出执行，调用线程在 `future.result()` 上等结果（异常原样透传，所以 500/503 语义不变）。
 
-- 积压长度由 `INFERENCE_QUEUE_DEPTH`(默认 32) 兜底：满了**立即**抛 `QueueFull` → `503` + `Retry-After: 5`（`server.py:124-128`、:145-151）。选择“拒绝而不是无限排队”：无界排队会把等待推到客户端超时之后，那时两边都拿不到可用的错误。
+- 积压长度由 `INFERENCE_QUEUE_DEPTH` 兜底：满了**立即**抛 `QueueFull` → `503` + `Retry-After: 5`（`server.py:124-128`、:145-151）。选择“拒绝而不是无限排队”：无界排队会把等待推到客户端超时之后，那时两边都拿不到可用的错误。
+  - 定这个值的规矩：`depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT / 2`（应用侧默认 300s）。
+  - **2026-10-01 从 32 提到 512**：原值是按"单次交互搜索"定的，跑 SRW 参数扫描（一次几百个并发神经检索、每次都要过远程模型）时被瞬间打满 —— `/info` 的 `rejected` 累计 10141，SRW 变体 90% 报
+    `inference queue full (depth=32, workers=1)`，而远端连接池怎么放大都没用（瓶颈在这条队列）。实测扫描期峰值 `waiting=38`，正好卡在旧上限之上。512 × 0.1~0.3s ≈ 51~154s < 150s(=300/2)，`rejected` 归零。
+    **放大队列不等于无限排队**：深度仍是有限的，只是把"并发几十"这一档从拒绝改成排队。
 - 客户端**不做闸门**（这是刻意的：应用侧没有信号量，只保留 `EMBEDDING_TIMEOUT` 与重试），削峰全部在服务端。
 - 代价是延迟变成“排队时间 + 推理时间”，所以 `EMBEDDING_TIMEOUT` 从 120s 上调到 300s（`config.py:77-81`）——否则排队会以“批次失败”的形式表现出来。查询侧 `RERANK_TIMEOUT` 另算（见 06）。
 
@@ -117,7 +121,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 7 | `/v1/embeddings` 不受 `MAX_BATCH` 限制，且应用侧不使用它（应用只走 `/embed`）；它同样排在队列后面 | `server.py:211-214`、:318-322；`embedding_service.py:21`（`EMBED_PATH="/embed"`） |
 | 8 | 向量条数不匹配（第 8 跳）落 `IngestionError`，不在 `EmbeddingError` 分支 → `error_code=INTERNAL`，不是 `EMBEDDING_FAILED` | `tasks.py:518-539`；`errors.py:152-197`（`EmbeddingError` 分支 :182，尾部兜底 :200） |
 | 9 | 失败保留现场：`_advance_stage` 已 COMMIT，`EMBEDDING/80` 是可读的失败点；`_record_failure` 只改 job 与 paper.status。降级账本骑在同一个事务上：作业回滚则降级行一并回滚（不是漏记——那次运行没留下产物） | `tasks.py:194-210`、:1201-1220；`degradation_service.py:226-283` |
-| 9b | **T7.3 服务端队列**：`/embed`、`/v1/embeddings`、`/rerank` 共用一条 FIFO，由 `INFERENCE_WORKERS`(1) 个工作线程串行执行；积压 > `INFERENCE_QUEUE_DEPTH`(32) 直接 503，而不是无限排队（无界排队只会把等待推到客户端超时之后） | `server.py:56-59`、:66-140、:142 |
+| 9b | **T7.3 服务端队列**：`/embed`、`/v1/embeddings`、`/rerank` 共用一条 FIFO，由 `INFERENCE_WORKERS`(1) 个工作线程串行执行；积压 > `INFERENCE_QUEUE_DEPTH`（2026-10-01 起 512）直接 503，而不是无限排队（无界排队只会把等待推到客户端超时之后） | `server.py:56-59`、:66-140、:142 |
 | 10 | 模型惰性加载：首个请求才下载/加载（`/health` 在加载前也 200）；healthcheck 15s×30 次容错下载窗口；**首次加载发生在队列工作线程里**，所以冷启动期间其余请求都在排队等待 | `server.py:155-202`；`docker-compose.yml:110-114` |
 | 11 | `/info`、`/health` 的 `dimension` 是硬编码 1024，换模型不会自动修正 | `server.py:243`、:229 |
 | 12 | 容器单进程（`--workers 1`）：embedding 与 rerank 共用一个进程/ORT 线程池 | `Dockerfile:9` |
@@ -141,8 +145,8 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | `MAX_BATCH` | 代码 64；compose `16`（`infra/.env` 未设） | `/embed` 入参上限（超批 422） | `server.py:42`、`docker-compose.yml:99` |
 | `RERANK_MAX_BATCH` | 代码 = `MAX_BATCH`；compose 兜底 `16`；`infra/.env` **4** | 单次精排推理的候选上限（服务内分片）。**批越大越慢越占内存**：50 候选实测批 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB（int8 档） | `server.py:47`、`docker-compose.yml:103`、`infra/.env:22` |
 | `ORT_THREADS` | 代码 2；compose `4` | ONNX Runtime 线程数（embedding 与 rerank 共用） | `server.py:53`、`docker-compose.yml:98` |
-| `INFERENCE_WORKERS` | 代码 1；compose `1`；`infra/.env` 1 | **T7.3** 同时执行推理的工作线程数（=1 即完全串行） | `server.py:56`、`docker-compose.yml:105`、`infra/.env:24` |
-| `INFERENCE_QUEUE_DEPTH` | 代码 32；compose `32`；`infra/.env` 32 | **T7.3** 允许排队等待的请求数上限，超出直接 503 | `server.py:59`、`docker-compose.yml:106` |
+| `INFERENCE_WORKERS` | 代码 1；compose `1`；`infra/.env` 1 | **T7.3** 同时执行推理的工作线程数（=1 即完全串行） | `server.py:56`、`infra/docker-compose.yml:118`、`infra/.env:44` |
+| `INFERENCE_QUEUE_DEPTH` | 代码 32；compose `512`；`infra/.env` 512 | **T7.3** 允许排队等待的请求数上限，超出直接 503；**2026-10-01 提档**，见 §4b 的定值规矩（`depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT/2`） | `server.py:59`、`infra/docker-compose.yml:119`、`infra/.env:45` |
 | `RERANK_MODEL` | 代码 `Xenova/ms-marco-MiniLM-L-6-v2`；`infra/.env` `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8`（2026-10-01 全量换档；jina 作为高配机器选项留在注释里，见 `docs/progress/project.md` §22.u） | 交叉编码器；名字在应用侧与容器侧**必须一致**（应用只用它回显 `rerank.model`，容器才真正加载）。**改完要重启应用**（`.env` 启动时读入，否则响应会报旧模型名） | `server.py:41`、`config.py:86`、`infra/.env:13`、`.env:29` |
 | `RERANK_MODEL_FILE` | 代码 `onnx/model.onnx`；`infra/.env` `model.onnx`（现役 int8 档需要它） | **只对不在 fastembed 清单里的模型生效**：仓库内 ONNX 文件路径。多数 HF 导出在 `onnx/` 子目录，动态 int8 量化导出常放仓库根（就是这个档）。换回内置档（jina/ms-marco）时注释掉 | `server.py:52`、`docker-compose.yml:96`、`infra/.env:14` |
 | `RERANK_ENABLED` / `RERANK_URL` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `http://127.0.0.1:8090` / `10.0`（`.env:49`=60）/ `5` | 精排开关、地址、超时、候选倍数（细节见 06） | `config.py:85-97` |
@@ -183,4 +187,4 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 9 | 服务端异常返回码仍不完全统一（推理失败时 `/embed` 500、`/rerank` 503），与 `AGENTS.md` §3.3 的表述不完全一致；**队满一侧已是统一 503** | `server.py:259-260`、:145-151、:313-314 |
 | 10 | 向量只存在于 OpenSearch：PG 与索引无一致性校验（PG 有文档、索引缺向量的状态可能长期存在） | `_write_embeddings` 不写向量（`tasks.py:1099-1134`）；索引失败另走 `INDEX_FAILED`（`errors.py:182`） |
 | 11 | **同一段文字被嵌两遍（T7.3 留档，未优化）**：`CHUNK_MODE=semantic` 时 `chunk_document` 先用同一个 `/embed` 给**句子**打分，紧接着 EMBEDDING 阶段又给**chunk**（= 同一批句子的拼接）嵌一次；两者没有缓存或复用，等于把这篇论文的文字嵌了近两遍 | `tasks.py:552`（chunking 侧 `embed_fn`）与 :563（EMBEDDING 侧 `embed_texts`）打到同一个 `EMBEDDING_URL`；`chunking.py:279-346` 的句级批调用；探针的磁盘向量缓存只存在于 `scripts/probe_chunk_semantic.py`，生产路径没有 |
-| 12 | 服务端队列的**等待时间不可观测**：`/info` 只有计数（`waiting`/`running`/`completed`/`rejected`），没有排队时长直方图；`Retry-After: 5` 是写死的，应用侧的重试退避（0.5s/1.0s）也不读它 —— 队满时三次尝试可能全部撞墙 | `server.py:130-140`、:148；`embedding_service.py:111`、:138 |
+| 12 | 服务端队列的**等待时间不可观测**：`/info` 只有计数（`waiting`/`running`/`completed`/`rejected`），没有排队时长直方图；`Retry-After: 5` 是写死的，应用侧的重试退避（0.5s/1.0s）也不读它 —— 队满时三次尝试可能全部撞墙。2026-10-01 提深度只是把阈值抬高，**没解决"客户端不读 Retry-After"**；ml-commons connector 侧已加 `max_retry_times=3` | `server.py:130-140`、:148；`embedding_service.py:111`、:138` |
