@@ -11,7 +11,7 @@
 **做**：
 
 - 把一条自然语言查询变成**论文级**结果：`POST /api/search`（`app/api/search.py:50`）。
-- 三种 mode 的查询构造：BM25 `multi_match` / kNN / 两者的 RRF 融合（`app/search/hybrid.py:305`、`:319`、`:730`）。
+- 三种 mode 的查询构造：BM25 `multi_match` / kNN / 两者的 RRF 融合（`app/search/hybrid.py:305`、`:319`、`:742`）。
 - 元数据过滤器 → OpenSearch `filter` 子句（`app/search/hybrid.py:221`）：`year_from/year_to`、`authors`、`venue`、`doi`、
   `arxiv_id`、`tag`，以及元数据层带来的 `venue_year`、`paper_type`、`identifier`（`scheme:value`，未知 scheme → 422）、
   按 `papers_tags.kind` 分列的 `ieee_terms` / `author_terms` / `dynamic_index_terms` / `source_tags`（`hybrid.py:221-257`）。
@@ -41,9 +41,11 @@
 | | `rank_hits` `:308` | 响应 → `(chunk_id, score, source)` 列表 |
 | | `_keyword_hits` `:551` / `_semantic_hits` `:560` | 单腿执行，各自把分数写进 `keyword_score` / `semantic_score` |
 | | `search_chunks` `:601` | 三模式分派 + 过取 + RRF + 精排 + telemetry |
-| | `_first_stage_k` `:722` | 一阶段候选窗：`top_k`（不精排）或 `top_k × RERANK_CANDIDATES` |
-| | `_apply_rerank` `:730` / `_normalize_rerank_scores` `:857` | 交叉编码器重排 + min-max 归一（native 只重排折叠赢家） |
-| | `_truncate_hits` `:920` / `_regroup_by_paper` `:947` | **2026-10-01**：截断（native 按「篇」计数，v2 按 chunk）/ 精排后把兄弟 hit 贴回各自赢家并同步分数 |
+| | `_first_stage_k` `:842` | 一阶段候选窗：`top_k`（不精排）或 `top_k × RERANK_CANDIDATES` |
+| | `_apply_rerank` `:904` / `_normalize_rerank_scores` `:1014` | 交叉编码器重排 + min-max 归一（native 只重排折叠赢家） |
+| | `_rerank_chunks_per_paper` `:809` / `_rerank_pool` `:822` | **2026-10-01**：native 精排池（每篇最多 `RERANK_CANDIDATES` 个 chunk，**与 `MAX_EVIDENCE` 解耦**） |
+| | `_truncate_hits` `:850` / `_regroup_by_paper` `:877` | **2026-10-01**：截断（native 按「篇」计数，v2 按 chunk）/ 把该篇其余 hit 贴回代表 chunk 并同步分数（降级为 evidence） |
+| | `_rank_by_paper` `:972` | **2026-10-01**：native 论文级排序——取每篇最佳 chunk 作代表、按它排序、**在论文层面**做 min-max 归一 |
 | | `build_count_body` `:451` / `count_papers` `:509` | **2026-09-30**：`size: 0` + `cardinality(paper_id)` —— 响应 `total` 的真值来源（hybrid 用 `bool.should` 合并两腿） |
 | | `build_facet_body` `:378` / `facet_counts` `:416` | **2026-09-30**：`facets=true` 的桶（6 个 `terms` + `year` 直方图，每桶 `cardinality(paper_id)`）；体里**没有**查询腿 |
 | `app/search/ranking.py` | `DEFAULT_RRF_K` `:19`、`rrf_score` `:22`、`rrf_fuse` `:31` | 纯函数 RRF（支持每腿权重；native 后端用管道里的同一公式，见 §4b） |
@@ -93,7 +95,7 @@
 
 - `ChunkHit`（`hybrid.py:99`）：`chunk_id`/`paper_id`/`score` + 15 个元数据字段 + `keyword_score`/`semantic_score`/`rank`/`retrieval_score`/`rerank_score`；`page` 属性返回 `page_start`（`hybrid.py:141`）。
 - `PaperResult` / `Evidence`（`search_service.py:52`、`:74`）：论文分、`relevance`、`evidence`、`matched_chunks`、`retrieval_score`、`rerank_score`。
-- 融合中间态：`by_id: dict[str, ChunkHit]`（`hybrid.py:720`）先按 chunk 去重合并两腿分数，再按 RRF 顺序重建列表。
+- 融合中间态：`by_id: dict[str, ChunkHit]`（`hybrid.py:732`）先按 chunk 去重合并两腿分数，再按 RRF 顺序重建列表。
 
 **`search_queries` 表**（`app/db/models.py:763`，索引 `created_at`、`mode`）：
 
@@ -119,7 +121,7 @@ POST /api/search                                    app/api/search.py:50（路�
  │    └─ query_rewrite_service.rewrite_query()      （细节见 06；未启用时零外部调用）
  ├─ asyncio.to_thread(search_service.search_papers) app/api/search.py:81
  │    └─ search_chunks()                            app/services/search_service.py:357 → hybrid.py:651
- │         ├─ _first_stage_k(top_k, rerank)         hybrid.py:797
+ │         ├─ _first_stage_k(top_k, rerank)         hybrid.py:842
  │         ├─ keyword 腿：_keyword_hits             hybrid.py:602
  │         │    ├─ build_keyword_query              hybrid.py:305
  │         │    │    └─ build_filters + _with_filters  hybrid.py:221 / :286
@@ -128,12 +130,12 @@ POST /api/search                                    app/api/search.py:50（路�
  │         ├─ semantic 腿：_semantic_hits           hybrid.py:624
  │         │    ├─ embedding_service.embed_text     app/services/embedding_service.py:149（1 条文本）
  │         │    └─ build_semantic_query(k=..., filter=...)  hybrid.py:319
- │         ├─ 融合：rrf_fuse([kw_ids, sem_ids], k, weights)  hybrid.py:730 → ranking.py:31
- │         │    └─ 按融合序回填 by_id 与 hit.score   hybrid.py:735-741
- │         ├─ 精排（rerank=True）：_apply_rerank    hybrid.py:723 → :857
+ │         ├─ 融合：rrf_fuse([kw_ids, sem_ids], k, weights)  hybrid.py:742 → ranking.py:31
+ │         │    └─ 按融合序回填 by_id 与 hit.score   hybrid.py:747-753
+ │         ├─ 精排（rerank=True）：_apply_rerank    hybrid.py:904
  │         │    ├─ rerank_service.rerank_texts      app/services/rerank_service.py:56
- │         │    └─ _normalize_rerank_scores         hybrid.py:923（min-max → 0..1）
- │         └─ telemetry{rerank_took_ms, reranked, candidates} + hit.rank  hybrid.py:756-765
+ │         │    └─ _normalize_rerank_scores         hybrid.py:1014（min-max → 0..1）
+ │         └─ telemetry{rerank_took_ms, reranked, candidates} + hit.rank  hybrid.py:769-791
  │    ├─ aggregate_papers(hits, top_k)              search_service.py:369 → :195
  │    │    └─ _select_evidence                      search_service.py:167
  │    └─ normalize_scores                           search_service.py:369 → :272
@@ -153,11 +155,11 @@ POST /api/search                                    app/api/search.py:50（路�
 由 search pipeline `paperbox-rrf60` 在协调节点做 RRF（`rank_constant=60`，与 `ranking.rrf_fuse` 同值），
 再用 `collapse(paper_id)` 直接返回**论文**（每篇附带 `inner_hits` 里的兄弟 chunk 当 evidence）。
 v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两条路径的出口都是 `list[ChunkHit]`，
-精排、聚合、归一、序列化全部共用（`app/search/native.py:268` ← `app/search/hybrid.py:711`）。
+(`app/search/native.py:268` ← `app/search/hybrid.py:721`)
 
 **开关**：`SEARCH_BACKEND`（`app/core/config.py:131`，默认 `python`）是部署默认；请求体 `backend` 可**逐次覆盖**
 （`app/schemas/search.py:159`），响应回显实际跑的那条（`app/schemas/search.py:327`、`app/api/search.py:158`）。
-只影响 `mode=hybrid`：keyword/semantic 是单腿，永远走应用侧（`app/search/hybrid.py:746`）。
+只影响 `mode=hybrid`：keyword/semantic 是单腿，永远走应用侧（`app/search/hybrid.py:758`）。
 
 **关键事实（真机实测，改这块前先读）**：
 
@@ -175,14 +177,20 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
   native 折叠后能填满 `top_k`（实测 10/10，evidence 3 条/篇）。因此 A/B 必须同时看**同深度**指标，
   否则 NDCG@10 / recall@10 会惩罚列表短的一侧（`scripts/compare_backends.py` 已按此实现）。
 - **截断按「篇」不按「chunk」**：折叠流里一篇占 `1 + inner_hits` 个 hit，所以 native 走
-  `_truncate_hits(..., by_paper=True)`（`app/search/hybrid.py:920`）按**论文**计数。按位置切片会同时
+  `_truncate_hits(..., by_paper=True)`（`app/search/hybrid.py:850`）按**论文**计数。按位置切片会同时
   犯两个错 —— 切断某一篇的 evidence、并**少给论文**（实测 `top_k=10` 只回 3 篇；修好后 10 篇）。
   单腿模式与 v2 路径仍是「一个 hit = 一个候选」的普通切片。
-- **精排只打分「折叠赢家」**（`_apply_rerank(..., by_paper=True)`，`app/search/hybrid.py:857`）：
-  `inner_hits` 是 evidence 不是候选，若把它们也送进交叉编码器，排序就会取决于 `MAX_EVIDENCE`
-  （一个纯展示设置），工作量还要乘 4（实测 ~100 chunk/查询）。现在只送 `top_k × rerank_candidates` 篇赢家，
-  兄弟在精排后**继承赢家的归一化分**（`_regroup_by_paper`，`app/search/hybrid.py:947`），
-  与不精排时「兄弟继承融合分」同一条规矩。实测延迟从 ~8.5 s 降到 ~4.8 s（`top_k=10`，含精排）。
+- **精排池的粒度是「篇内的 chunk」**（`_rerank_pool`，`app/search/hybrid.py:822`）：native 的过取
+  **不是多取论文**，而是每篇多取 chunk —— 请求仍是 `top_k` 篇（`inner_hits = RERANK_CANDIDATES − 1`），
+  池子 = `top_k` 篇 × 每篇最多 `RERANK_CANDIDATES` 个，总量与 v2 的 `top_k × RERANK_CANDIDATES` 一致。
+  池子大小由 `RERANK_CANDIDATES`（**排序**配置）定，**不由 `MAX_EVIDENCE`（展示配置）定**；
+  超预算的兄弟仍然回传，只是**不打分**。
+  **代价记录**：曾经只把 RRF 赢家送进精排（每篇 1 chunk），A/B 实测 `ndcg@1 −0.10`（CI 不含 0），
+  机制就是「最佳块不是 RRF 最佳块」的论文抬不起来 —— 所以现在按篇展开。
+- **论文分取「该篇最佳 chunk」**（`_rank_by_paper`，`app/search/hybrid.py:972`）：交叉编码器在池子里挑出每篇
+  最好的那块，用它当该篇的代表并据此排序，`score`/`rerank_score` 在**论文层面**做 min-max 归一
+  （v2 是在 chunk 层面归一，两者都是 0..1 相对分，阈值语义不变）；该篇其余 hit 被降级为 evidence
+  并同步分数（`_regroup_by_paper`，`app/search/hybrid.py:877`），与不精排时「兄弟继承融合分」同一条规矩。
 - **`keyword_score` / `semantic_score` 在 native 下恒为 `null`**（T-E2「保简化」决定）：原生只给一个融合 `_score`；
   `retrieval_score` / `rerank_score` / `rerank` 块 / `total` / `candidates` / evidence 规则**全部不变**。
 - **管道是部署态对象**：`paperbox-rrf60` / `paperbox-norm-minmax` 的体在 `app/search/native.py:89` 定义，
@@ -198,15 +206,15 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 4. **论文元数据也来自最佳 chunk**：`title`/`authors`/`year`/`venue`/`doi`/`arxiv_id` 都取 `best`（`search_service.py:245-252`，锁定于 `tests/test_aggregation.py:177`）。
 5. **evidence 选取规则**：先过滤"噪声"（文本 `< MIN_EVIDENCE_CHARS` 或 `section/section_title` 命中 `NOISE_SECTION` 正则，`search_service.py:38`、`:180-185`），优先取非噪声、不足时用剩余项补齐，上限 `MAX_EVIDENCE=3`（`:187-191`）；每条文本截断到 `EVIDENCE_TEXT_LIMIT=500`（`:140`）。`evidence[].section` 优先取 `section_title`（`:232`），`page` 取 `page_start`。
 6. **分数归一化会覆盖 relevance**：`aggregate_papers` 里 `relevance` 用**原始**分算（`:231`），随后 `normalize_scores` 把最高分设为 1.0 并重算 `relevance`（`:260-273`）——响应里的 `relevance` 是归一后口径（阈值 0.9/0.6，`:44-45`）。例外：已有 `rerank_score` 的论文**跳过**归一，直接沿用精排的 0..1 分与由此算出的 `relevance`（`:267-270`）。
-7. **精排降级不报错**：`rerank_texts` 返回 `None` 时按一阶段顺序返回 `top_k*2`，`rerank_score` 保持 `None`，不抛异常（`hybrid.py:885-890`）；API 的 `rerank.model/took_ms` 也据"是否有论文带 `rerank_score`"决定是否为 `null`（`api/search.py:106-111`）。
-8. **`top_k × RERANK_CANDIDATES` 是一阶段候选窗，但日志字段不是**：`_first_stage_k = top_k × RERANK_CANDIDATES`（默认 5，`hybrid.py:801`），hybrid 模式每条腿再乘 `CANDIDATE_MULTIPLIER=5`（`:713`）。而日志里的 `candidates` 恒为 `top_k × CANDIDATE_FACTOR(5)`（`api/search.py:47`、`:144`）且**只用于日志**，未传给检索——`rerank=true` 时它与真实候选池不符。
+7. **精排降级不报错**：`rerank_texts` 返回 `None` 时按一阶段顺序返回 `top_k*2`，`rerank_score` 保持 `None`，不抛异常（`hybrid.py:935-938`）；API 的 `rerank.model/took_ms` 也据"是否有论文带 `rerank_score`"决定是否为 `null`（`api/search.py:106-111`）。
+8. **`top_k × RERANK_CANDIDATES` 是一阶段候选窗，但日志字段不是**：`_first_stage_k = top_k × RERANK_CANDIDATES`（默认 5，`hybrid.py:846`），hybrid 模式每条腿再乘 `CANDIDATE_MULTIPLIER=5`（`:725`）。而日志里的 `candidates` 恒为 `top_k × CANDIDATE_FACTOR(5)`（`api/search.py:47`、`:144`）且**只用于日志**，未传给检索——`rerank=true` 时它与真实候选池不符。
 9. **`_semantic_hits` 的 k 是过取后的值**：`k = fetch_k × SEMANTIC_K_MULTIPLIER(3)`，同时作为 ES `size` 与 `knn.k` 传入（`hybrid.py:703-704`、`:639`），之后截回 `fetch_k`（`:705`）。代码里**没有 `num_candidates` 参数**（Lucene engine 只用 `k` + 可选 `filter`，`hybrid.py:325-328`）。
 10. **空查询短路**：`search_chunks` 在 `strip()` 后为空时返回 `[]`，不报错（`hybrid.py:690-692`）；上层 schema 已用 `min_length=1` + strip 校验挡住（`schemas/search.py:169-185`）。
 11. **别名是唯一读写入口**：`ALIAS`/`INDEX` 直接取配置（`opensearch.py:25-27`），`_search`/`bulk_index_chunks`/`delete_by_paper_id`/`index_stats` 默认都走 `ALIAS`。`is_write_index` 只在迁移的别名切换里设置（`opensearch.py:392`）；`ensure_index` 首次绑别名**不设**该属性（`:97`），单索引下仍可写入。
 12. **`top_k` 有两套边界**：schema 限制 1..50（`schemas/search.py:43-44`），`search_chunks` 只要求 `> 0`（`hybrid.py:688`）；非法 mode 在 schema 与 `search_chunks` 两处各校验一次（`hybrid.py:687-688`）。
 13. **`SearchError` 的 503 映射曾完全失效（2026-09-22 已修，有回归测试）**：`app/api/search.py:89` 捕获 `search_service.SearchError`，而类只定义在 `app/search/hybrid.py:94`——原先 `search_service` 只导入 `ChunkHit`，该 `except` 被触发时会先抛 `AttributeError`（**实测**：`uv run python -c "from app.services import search_service; search_service.SearchError"` → `AttributeError`），于是后端故障返回 **500** 而不是 503。修法：`app/services/search_service.py:28` 一并导入 `SearchError` 并加入 `__all__`；回归 `tests/test_search_api.py`（后端抛错 → 503、`ValueError` → 422、`search_service.SearchError is hybrid.SearchError`）。
 14. ~~**`total` 语义与 docstring 不一致**~~ → **2026-09-30 已修（T-A2）**：原先 `search_papers` 的 docstring 说返回 "chunk candidate pool"，实现却返回 `len(results)`，API 直接当 `total`，于是 `total` = 被 `top_k` 截断后的论文数。现在是两个数：`total` = **本次查询 + 过滤条件下命中的论文数真值**（`hybrid.count_papers`：`size: 0` + `cardinality(paper_id)`，hybrid 模式用 `bool.should` 把关键词腿与 kNN 腿合起来数，否则向量独有命中会被漏掉；聚合在 `precision_threshold=3000` 以内是精确值，超过是 HLL 估计），`candidates` = 喂给论文聚合的 chunk 数。计数是**额外一次往返**（semantic/hybrid 还多一次 embedding），失败只记 warning 并退回候选池，绝不把能用的搜索变成 503（单测 `tests/test_search_total.py`）。
-15. **`by_id` 合并顺序敏感**：先 `keyword_hits` 后 `semantic_hits` 用 `setdefault` 去重（`hybrid.py:720-726`），因此两腿都命中的 chunk 其**基础字段取自 keyword 腿**，语义腿只补 `semantic_score`。
+15. **`by_id` 合并顺序敏感**：先 `keyword_hits` 后 `semantic_hits` 用 `setdefault` 去重（`hybrid.py:732-738`），因此两腿都命中的 chunk 其**基础字段取自 keyword 腿**，语义腿只补 `semantic_score`。
 
 15. **facet 数的是论文、而且与查询无关（2026-09-30，T-A3）**：`facets=true` 时额外一次 `size: 0` 聚合（`hybrid.py:378`），体里**不带 BM25 腿也不带 kNN 腿** —— facet 回答"当前过滤条件下库里有什么"，因此不随 `top_k`/rerank/查询改写变化，也才能与 `GET /api/papers`（读 PG）的等价过滤计数逐桶对上（真机 30 篇语料两侧全等，见 `docs/progress/project.md`）。**每个桶数论文**（`cardinality(paper_id)`）：索引是 chunk 文档，用桶自带的 `doc_count` 会变成"有多少 chunk 提到这个 venue"。桶上限 `FACET_SIZE=50`，`terms` 是 top-N，**超出部分是"没列"不是"没有"**。聚合失败只记 warning，响应 `facets=null`（与 `total` 同一套纪律；服务层用 `{}` 表示"问了但没算出来"，API 层把它转成 `null`，别让它读成"这个库一个 venue 都没有"）。
 
@@ -219,9 +227,9 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 | `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名（`ALIAS`） | `config.py:63`；`opensearch.py:25` |
 | `EMBEDDING_MODEL` | `BAAI/bge-m3` | 文档/查询向量模型标记 | `config.py:76` |
 | `EMBEDDING_DIMENSION` | `1024` | `knn_vector` 维度 | `config.py:77`；`mappings.py:124` |
-| `RERANK_CANDIDATES` | `5` | 一阶段候选窗倍数 `top_k × N` | `config.py:92`；`hybrid.py:801` |
-| `RRF_KEYWORD_WEIGHT` | `1.0` | keyword 腿在 RRF 中的权重（0 即废掉该腿） | `config.py:97`；`hybrid.py:733` |
-| `RRF_SEMANTIC_WEIGHT` | `1.0` | semantic 腿权重 | `config.py:99`；`hybrid.py:733` |
+| `RERANK_CANDIDATES` | `5` | 一阶段候选窗倍数 `top_k × N` | `config.py:92`；`hybrid.py:846` |
+| `RRF_KEYWORD_WEIGHT` | `1.0` | keyword 腿在 RRF 中的权重（0 即废掉该腿） | `config.py:97`；`hybrid.py:745` |
+| `RRF_SEMANTIC_WEIGHT` | `1.0` | semantic 腿权重 | `config.py:99`；`hybrid.py:745` |
 | `SEARCH_BACKEND` | `python` | hybrid 融合后端：`python`（应用侧 RRF）/ `native`（管道 RRF + `collapse`）；请求体 `backend` 可逐次覆盖，只影响 `mode=hybrid` | `config.py:118`；`hybrid.py:694` |
 | `SEARCH_LOG_ENABLED` | `true` | 关掉即不写 `search_queries` | `config.py:129`；`search_log_service.py:121` |
 | `SEARCH_LOG_RESULTS_LIMIT` | `20` | 每行日志最多记多少条论文 | `config.py:130`；`search_log_service.py:138` |
@@ -254,7 +262,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 | `tests/test_search_facets.py` | 18 | facet 聚合：`size:0` 且**不含查询腿**（纯函数断言）、每桶 `cardinality(paper_id)`、`year` 用直方图而非 terms、响应承诺的 facet 键与体里的聚合键一一对应、读数把 `key` 规范成字符串（`year` 的 `key_as_string`）并丢掉 0 论文的桶、`facets=False` 不发聚合、`facets=True` 透传 filters、**聚合抛错只 warning**（`facets={}`）而 `total` 照常、API 三条（默认 `null` / 有桶 / 失败 `null` 且 200） |
 | `tests/test_rrf.py` | 11 | RRF 公式 `1/(61)`、双列表叠加、同顺位一致、空输入、单列表去重、降序与正分、非字符串 id 强转、`k` 改变尺度、`DEFAULT_RRF_K == 60`、非法参数 |
 | `tests/test_aggregation.py` | 16 | 阈值分档、截断（500+3）、论文分 = 组内最大值、排序、`top_k` 限制、evidence ≤ 3 且取最强、evidence 字段形状、空 `paper_id` 跳过、元数据取自最佳 chunk、同分确定性 |
-| `tests/test_native_hybrid.py` | 43 | 原生 hybrid 后端：`pagination_depth` 在 `hybrid` 子句内（顶层键/URL 参数会 400）、两腿形状与 `title^2`、kNN `k` 跟随 depth、默认窗 = `size × CANDIDATE_MULTIPLIER`、filter 挂在子句上、`collapse`/`inner_hits` 形状与 `_source` 裁剪、响应解析（兄弟继承融合分、per-leg 分置 null、赢家不被兄弟重复、缺 id 跳过）、`native_search` 只发一次请求且带 `search_pipeline`、embedding/NotFound/引擎异常 → `SearchError`、`search_chunks` 分派与精排过取窗、单腿模式忽略 backend、telemetry 与 `_resolve_backend` 优先级、`ensure_pipelines` 幂等/漂移重写/dry-run、管道 `rank_constant == DEFAULT_RRF_K`、`DEFAULT_INNER_HITS == MAX_EVIDENCE`、请求归一与响应字段；**按篇截断**（`top_k` 数篇不数 chunk）、兄弟标 `primary=False`、**精排只重排赢家**且兄弟继承赢家归一化分、**`inner_hits` 调大不改变论文顺序** |
+| `tests/test_native_hybrid.py` | 44 | 原生 hybrid 后端：`pagination_depth` 在 `hybrid` 子句内（顶层键/URL 参数会 400）、两腿形状与 `title^2`、kNN `k` 跟随 depth、默认窗 = `size × CANDIDATE_MULTIPLIER`、filter 挂在子句上、`collapse`/`inner_hits` 形状与 `_source` 裁剪、响应解析（兄弟继承融合分、per-leg 分置 null、赢家不被兄弟重复、缺 id 跳过）、`native_search` 只发一次请求且带 `search_pipeline`、embedding/NotFound/引擎异常 → `SearchError`、`search_chunks` 分派与精排过取窗、单腿模式忽略 backend、telemetry 与 `_resolve_backend` 优先级、`ensure_pipelines` 幂等/漂移重写/dry-run、管道 `rank_constant == DEFAULT_RRF_K`、`DEFAULT_INNER_HITS == MAX_EVIDENCE`、请求归一与响应字段；**按篇截断**（`top_k` 数篇不数 chunk）、兄弟标 `primary=False`、**精排池按篇内 chunk 展开且每篇不超过 `RERANK_CANDIDATES`**、论文分取该篇最佳 chunk、**超出池预算的兄弟只作 evidence 不打分**（证据设置不能改变排序）、过取契约（`size` 保持 `top_k`、`inner_hits` 随精排变化） |
 | `tests/test_index_migration.py` | 18 | CJK 分析器落在 `title`/`text`/`section_title`、keyword/integer/`knn_vector` 未被改动、`knn: true` 等 settings、`_reindex` body 无 script/无 `_source`（向量随文档搬）、别名切换 body 含 `is_write_index`、计数不等的安全闸、假客户端下 migrate 的 5 条路径（0/1/2 退出码、跳过拷贝、保留旧索引）、CLI 默认与覆盖 |
 | `tests/test_search_log.py` | 19 | `serialize_results`：rank 从 1 起、按 limit 截断、非正 limit 不记录、跳过非 dict、字段集 == `RESULT_FIELDS`、`evidence_count` 三种来源、`retrieval_score` 回退到 `score`；`log_search` 在 DB 故障/异常下不抛且 rollback、关闭时不写、落库行内容与 `took_ms` 取整、按配置截断结果；`serialize_search_log` 的 datetime/None 透传 |
 | `tests/test_search_api.py` | 3 | `POST /api/search` 的错误映射：后端抛 `SearchError` → 503 `search backend unavailable`（不是 500）、`ValueError` → 422、`search_service.SearchError` 必须存在（2026-09-22 回归） |
