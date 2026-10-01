@@ -4,6 +4,8 @@
 无前端、无 Agent 逻辑，只提供事实与检索能力，供 Hermes 主 Agent 通过 HTTP 调用
 （架构与需求见 `.hermes/plans/2026-09-10_215600-paperbox-master-plan.md`，实现规范见 `docs/architecture/MVP-SPEC.md`）。
 
+当前版本 **0.2.0**；版本变更历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+
 ```
 Hermes / 其他调用方
         │  HTTP + Bearer PAPER_API_KEY
