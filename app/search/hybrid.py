@@ -706,9 +706,21 @@ def search_chunks(
     elif resolved_backend == "native":
         # Engine-side fusion: the pipeline does the RRF and ``collapse`` returns
         # papers (winner + inner_hits), so there is no client-side merge here.
-        from app.search.native import native_search
+        from app.search.native import DEFAULT_INNER_HITS, native_search
 
-        ordered = native_search(query, fetch_k, filters, client=client, index=index)
+        # Native over-fetches *inside* a paper, not by asking for more papers.
+        # With reranking each paper needs enough chunks for its best one to reach
+        # the cross-encoder: one candidate per paper (the RRF winner) cannot move
+        # a paper whose winner is not its best chunk, which measured as
+        # ``ndcg@1 -0.10`` against the Python path. The totals stay comparable --
+        # ``top_k`` papers x ``RERANK_CANDIDATES`` chunks = the same cross-encoder
+        # budget v2 spends on ``top_k x RERANK_CANDIDATES`` chunks.
+        inner_hits = DEFAULT_INNER_HITS
+        if rerank:
+            inner_hits = max(DEFAULT_INNER_HITS, _rerank_chunks_per_paper() - 1)
+        ordered = native_search(
+            query, top_k, filters, client=client, index=index, inner_hits=inner_hits
+        )
     else:
         candidates = fetch_k * CANDIDATE_MULTIPLIER
         keyword_hits = _keyword_hits(
@@ -794,6 +806,39 @@ def _resolve_backend(backend: str | None = None) -> str:
     return raw
 
 
+def _rerank_chunks_per_paper() -> int:
+    """Chunks per paper the *ranking* side is willing to pay for.
+
+    Reuses ``RERANK_CANDIDATES`` on purpose: the Python path spends
+    ``top_k x RERANK_CANDIDATES`` cross-encoder calls, and the native path spends
+    the same budget as ``top_k`` papers x this many chunks. Deliberately **not**
+    ``MAX_EVIDENCE``: how much evidence the UI shows must not be able to change
+    the ranking (an ``inner_hits`` count that doubles as a pool size is exactly
+    the coupling this replaces).
+    """
+    return max(1, int(settings.rerank_candidates or 1))
+
+
+def _rerank_pool(hits: list[ChunkHit]) -> list[ChunkHit]:
+    """Chunks the cross-encoder scores on the native path.
+
+    Every paper contributes its collapsed winner plus as many of its siblings as
+    :func:`_rerank_chunks_per_paper` allows, so a paper can surface a better
+    chunk than the one RRF picked. Siblings beyond the cap stay in the result as
+    evidence but are never scored; papers whose chunks did not fit the pool are
+    handled by :func:`_apply_rerank` (they keep their first-stage standing).
+    """
+    per_paper = _rerank_chunks_per_paper()
+    used: dict[str, int] = {}
+    pool: list[ChunkHit] = []
+    for hit in hits:
+        if used.get(hit.paper_id, 0) >= per_paper:
+            continue
+        used[hit.paper_id] = used.get(hit.paper_id, 0) + 1
+        pool.append(hit)
+    return pool
+
+
 def _first_stage_k(top_k: int, rerank: bool) -> int:
     """Candidate window of the first stage (wider when reranking)."""
     if not rerank:
@@ -839,17 +884,19 @@ def _regroup_by_paper(
     ranked list (the same rule the non-reranking native path applies when
     siblings inherit the fused score).
     """
-    siblings: dict[str, list[ChunkHit]] = {}
+    others: dict[str, list[ChunkHit]] = {}
     for hit in hits:
-        if not hit.primary:
-            siblings.setdefault(hit.paper_id, []).append(hit)
+        others.setdefault(hit.paper_id, []).append(hit)
     out: list[ChunkHit] = []
     for winner in winners:
         out.append(winner)
-        for sibling in siblings.get(winner.paper_id, ()):
+        for sibling in others.get(winner.paper_id, ()):
+            if sibling is winner:
+                continue
             sibling.retrieval_score = winner.retrieval_score
             sibling.rerank_score = winner.rerank_score
             sibling.score = winner.score
+            sibling.primary = False
             out.append(sibling)
     return out
 
@@ -865,17 +912,18 @@ def _apply_rerank(
     normalized cross-encoder score so the existing 0..1 relevance thresholds
     keep working, and ``rerank_score`` carries that same normalized value.
 
-    With ``by_paper`` (native backend) **only the collapsed winners are
-    rescored**. The ``inner_hits`` siblings are evidence of a paper that is
-    already in the result; letting them into the pool would make the ranking
-    depend on ``MAX_EVIDENCE`` (an evidence setting) -- and measured 4x the
-    cross-encoder work per query. Their scores are copied from their winner
-    afterwards, so evidence and ranking stay on one scale.
+    With ``by_paper`` (native backend) the unit is the *paper*: the pool holds
+    each collapsed paper's chunks (winner plus up to ``RERANK_CANDIDATES`` in
+    total, see :func:`_rerank_pool`), the cross-encoder picks that paper's best
+    chunk, and the paper is ranked by it -- which is what the Python path gets
+    from re-ranking several chunks per paper. The chosen chunk becomes the
+    paper's representative, every other hit of that paper is demoted to evidence
+    and copied the paper's scores, so evidence and ranking stay on one scale.
     """
     if not ordered:
         return ordered, None
 
-    pool = [hit for hit in ordered if hit.primary] if by_paper else list(ordered)
+    pool = _rerank_pool(ordered) if by_paper else list(ordered)
     if not pool:
         return ordered, None
 
@@ -906,6 +954,9 @@ def _apply_rerank(
         key=lambda hit: (-float(hit.rerank_score or 0.0), order[id(hit)]),
     )
 
+    if by_paper:
+        return _rank_by_paper(ordered, ranked, top_k), took_ms
+
     # Hits the service did not score keep their first-stage standing, after the
     # reranked ones, so nothing silently disappears from the window.
     seen = {id(hit) for hit in ranked}
@@ -915,9 +966,49 @@ def _apply_rerank(
             hit.retrieval_score = float(hit.score)
 
     _normalize_rerank_scores(ranked)
-    if by_paper:
-        return _truncate_hits(_regroup_by_paper(ranked, ordered), top_k, by_paper=True), took_ms
     return ranked[: top_k * 2], took_ms
+
+
+def _rank_by_paper(
+    ordered: list[ChunkHit], ranked: list[ChunkHit], top_k: int
+) -> list[ChunkHit]:
+    """Fold the rescored chunks back into a ranked list of papers.
+
+    ``ranked`` is the cross-encoder order over the pool (several chunks per
+    paper). Each paper is represented by its best-scoring chunk, papers are
+    ordered by that chunk's score, and the *paper-level* scores are min-max
+    normalized -- the same 0..1 scale ``score``/``rerank_score`` carry on the
+    Python path, just normalized over papers instead of over chunks. Papers whose
+    chunks did not fit the pool keep their first-stage standing at the end.
+    """
+    best: dict[str, ChunkHit] = {}
+    for hit in ranked:
+        current = best.get(hit.paper_id)
+        if current is None or float(hit.rerank_score or 0.0) > float(
+            current.rerank_score or 0.0
+        ):
+            best[hit.paper_id] = hit
+
+    papers: list[ChunkHit] = []
+    seen: set[str] = set()
+    for hit in ranked:
+        # Only the paper's best chunk may introduce it, so the surviving order is
+        # the cross-encoder order over *papers*.
+        if hit.paper_id in seen or best.get(hit.paper_id) is not hit:
+            continue
+        seen.add(hit.paper_id)
+        papers.append(hit)
+    for hit in ordered:
+        if hit.primary and hit.paper_id not in seen:
+            seen.add(hit.paper_id)
+            papers.append(hit)
+
+    for hit in papers:
+        if hit.retrieval_score is None:
+            hit.retrieval_score = float(hit.score)
+    _normalize_rerank_scores(papers)
+
+    return _truncate_hits(_regroup_by_paper(papers, ordered), top_k, by_paper=True)
 
 
 def _normalize_rerank_scores(hits: list[ChunkHit]) -> None:

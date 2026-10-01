@@ -337,18 +337,31 @@ def test_search_chunks_dispatches_to_the_native_path(monkeypatch) -> None:
     assert seen["index"] == hybrid.ALIAS
 
 
-def test_native_over_fetches_the_same_window_when_reranking(monkeypatch) -> None:
+def test_native_over_fetches_inside_a_paper_when_reranking(monkeypatch) -> None:
+    """Native spells "over-fetch" as more chunks per paper, not more papers.
+
+    The reranking budget has to be reachable *inside* each collapsed paper: the
+    request asks for ``RERANK_CANDIDATES`` chunks per paper while the paper count
+    stays ``top_k``, so the cross-encoder sees the same number of candidates the
+    Python path gives it (``top_k x RERANK_CANDIDATES``).
+    """
     seen: dict = {}
 
     def fake_native(query, size, filters, **kwargs):
-        seen["size"] = size
+        seen.update({"size": size, **kwargs})
         return []
 
     monkeypatch.setattr(native, "native_search", fake_native)
 
+    per_paper = hybrid._rerank_chunks_per_paper()
     hybrid.search_chunks("q", "hybrid", 10, rerank=True, backend="native")
+    # winner + (per_paper - 1) siblings, never fewer than the evidence budget
+    assert seen["size"] == 10
+    assert seen["inner_hits"] == max(native.DEFAULT_INNER_HITS, per_paper - 1)
 
-    assert seen["size"] == 10 * max(1, int(hybrid.settings.rerank_candidates))
+    hybrid.search_chunks("q", "hybrid", 10, backend="native")
+    assert seen["size"] == 10
+    assert seen["inner_hits"] == native.DEFAULT_INNER_HITS
 
 
 def test_the_single_leg_modes_ignore_the_backend(monkeypatch) -> None:
@@ -453,8 +466,8 @@ def test_the_native_path_keeps_evidence_without_reranking(monkeypatch) -> None:
     assert [hit.paper_id for hit in hits] == ["p1", "p1", "p1", "p2", "p2"]
 
 
-def test_reranking_only_rescores_the_collapsed_winners(monkeypatch) -> None:
-    """``inner_hits`` is an evidence setting: it must not widen the rerank pool."""
+def test_the_rerank_pool_lets_a_paper_surface_a_better_chunk(monkeypatch) -> None:
+    """Scoring only the RRF winner measured as ``ndcg@1 -0.10`` vs the Python path."""
     sent: list[list[str]] = []
 
     def fake_rerank(query, texts, top_n=None):
@@ -469,10 +482,36 @@ def test_reranking_only_rescores_the_collapsed_winners(monkeypatch) -> None:
 
     hits = hybrid.search_chunks("q", "hybrid", 10, rerank=True, backend="native")
 
-    assert sent == [["text of c1", "text of c2"]]
+    assert sent == [
+        ["text of c1", "text of c1a", "text of c1b", "text of c2", "text of c2a"]
+    ]
     # Each paper stays contiguous: its winner first, its siblings behind it.
     assert [hit.chunk_id for hit in hits] == ["c1", "c1a", "c1b", "c2", "c2a"]
     assert all(hit.rerank_score is not None for hit in hits)
+
+
+def test_the_rerank_pool_is_capped_per_paper(monkeypatch) -> None:
+    """``RERANK_CANDIDATES`` chunks per paper, however many siblings came back."""
+    per_paper = hybrid._rerank_chunks_per_paper()
+    stream = native.parse_native_response(
+        make_response(
+            ("c1", "p1", 0.03, [(f"c1s{n}", 9.0) for n in range(per_paper + 5)])
+        )
+    )
+    sent: list[list[str]] = []
+
+    def fake_rerank(query, texts, top_n=None):
+        sent.append(list(texts))
+        return [RerankScore(index=i, score=-float(i)) for i in range(len(texts))]
+
+    monkeypatch.setattr(native, "native_search", lambda *a, **k: stream)
+    monkeypatch.setattr(hybrid.rerank_service, "rerank_texts", fake_rerank)
+
+    hybrid.search_chunks("q", "hybrid", 10, rerank=True, backend="native")
+
+    assert len(sent[0]) == per_paper
+    assert sent[0][0] == "text of c1"  # the winner is scored first
+    assert sent[0][-1] == f"text of c1s{per_paper - 2}"
 
 
 def test_siblings_inherit_their_winners_rerank_score(monkeypatch) -> None:
@@ -498,8 +537,13 @@ def test_siblings_inherit_their_winners_rerank_score(monkeypatch) -> None:
         assert hit.retrieval_score == pytest.approx(winner.retrieval_score)
 
 
-def test_the_evidence_budget_does_not_change_the_native_ranking(monkeypatch) -> None:
-    """Turning ``MAX_EVIDENCE``/``inner_hits`` up must not reorder the papers."""
+def test_extra_evidence_beyond_the_rerank_budget_is_not_scored(monkeypatch) -> None:
+    """Evidence richness must not reach the ranking: same pool, same order.
+
+    Siblings past the rerank budget are carried as evidence only, so raising what
+    the UI asks for cannot move a paper.
+    """
+    per_paper = hybrid._rerank_chunks_per_paper()
     sent: list[list[str]] = []
 
     def fake_rerank(query, texts, top_n=None):
@@ -512,7 +556,7 @@ def test_the_evidence_budget_does_not_change_the_native_ranking(monkeypatch) -> 
     monkeypatch.setattr(hybrid.rerank_service, "rerank_texts", fake_rerank)
 
     orders: list[list[str]] = []
-    for inner in (0, 3):
+    for inner in (per_paper - 1, per_paper + 6):
         stream = native.parse_native_response(
             make_response(
                 ("c1", "p1", 0.03, [(f"c1s{n}", 13.0) for n in range(inner)]),
@@ -524,7 +568,8 @@ def test_the_evidence_budget_does_not_change_the_native_ranking(monkeypatch) -> 
         hits = hybrid.search_chunks("q", "hybrid", 10, rerank=True, backend="native")
         orders.append([hit.paper_id for hit in hits if hit.primary])
 
-    assert sent[0] == sent[1] == ["text of c1", "text of c2"]
+    assert sent[0] == sent[1]
+    assert len(sent[0]) == 2 * per_paper  # both papers filled their budget
     assert orders[0] == orders[1] == ["p1", "p2"]
 
 
