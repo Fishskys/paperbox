@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 状态 | 依据 commit `54048a3` 的工作树实测（2026-09-22） |
-| 关键文件 | `app/eval/metrics.py`、`scripts/eval.py`、`scripts/build_eval_set.py`、`scripts/build_arxiv_ids.py`、`scripts/healthcheck.py`、`scripts/acceptance.py`、`scripts/reindex.py`、`scripts/purge_deleted.py`、`scripts/bulk_ingest.py`、`scripts/bulk_ingest_dir.py`、`scripts/create_index.py`、`evals/`、`infra/docker-compose.yml`、`docker-compose.yml`、`Dockerfile`、`.env.example`、`logs/` |
+| 关键文件 | `app/eval/metrics.py`、`scripts/eval.py`、`scripts/compare_backends.py`、`scripts/ensure_search_pipelines.py`、`scripts/build_eval_set.py`、`scripts/build_arxiv_ids.py`、`scripts/healthcheck.py`、`scripts/acceptance.py`、`scripts/reindex.py`、`scripts/purge_deleted.py`、`scripts/bulk_ingest.py`、`scripts/bulk_ingest_dir.py`、`scripts/create_index.py`、`evals/`、`infra/docker-compose.yml`、`docker-compose.yml`、`Dockerfile`、`.env.example`、`logs/` |
 | 相关文档 | `AGENTS.md` §3.1/§3.2/§3.3/§5/§6、`README.md` §3.1/§6/§7、`docs/progress/project.md` §10–§14、`evals/README.md`、`docs/architecture/00-overview.md` |
 
 ## 1. 职责边界（做什么 / 不做什么）
@@ -337,3 +337,52 @@ en 的权重曲线（`l2 + arithmetic_mean`，`[词法, 语义]`）：
   （`QUERY_REWRITE_*` 键不存在，只有 `PAPER_API_KEY`）。
 - **`paper_repr` 是合成物**：它比真实 chunk 索引好检索，任何来自 SRW 的绝对数字都不进 progress/验收。
 - **不支持 `size` 查询参数**（要放 body）、**等待时间不可观测**（只有计数）。
+
+---
+
+## 10. 后端 A/B：native vs python（M5，2026-10-01）
+
+**为什么要专门一套口子**：`SEARCH_BACKEND` 换了实现，但两条路径的**出口是同一个** `list[ChunkHit]`，
+所以可以用同一批标签、同一台服务、逐请求切换后端来对撞 —— 这比"换开关跑两轮"干净，因为机器状态、
+语料、模型、时间窗口全都相同，只有后端不同。
+
+**怎么跑**（两步，第二步才给结论）：
+
+```bash
+uv run python scripts/eval.py --modes hybrid --rerank both --backend python,native \
+    --out evals/report-m5-backend-ab.json --markdown evals/report-m5-backend-ab.md
+uv run python scripts/compare_backends.py --report evals/report-m5-backend-ab.json \
+    --out evals/report-m5-ab-compare.json --markdown evals/report-m5-ab-compare.md
+```
+
+- `scripts/eval.py:407` 的 `--backend` 接受 `default`（**不发该字段**，测部署默认）或逗号分隔的后端名；
+  `parse_backends`（`:167`）校验，非法值直接拒。后端名会进 `group`（`mode|rerank|backend`），
+  所以**一份报告里同时躺着两条路径的逐查询结果**（`per_query[].group`）。
+- `scripts/compare_backends.py`（626 行）做**配对 bootstrap**：同一 `query_id` 的两条记录配成对，
+  重采样 10000 次出 95% CI（`bootstrap_ci` `:133`），判定词是 `win` / `loss` / `indistinguishable`
+  （`verdict_for` `:168`：**CI 跨 0 一律算无法区分**，不许把"看起来高"当赢）。
+  方向固定为 **候选 − 基线**（`BASELINE_BACKEND="python"` `:67`），报告头部会写明谁减谁。
+- **同深度对比**（`common_depth_metrics` `:190`）：每条查询取 `K* = min(两列表长)` 再算 NDCG/recall。
+  这条**必须有**：native 折叠后能填满 `top_k`（实测 9.7 篇），python 只聚合命中的 chunk（实测 4.3 篇），
+  不同长度下 `ndcg@10`/`recall@10` 天然偏向列表长的一侧。
+
+**判据（M5 验收口径，用户 2026-10-01 批准）**：不再硬卡 `≤0.01`，而是
+「**CI 不跨 0 且 |Δ| ≥ 0.01**」；三条主指标同列（`ndcg@10` + `mrr` + `hit_rate@1`，`:64`），
+延迟看 p50/p95 不比基线慢 20% 以上；中文组 n=10（一条查询翻盘即 0.1）只作方向性参考、不作判据。
+
+**结果（60 查询 × 2 后端 = 120 请求，0 失败）**：`hybrid|off` 两条路径**逐位相同**
+（同深度 Δ 恰好 `+0.0000`、CI 宽度 0）；`hybrid|on` 在修掉精排池问题后 `ndcg@1/3/5`、`mrr`、
+`hit_rate@1`、同深度 `ndcg@K*` 全部 CI 跨 0，`ndcg@10 +0.0231`（CI `[+0.0042, +0.0431]`）与
+`recall@10 +0.0944`、`recall@5 +0.0444` 为 native 胜出，`p50` 6640 → 5458 ms（`−17.8%`）。
+**结论：门槛级无回退，`SEARCH_BACKEND` 定档 `native`**（`python` 保留为基线与降级路径）。
+数字与修前/修后对照见 `docs/progress/search-native.md` §8.9–§8.11，契约见 `AGENTS.md` §3.15。
+
+**工具自身的坑（改它之前先看）**：
+
+- **分组键必须从 group 名里拆 backend**：`--backend a,b` 时 eval 把后端名拼进 `group`，整组名当键分组
+  会把两个后端分到两组、配对全空（已修）。
+- **CI 跨 0 只能说"当前样本量下无法区分"**，不能写成"略好/略差"（表述已在工具里钉死）。
+- **`PRIMARY_METRICS` 是判定的唯一入口**，改判定规则改它 + `decide()`（`:451`），别在下游脚本里另起一套。
+
+**缺口**：中文组样本量不足以做门槛判定（唯一真缺口）；T-D6 LLM-as-a-Judge 仍缺 `QUERY_REWRITE_*` 凭据，
+它审计的是**标签**不是系统，两臂共用同批标签时系统性偏差在配平比较中抵消，所以不影响本判定。

@@ -643,10 +643,25 @@ def test_an_unknown_backend_is_a_validation_error() -> None:
 
 
 def test_the_response_reports_the_backend_it_used() -> None:
-    assert SearchResponse(query="q", mode="hybrid", total=0, candidates=0, took_ms=1.0).backend == "python"
+    """The response echoes the backend, defaulting to the deployed one.
+
+    Pinned to ``DEFAULT_BACKEND`` rather than a literal: when the default moved
+    from ``python`` to ``native`` (2026-10-01 定档) this assertion was the only
+    one in the suite that had to change.
+    """
+    assert (
+        SearchResponse(query="q", mode="hybrid", total=0, candidates=0, took_ms=1.0).backend
+        == native.DEFAULT_BACKEND
+    )
     assert (
         SearchResponse(
             query="q", mode="hybrid", total=0, candidates=0, took_ms=1.0, backend="native"
         ).backend
         == "native"
+    )
+    assert (
+        SearchResponse(
+            query="q", mode="hybrid", total=0, candidates=0, took_ms=1.0, backend="python"
+        ).backend
+        == "python"
     )

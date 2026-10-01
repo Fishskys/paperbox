@@ -69,12 +69,13 @@ from app.services.embedding_service import EmbeddingError, embed_text
 
 logger = get_logger(__name__)
 
-#: Retrieval backends ``POST /api/search`` understands. ``python`` is the
-#: deployed default (two legs + client-side RRF); ``native`` is this module.
+#: Retrieval backends ``POST /api/search`` understands. ``native`` (this module)
+#: is the deployed default since M5; ``python`` (two legs + client-side RRF) is
+#: kept as the A/B baseline and the fallback.
 #: The accepted names live in ``app.core.config`` so the environment variable,
 #: the request field and this module cannot drift apart.
 BACKENDS: tuple[str, ...] = tuple(sorted(SEARCH_BACKENDS))
-DEFAULT_BACKEND = "python"
+DEFAULT_BACKEND = "native"
 
 #: Search pipeline that fuses the two legs with RRF (``rank_constant`` 60, the
 #: twin of ``ranking.DEFAULT_RRF_K``).
