@@ -170,13 +170,13 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:164-165, 396-398` |
 | **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:62` |
 | `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md` §3.1 |
-| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:135-142` |
-| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:124-125` |
+| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:139-146` |
+| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:128-129` |
 | `Dockerfile` 的监听参数 | CMD 用 `sh -c exec` 展开 `PAPER_API_HOST/PORT`，此前写死导致 compose 传参**被静默忽略** | `Dockerfile:31-33`、`docs/progress/project.md:509` |
 | 评测脚本不硬编码 WSL | `_docker_argv` 按 `PAPERBOX_DOCKER_PREFIX` → `docker` → `wsl -e docker` 选择，Linux 上可用 | `build_eval_set.py:26-43`、`docs/progress/project.md:510` |
 | `--resume` 的键是**相对路径** | 报告里 `relative`（或退回 `path`）；`status=skipped` 的行不算已完成 | `bulk_ingest_dir.py:224-238` |
 | 429 以服务端 `Retry-After` 为准 | 有该头就用它（封顶 60s），没有才指数退避 + 25% 抖动 | `bulk_ingest_dir.py:180-208` |
-| 精排超时会**静默降级** | `RERANK_TIMEOUT` 默认 10 秒撑不住多语言精排，表现为“能搜到但没重排”（`rerank.model=null`） | `docs/progress/project.md:468-472`、`.env.example:55-60` |
+| 精排超时会**静默降级** | `RERANK_TIMEOUT` 默认 10 秒撑不住慢档精排（jina 0.276 s/候选，`top_k=10` ≈14s），表现为“能搜到但没重排”（`rerank.model=null`）；现役 int8 档只要 ≈3.2s，但队列单线程时等待由队列决定 | `docs/progress/project.md:468-472`、`.env.example:64-70` |
 | `purge_deleted` 只清索引与对象 | `paper_chunks` 行**故意保留**（软删语义），且只处理 `deleted_at` 非空的行 | `purge_deleted.py:13-14, 37-39` |
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
@@ -191,11 +191,11 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `OPENSEARCH_URL` / `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `http://127.0.0.1:9200` / `paper_chunks_v3` / `paper_chunks_current` | 索引与别名（读写走别名） | `.env.example:16-18` |
 | `MINIO_ENDPOINT` / `MINIO_BUCKET` | `127.0.0.1:9000` / `paperbox` | 原件存储 | `.env.example:21-25` |
 | `EMBEDDING_URL` / `EMBEDDING_BATCH_SIZE` | `http://127.0.0.1:8090` / `16` | 向量服务；批量必须与容器 `MAX_BATCH` 一致 | `.env.example:28-32` |
-| `RERANK_ENABLED` / `RERANK_MODEL` / `RERANK_MAX_BATCH` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `Xenova/ms-marco-MiniLM-L-6-v2` / `16` / `10` / `5` | 精排开关、模型、限批、超时、候选倍数 | `.env.example:41-61` |
-| `RRF_KEYWORD_WEIGHT` / `RRF_SEMANTIC_WEIGHT` | `1.0` / `1.0` | RRF 融合权重（sweep 结论：保留等权） | `.env.example:64-65`、`docs/progress/project.md:347-349` |
-| `QUERY_REWRITE_*` | `false` / 空 / `512` / `300` / `10` | 服务端查询改写（含 CJK 才改写） | `.env.example:69-79` |
-| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `true` / `20` | 检索日志（评测调用同样落库） | `.env.example:86-87`、`docs/progress/project.md:283` |
-| `INGEST_MAX_FILE_MB` / `INGEST_LOCAL_ROOTS` | `100` / 空（**`/ingest/dir` 关闭，404**） | 上传大小上限（`bulk_ingest_dir.py` 客户端预筛也读它）；目录导入白名单，仅 PDF 与 app 同机时可用 | `.env.example:91, 99-102` |
+| `RERANK_ENABLED` / `RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8` / `model.onnx` / `4` / `10`（本机 `.env`=60）/ `5` | 精排开关、模型与 ONNX 文件、限批、超时、候选倍数（换档不用改代码，见 06 篇 §6） | `.env.example:45-71` |
+| `RRF_KEYWORD_WEIGHT` / `RRF_SEMANTIC_WEIGHT` | `1.0` / `1.0` | RRF 融合权重（sweep 结论：保留等权） | `.env.example:68-69`、`docs/progress/project.md:347-349` |
+| `QUERY_REWRITE_*` | `false` / 空 / `512` / `300` / `10` | 服务端查询改写（含 CJK 才改写） | `.env.example:73-83` |
+| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `true` / `20` | 检索日志（评测调用同样落库） | `.env.example:90-91`、`docs/progress/project.md:283` |
+| `INGEST_MAX_FILE_MB` / `INGEST_LOCAL_ROOTS` | `100` / 空（**`/ingest/dir` 关闭，404**） | 上传大小上限（`bulk_ingest_dir.py` 客户端预筛也读它）；目录导入白名单，仅 PDF 与 app 同机时可用 | `.env.example:95, 99-102` |
 
 **容器侧（`infra/.env`，只被 compose 插值读取）**
 
@@ -207,7 +207,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `EMBEDDING_MODELS_DIR` | `./data/embedding-models` | 模型缓存卷（`FASTEMBED_CACHE_PATH=/models`） | `infra/docker-compose.yml:113, 90` |
 | `PAPERBOX_BIND_IP` | `0.0.0.0` | 依赖端口绑定地址；服务器可设 `127.0.0.1` | `infra/docker-compose.yml:25, 52, 70-71, 102` |
 | `POSTGRES_PASSWORD` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | 必填 | 凭据 | `infra/.env.example:7-9` |
-| `EMBEDDING_MODEL` / `RERANK_MODEL` / `RERANK_MAX_BATCH` / `ORT_THREADS` / `MAX_BATCH` | 见文件 | 模型与资源（本机 9GB WSL 实测安全值） | `infra/.env.example:25-34` |
+| `EMBEDDING_MODEL` / `RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` / `ORT_THREADS` / `MAX_BATCH` | 见文件 | 模型与资源（本机 9GB WSL 实测安全值） | `infra/.env.example:25-43` |
 | `OPENSEARCH_ADMIN_PASSWORD` | `ChangeMe-Initial-Admin-2026!` | 安全插件关闭时**不参与校验**，仅防明文进仓库 | `infra/docker-compose.yml:46` |
 
 **脚本级环境变量**
