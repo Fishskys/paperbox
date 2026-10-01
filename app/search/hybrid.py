@@ -14,6 +14,13 @@ Three modes are supported:
     a weight of 0 disables that leg). This is the default mode of
     ``POST /api/search``.
 
+``SEARCH_BACKEND=native`` (plan §7, M5) swaps *that* fusion for the engine's own
+    one: a single ``hybrid`` request whose legs are fused by the
+    ``paperbox-rrf60`` search pipeline and whose hits are collapsed to papers by
+    ``collapse(paper_id)`` -- see ``app/search/native.py``. Only ``mode=hybrid``
+    changes, and it returns the same ``ChunkHit`` stream, so the reranking,
+    aggregation and serialisation below are shared by both backends.
+
 ``rerank=True`` turns retrieval into two stages for every mode: the first stage
 over-fetches ``top_k * RERANK_CANDIDATES`` candidates, a cross-encoder scores
 them (``app.services.rerank_service``) and the survivors are truncated to
@@ -124,6 +131,12 @@ class ChunkHit:
     retrieval_score: float | None = None
     #: Normalized cross-encoder score; ``None`` when reranking did not happen.
     rerank_score: float | None = None
+    #: ``False`` for the sibling chunks the native backend attaches as
+    #: ``inner_hits``: they are *evidence* of an already selected paper, never
+    #: candidates of their own, so they must not widen the reranking pool nor be
+    #: counted when the result is truncated back to ``top_k`` (see
+    #: :func:`_truncate_hits`). Every other path leaves this ``True``.
+    primary: bool = True
 
     @property
     def page(self) -> int | None:
@@ -557,7 +570,7 @@ def rank_hits(response: Mapping[str, Any]) -> list[tuple[str, float, dict[str, A
 
 
 def _hit_from_source(
-    chunk_id: str, source: Mapping[str, Any], *, score: float
+    chunk_id: str, source: Mapping[str, Any], *, score: float, primary: bool = True
 ) -> ChunkHit:
     return ChunkHit(
         chunk_id=chunk_id,
@@ -582,6 +595,7 @@ def _hit_from_source(
         issue=source.get("issue"),
         pages=source.get("pages"),
         publication_date=source.get("publication_date"),
+        primary=primary,
     )
 
 
@@ -645,6 +659,7 @@ def search_chunks(
     rrf_k: int = DEFAULT_RRF_K,
     rerank: bool = False,
     telemetry: dict[str, Any] | None = None,
+    backend: str | None = None,
 ) -> list[ChunkHit]:
     """Retrieve chunks for ``query`` with the requested retrieval mode.
 
@@ -676,6 +691,7 @@ def search_chunks(
     if not query:
         return []
 
+    resolved_backend = _resolve_backend(backend)
     fetch_k = _first_stage_k(top_k, rerank)
 
     if normalized_mode == "keyword":
@@ -687,6 +703,12 @@ def search_chunks(
         k = fetch_k * SEMANTIC_K_MULTIPLIER
         hits = _semantic_hits(query, k, filters, client=client, index=index)
         ordered = sorted(hits, key=lambda hit: hit.score, reverse=True)[:fetch_k]
+    elif resolved_backend == "native":
+        # Engine-side fusion: the pipeline does the RRF and ``collapse`` returns
+        # papers (winner + inner_hits), so there is no client-side merge here.
+        from app.search.native import native_search
+
+        ordered = native_search(query, fetch_k, filters, client=client, index=index)
     else:
         candidates = fetch_k * CANDIDATE_MULTIPLIER
         keyword_hits = _keyword_hits(
@@ -718,16 +740,26 @@ def search_chunks(
             hit.score = score
             ordered.append(hit)
 
+    # The native backend returns whole papers -- a collapsed winner plus its
+    # ``inner_hits`` siblings -- so both truncations below count *papers*; on the
+    # Python path one hit is one candidate and the limit counts chunks.
+    by_paper = normalized_mode == "hybrid" and resolved_backend == "native"
+
     rerank_took_ms: int | None = None
     if rerank:
-        ordered, rerank_took_ms = _apply_rerank(query, ordered, top_k)
+        ordered, rerank_took_ms = _apply_rerank(
+            query, ordered, top_k, by_paper=by_paper
+        )
     elif len(ordered) > top_k:
-        ordered = ordered[:top_k]
+        ordered = _truncate_hits(ordered, top_k, by_paper=by_paper)
 
     if telemetry is not None:
         telemetry["rerank_took_ms"] = rerank_took_ms
         telemetry["reranked"] = rerank_took_ms is not None
         telemetry["candidates"] = len(ordered)
+        # Which retriever actually ran: only ``hybrid`` has a backend choice, the
+        # single-leg modes always use the Python path.
+        telemetry["backend"] = resolved_backend if normalized_mode == "hybrid" else "python"
 
     for position, hit in enumerate(ordered):
         hit.rank = position
@@ -741,10 +773,25 @@ def search_chunks(
                 "has_filters": bool(filters),
                 "rerank": bool(rerank),
                 "rerank_took_ms": rerank_took_ms,
+                "backend": resolved_backend,
             }
         },
     )
     return ordered
+
+
+def _resolve_backend(backend: str | None = None) -> str:
+    """Effective retrieval backend: the request's choice or ``SEARCH_BACKEND``.
+
+    Raises ``ValueError`` on an unknown name so ``POST /api/search`` answers 422
+    instead of quietly serving the other path.
+    """
+    from app.search.native import BACKENDS, DEFAULT_BACKEND
+
+    raw = (backend or settings.search_backend or DEFAULT_BACKEND).strip().lower()
+    if raw not in BACKENDS:
+        raise ValueError(f"unsupported search backend: {backend!r}")
+    return raw
 
 
 def _first_stage_k(top_k: int, rerank: bool) -> int:
@@ -755,39 +802,105 @@ def _first_stage_k(top_k: int, rerank: bool) -> int:
     return top_k * factor
 
 
+def _truncate_hits(
+    hits: list[ChunkHit], limit: int, *, by_paper: bool
+) -> list[ChunkHit]:
+    """Cut ``hits`` down to ``limit`` candidates, keeping their order.
+
+    With ``by_paper`` the limit counts **papers**: a collapsed paper occupies one
+    winner plus its ``inner_hits`` siblings, so slicing by position would cut a
+    paper's evidence in half *and* return fewer papers than requested (measured
+    before this guard: ``top_k=10`` came back as 3 papers, because the first 10
+    hits of the collapsed stream covered only three papers). Siblings stay with
+    their winner; the papers kept are the first ``limit`` distinct ones.
+    """
+    if not by_paper:
+        return hits[:limit]
+    if limit <= 0:
+        return []
+    kept: list[ChunkHit] = []
+    papers: set[str] = set()
+    for hit in hits:
+        if hit.primary:
+            if len(papers) >= limit:
+                break
+            papers.add(hit.paper_id)
+        kept.append(hit)
+    return kept
+
+
+def _regroup_by_paper(
+    winners: list[ChunkHit], hits: list[ChunkHit]
+) -> list[ChunkHit]:
+    """Re-attach each paper's non-primary hits right after its reranked winner.
+
+    ``winners`` comes back in cross-encoder order; every sibling is copied the
+    winner's normalized scores, so a paper's evidence stays comparable with the
+    ranked list (the same rule the non-reranking native path applies when
+    siblings inherit the fused score).
+    """
+    siblings: dict[str, list[ChunkHit]] = {}
+    for hit in hits:
+        if not hit.primary:
+            siblings.setdefault(hit.paper_id, []).append(hit)
+    out: list[ChunkHit] = []
+    for winner in winners:
+        out.append(winner)
+        for sibling in siblings.get(winner.paper_id, ()):
+            sibling.retrieval_score = winner.retrieval_score
+            sibling.rerank_score = winner.rerank_score
+            sibling.score = winner.score
+            out.append(sibling)
+    return out
+
+
 def _apply_rerank(
-    query: str, ordered: list[ChunkHit], top_k: int
+    query: str, ordered: list[ChunkHit], top_k: int, *, by_paper: bool = False
 ) -> tuple[list[ChunkHit], int | None]:
-    """Rescore ``ordered`` with the cross-encoder and keep ``top_k * 2``.
+    """Rescore the candidates with the cross-encoder and keep the best ones.
 
     Returns the (possibly unchanged) hits plus the rerank duration in
     milliseconds, or ``None`` when the reranker was unavailable. Retriever
     scores are preserved on ``retrieval_score``; ``score`` becomes the min-max
     normalized cross-encoder score so the existing 0..1 relevance thresholds
     keep working, and ``rerank_score`` carries that same normalized value.
+
+    With ``by_paper`` (native backend) **only the collapsed winners are
+    rescored**. The ``inner_hits`` siblings are evidence of a paper that is
+    already in the result; letting them into the pool would make the ranking
+    depend on ``MAX_EVIDENCE`` (an evidence setting) -- and measured 4x the
+    cross-encoder work per query. Their scores are copied from their winner
+    afterwards, so evidence and ranking stay on one scale.
     """
     if not ordered:
         return ordered, None
 
+    pool = [hit for hit in ordered if hit.primary] if by_paper else list(ordered)
+    if not pool:
+        return ordered, None
+
     started = time.perf_counter()
-    scores = rerank_service.rerank_texts(query, [hit.text for hit in ordered])
+    scores = rerank_service.rerank_texts(query, [hit.text for hit in pool])
     took_ms = rerank_service.rerank_took_ms(started)
     if scores is None:
-        # Degrade: keep first-stage order and scores untouched.
+        # Degrade: keep first-stage order and scores untouched (the Python path
+        # keeps its historical ``top_k * 2`` window).
+        if by_paper:
+            return _truncate_hits(ordered, top_k, by_paper=True), None
         return ordered[: top_k * 2], None
 
     scored: list[ChunkHit] = []
     for item in scores:
-        if not 0 <= item.index < len(ordered):
+        if not 0 <= item.index < len(pool):
             continue
-        hit = ordered[item.index]
+        hit = pool[item.index]
         hit.retrieval_score = float(hit.score)
         hit.rerank_score = item.score
         scored.append(hit)
 
     # The cross-encoder decides the new order (best score first; ties fall back
     # to the first-stage order so the result stays deterministic).
-    order = {id(hit): position for position, hit in enumerate(ordered)}
+    order = {id(hit): position for position, hit in enumerate(pool)}
     ranked = sorted(
         scored,
         key=lambda hit: (-float(hit.rerank_score or 0.0), order[id(hit)]),
@@ -796,12 +909,14 @@ def _apply_rerank(
     # Hits the service did not score keep their first-stage standing, after the
     # reranked ones, so nothing silently disappears from the window.
     seen = {id(hit) for hit in ranked}
-    ranked.extend(hit for hit in ordered if id(hit) not in seen)
+    ranked.extend(hit for hit in pool if id(hit) not in seen)
     for hit in ranked:
         if hit.retrieval_score is None:
             hit.retrieval_score = float(hit.score)
 
     _normalize_rerank_scores(ranked)
+    if by_paper:
+        return _truncate_hits(_regroup_by_paper(ranked, ordered), top_k, by_paper=True), took_ms
     return ranked[: top_k * 2], took_ms
 
 

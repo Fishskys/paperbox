@@ -84,6 +84,7 @@ async def search(request: SearchRequest) -> SearchResponse:
             rerank=request.rerank,
             telemetry=telemetry,
             facets=request.facets,
+            backend=request.backend,
         )
     except search_service.SearchError as exc:
         logger.warning("search failed: %s", exc)
@@ -152,6 +153,7 @@ async def search(request: SearchRequest) -> SearchResponse:
         query=request.query,
         rewritten_query=retrieval_query if rewrite_outcome.applied else None,
         mode=request.mode,
+        backend=str(telemetry.get("backend") or request.backend or settings.search_backend),
         total=total,
         candidates=candidates,
         took_ms=took_ms,

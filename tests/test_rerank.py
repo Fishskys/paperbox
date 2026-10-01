@@ -338,6 +338,10 @@ def test_response_has_a_rerank_block() -> None:
         "query",
         "rewritten_query",
         "mode",
+        # ``backend`` (2026-10-01, M5): which hybrid fusion path produced this
+        # page -- "python" (two legs fused in-process) or "native" (one hybrid
+        # request fused by the search pipeline + collapse).
+        "backend",
         "total",
         "candidates",
         "took_ms",

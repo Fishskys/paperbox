@@ -438,6 +438,8 @@ def test_search_request_has_no_rewrite_switch() -> None:
     request = SearchRequest(query="中文查询")
 
     # ``facets`` (2026-09-30, T-A3) is a plain output switch, not a rewrite one.
+    # ``backend`` (2026-10-01, M5) picks the hybrid fusion path; it is not a
+    # rewrite switch either (the rewritten text is still server-side only).
     assert set(request.model_dump()) == {
         "query",
         "mode",
@@ -445,4 +447,5 @@ def test_search_request_has_no_rewrite_switch() -> None:
         "filters",
         "rerank",
         "facets",
+        "backend",
     }

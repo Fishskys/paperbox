@@ -55,6 +55,7 @@ if str(ROOT) not in sys.path:
 
 from app.core.config import settings  # noqa: E402  (path bootstrap above)
 from app.db.session import SessionLocal  # noqa: E402
+from app.search.native import PIPELINE_BODIES, PIPELINE_NORM, PIPELINE_RRF  # noqa: E402
 from app.services import embedding_service  # noqa: E402
 
 QUERIES = ROOT / "evals" / "queries.jsonl"
@@ -65,8 +66,11 @@ REPR_INDEX = "paper_repr"
 CONNECTOR_NAME = "paperbox-fastembed-e5"
 MODEL_NAME = "paperbox-e5-local"
 FASTENDPOINT = "embedding:8090"
-PIPELINE_MINMAX = "paperbox-norm-minmax"
-PIPELINE_RRF = "paperbox-rrf60"
+#: The pipeline bodies live in the app (``app/search/native.py``): the native
+#: retrieval backend reads the very same objects, so defining them twice would
+#: only create drift. SRW calls the normalization pipeline "minmax"; the app
+#: names it after the processor. Same object.
+PIPELINE_MINMAX = PIPELINE_NORM
 REPR_TEXT_CHUNKS = 3          # representative body = first N chunks by chunk_index
 REPR_TEXT_CHARS = 1800        # ... capped, so title+abstract stay the dominant signal
 SRW = "/_plugins/_search_relevance"
@@ -586,29 +590,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         jd_en = ensure_judgments(client, "paperbox-labels-en", "paperbox human labels, English", [q for q in queries if q.get("language") == "en"], labels)
         jd_zh = ensure_judgments(client, "paperbox-labels-zh", "paperbox human labels, Chinese", [q for q in queries if q.get("language") == "zh"], labels)
         print("[6/6] 检索管道与检索配置")
-        ensure_pipeline(
-            client,
-            PIPELINE_MINMAX,
-            {
-                "description": "paperbox: hybrid score normalization (arithmetic_mean + min_max)",
-                "phase_results_processors": [
-                    {
-                        "normalization-processor": {
-                            "normalization": {"technique": "min_max"},
-                            "combination": {"technique": "arithmetic_mean", "parameters": {"weights": [0.5, 0.5]}},
-                        }
-                    }
-                ],
-            },
-        )
-        ensure_pipeline(
-            client,
-            PIPELINE_RRF,
-            {
-                "description": "paperbox: hybrid rank fusion, rank_constant 60 (app-side rrf_fuse k=60 twin)",
-                "phase_results_processors": [{"score-ranker-processor": {"combination": {"technique": "rrf", "rank_constant": 60}}}],
-            },
-        )
+        for pipeline_name in (PIPELINE_MINMAX, PIPELINE_RRF):
+            ensure_pipeline(client, pipeline_name, PIPELINE_BODIES[pipeline_name])
         cfg_bm25 = ensure_search_config(client, "paperbox-bm25", "BM25 only: title^2 + abstract + text", bm25_query())
         cfg_knn = ensure_search_config(client, "paperbox-knn", "kNN only via local e5 remote model", knn_query(mid))
         cfg_plain = ensure_search_config(

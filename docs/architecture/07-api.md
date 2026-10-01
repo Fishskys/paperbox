@@ -58,7 +58,7 @@
 | POST | `/api/search` | 论文级混合检索 | 是 | — | `app/api/search.py:49` |
 | GET | `/api/search-logs` | 检索日志（只读） | 是 | `limit`、`since`、`mode` | `app/api/search_logs.py:27-32` |
 
-`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:59-67` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:197`。
+`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:59-67` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:199`。
 
 ### 2.2 鉴权实现
 
@@ -67,7 +67,7 @@
 | 取凭证 | `Authorization` 头优先；`partition(" ")` 后 scheme 必须为 `bearer`（忽略大小写）且凭证非空 | `app/core/security.py:25-30` |
 | 无 `Authorization` 时回退 | 读 `X-API-Key` | `app/core/security.py:19`, `:32-35` |
 | 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | `app/core/security.py:30` |
-| 比对 | `hmac.compare_digest`，期望值 `settings.paper_api_key` | `app/core/security.py:38-43`, `app/core/config.py:77` |
+| 比对 | `hmac.compare_digest`，期望值 `settings.paper_api_key` | `app/core/security.py:38-43`, `app/core/config.py:83` |
 | 缺凭证 | `401 {"detail":"Missing API key"}` + `WWW-Authenticate: Bearer` | `app/core/security.py:49-54` |
 | 凭证不符 | `403 {"detail":"Invalid API key"}` + 同头 | `app/core/security.py:55-60` |
 | 依赖挂载 | 每个 router 构造时 `dependencies=[Depends(require_api_key)]` | `ingestion.py:59-63`、`jobs.py:14-18`、`papers.py:31-35`、`metadata.py:40-44`、`search.py:40-44`、`search_logs.py:20-24` |
@@ -109,7 +109,7 @@
 | `POST /api/metadata/import`：Content-Type 既非 multipart 也非 JSON | 415 | `app/api/metadata.py:87-89` |
 | 同上：multipart 缺 `file` part / JSON 解析失败 / 未知 `source_type` / `importer` 抛 `ValueError` | 422 | `app/api/metadata.py:66-70`, `:74-78`, `:82-86`, `:112-116`, `:126-129` |
 | `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py:54-57`, `:178-179`, `:241-249` |
-| `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:88-93`, `:94-97` |
+| `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:89-94`, `:95-98` |
 | `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py:38-56` |
 
 ### 2.4 lifespan 启停序列（`app/main.py:41-56`）
@@ -169,7 +169,7 @@
 **`POST /api/papers/ingest/files`**（`ingestion.py:262`）：
 `request_id_middleware`(`main.py:70`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:286-309`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:133`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:95` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:193-201`) → `job_queue.submit`(`:207` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:296`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:318`) → 返回 `summarize()` 的 202 响应(`:345`)。
 
-**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:130`) → `_maybe_rewrite`(`search.py:165`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:149`) → 逐结果构造 `SearchResult`(`:179`) → `_log_search` 另开 `SessionLocal()` 写日志(`:206`, `:208`) → `SearchResponse`(`:221`)。
+**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:131`) → `_maybe_rewrite`(`search.py:167`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:150`) → 逐结果构造 `SearchResult`(`:181`) → `_log_search` 另开 `SessionLocal()` 写日志(`:210`, `:208`) → `SearchResponse`(`:223`)。
 
 **`GET /api/papers/{id}/file`**（`papers.py:103`）：`_load_paper`(`:49`) → `papers.original_file`（主版本）→ `object_storage.open_stream`(`:121`) → `StreamingResponse` 64 KiB 分块 + `Content-Disposition: attachment`(`:134-146`)。
 
@@ -192,24 +192,24 @@
 
 | 键 | 默认 | 作用 | 出处 |
 |---|---|---|---|
-| `PAPER_API_KEY` | `change-me` | Bearer 密钥（比对对象）；空值 → 全部 403 | `app/core/config.py:77` |
-| `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址/端口（仅 uvicorn 启动参数使用） | `config.py:77-77` |
-| `APP_ENV` / `LOG_LEVEL` | `local` / `INFO` | 启动日志内容与级别（lifespan 首行） | `config.py:40-41` |
-| `INGEST_MAX_FILE_MB` | `100` | 单文件上限（超限 → `rejected`/422） | `config.py:121` |
-| `INGEST_MAX_FILES_PER_REQUEST` | `20` | `/files` 文件数上限（超 → 422） | `config.py:141` |
-| `INGEST_MAX_REQUEST_MB` | `200` | `/files` 单请求总字节上限（超 → 413） | `config.py:145` |
-| `INGEST_UPLOAD_CONCURRENCY` | `2` | 在途上传请求上限（超 → 429） | `config.py:133` |
-| `INGEST_QUEUE_HIGH_WATERMARK` | `50` | 积压水位，仅拒多文件（0 = 关闭） | `config.py:137` |
-| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单（空 = 端点 404） | `config.py:151`, `:232-235` |
-| `INGEST_ARCHIVE_MAX_MB` | `500` | 上传 zip 体积上限 | `config.py:155` |
-| `INGEST_ARCHIVE_MAX_FILES` / `_MAX_UNCOMPRESSED_MB` / `_MAX_RATIO` | `2000` / `5000` / `100` | zip-bomb 三重上限 | `config.py:157-163` |
-| `INGEST_ARCHIVE_TMP_DIR` / `INGEST_ARCHIVE_TTL_HOURS` | `""`（系统 temp）/ `24` | 解包位置与保留时长（GC 用） | `config.py:165-167` |
-| `INGEST_GC_INTERVAL_S` | `300` | housekeeping 间隔（首轮启动即跑） | `config.py:171` |
-| `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:127` |
-| `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:55`, `:59`, `:64`；`health.py:60-76` |
-| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:116-117` |
-| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:77`, `:83`；`search.py:106-110` |
-| `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:98-100`, `:207-225` |
+| `PAPER_API_KEY` | `change-me` | Bearer 密钥（比对对象）；空值 → 全部 403 | `app/core/config.py:83` |
+| `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址/端口（仅 uvicorn 启动参数使用） | `config.py:83-83` |
+| `APP_ENV` / `LOG_LEVEL` | `local` / `INFO` | 启动日志内容与级别（lifespan 首行） | `config.py:46-47` |
+| `INGEST_MAX_FILE_MB` | `100` | 单文件上限（超限 → `rejected`/422） | `config.py:134` |
+| `INGEST_MAX_FILES_PER_REQUEST` | `20` | `/files` 文件数上限（超 → 422） | `config.py:154` |
+| `INGEST_MAX_REQUEST_MB` | `200` | `/files` 单请求总字节上限（超 → 413） | `config.py:158` |
+| `INGEST_UPLOAD_CONCURRENCY` | `2` | 在途上传请求上限（超 → 429） | `config.py:146` |
+| `INGEST_QUEUE_HIGH_WATERMARK` | `50` | 积压水位，仅拒多文件（0 = 关闭） | `config.py:150` |
+| `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单（空 = 端点 404） | `config.py:164`, `:245-248` |
+| `INGEST_ARCHIVE_MAX_MB` | `500` | 上传 zip 体积上限 | `config.py:168` |
+| `INGEST_ARCHIVE_MAX_FILES` / `_MAX_UNCOMPRESSED_MB` / `_MAX_RATIO` | `2000` / `5000` / `100` | zip-bomb 三重上限 | `config.py:170-176` |
+| `INGEST_ARCHIVE_TMP_DIR` / `INGEST_ARCHIVE_TTL_HOURS` | `""`（系统 temp）/ `24` | 解包位置与保留时长（GC 用） | `config.py:178-180` |
+| `INGEST_GC_INTERVAL_S` | `300` | housekeeping 间隔（首轮启动即跑） | `config.py:184` |
+| `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:140` |
+| `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:61`, `:65`, `:70`；`health.py:60-76` |
+| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:129-130` |
+| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:83`, `:89`；`search.py:107-111` |
+| `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:104-106`, `:220-238` |
 
 非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py:36`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py:27`）（原先还有 `CANDIDATE_FACTOR = 5` = 「请求时估算的候选池」，2026-09-30 随 T-A2 删除：候选数改由检索实际结果给出）、chunk 分页上限 200（`app/api/papers.py:178`）。
 

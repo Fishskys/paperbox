@@ -36,6 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.search.hybrid import DEFAULT_MODE, MODES
+from app.search.native import BACKENDS, DEFAULT_BACKEND
 from app.services.metadata_identifiers import SCHEMES
 
 #: ``top_k`` bounds from the spec.
@@ -143,6 +144,17 @@ class SearchRequest(BaseModel):
             "with the cross-encoder before paper aggregation."
         ),
     )
+    backend: str | None = Field(
+        default=None,
+        description=(
+            "Hybrid fusion backend. 'python' (default, from SEARCH_BACKEND) runs "
+            "two queries and fuses them in the app; 'native' sends one hybrid "
+            "request that the search pipeline fuses and collapse(paper_id) turns "
+            "into papers. Only mode=hybrid is affected, and on the native path "
+            "keyword_score/semantic_score come back null (one fused score is all "
+            "the engine reports). The response echoes the backend that ran."
+        ),
+    )
     facets: bool = Field(
         default=False,
         description=(
@@ -160,6 +172,16 @@ class SearchRequest(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("query must not be blank")
+        return normalized
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _check_backend(cls, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if normalized not in BACKENDS:
+            raise ValueError(f"backend must be one of {', '.join(BACKENDS)}")
         return normalized
 
     @field_validator("mode", mode="before")
@@ -275,6 +297,9 @@ class SearchResponse(BaseModel):
     #: English search expression actually used for retrieval, when rewritten.
     rewritten_query: str | None = None
     mode: str
+    #: Retrieval backend that produced this page (``python`` | ``native``,
+    #: plan §7 M5). Always ``python`` for the single-leg modes.
+    backend: str = DEFAULT_BACKEND
     #: 本次查询 + 过滤条件下命中的**论文**数（引擎 ``cardinality(paper_id)``
     #: 真值，见 ``app.search.hybrid.count_papers``）。
     total: int

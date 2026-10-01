@@ -99,6 +99,26 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"  warn could not count {index}: {exc}")
 
+    # Deployment-state objects: the native hybrid backend needs ``paperbox-rrf60``
+    # in the cluster, and a drifted body would silently change how a hybrid query
+    # is fused. Warn-only: the default ``python`` backend does not read them, so a
+    # missing pipeline must not fail a healthcheck of a working deployment.
+    try:
+        sys.path.insert(0, str(ROOT))
+        from app.search.native import ensure_pipelines
+
+        report = ensure_pipelines(dry_run=True)
+        drifted = [item["name"] for item in report if item["changed"]]
+        if drifted:
+            print(
+                f"  warn search pipelines drifted: {', '.join(drifted)} "
+                "(run scripts/ensure_search_pipelines.py)"
+            )
+        else:
+            print(f"  info search pipelines: {len(report)} present, in sync")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  warn could not check search pipelines: {exc}")
+
     print("RESULT:", "all dependencies reachable" if ok else "one or more dependencies failed")
     return 0 if ok else 1
 
