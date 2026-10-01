@@ -111,8 +111,12 @@ services:
       # uvicorn 被 oom-killer 杀过）。积压超过 INFERENCE_QUEUE_DEPTH 直接
       # 503+Retry-After，客户端退避重试；因此应用侧 EMBEDDING_TIMEOUT 要大于
       # 最坏排队时间（默认 300s）。
+      # 定 depth 的规矩：depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT/2。原值 32 是
+      # 按"单次搜索"定的，2026-10-01 跑 SRW 参数扫描（一次几百个并发神经检索）
+      # 时把队列打满，变体 90% 报 `inference queue full (depth=32, workers=1)`：
+      # 远端连接池加多大都没用，瓶颈在这里。512 × 0.1~0.3s ≈ 51~154s < 300s。
       INFERENCE_WORKERS: ${INFERENCE_WORKERS:-1}
-      INFERENCE_QUEUE_DEPTH: ${INFERENCE_QUEUE_DEPTH:-32}
+      INFERENCE_QUEUE_DEPTH: ${INFERENCE_QUEUE_DEPTH:-512}
       PORT: 8090
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:8090:8090"
