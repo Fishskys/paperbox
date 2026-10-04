@@ -13,6 +13,8 @@
 
 - 本文件是**一览**：模块地图、三个数据源、一条请求全链路、依赖关系、文档索引。
 - 不重复各模块文档里的细节；只说结构关系。
+- paperbox 对外有**两套面**，同一进程、共用配置/鉴权/日志与 service 层：
+  **REST**（`/api/**`，人/程序用）与 **MCP**（`/mcp`，agent 用，默认关闭，见 11 篇）。
 
 ## 2. 模块地图
 
@@ -26,6 +28,7 @@
 | `app/search/` | 检索 | hybrid / RRF / OpenSearch 客户端 / snapshot（元数据快照） | ~1200 | 05 |
 | `app/parsing/` | 解析 | PDF 文本 / 结构 / 切块 | ~1080 | 03 |
 | `app/workers/` | 任务层 | 流水线 / 队列 / 清理 | ~1850 | 02 / 09 |
+| `app/mcp/` | agent 接口 | MCP 端点（传输 / 静态 Bearer / 审计 / 引用）+ 10 个工具（读 6、写 4），直调 service 层 | ~2600 | 11 |
 | `app/eval/` | 评测 | 指标纯函数 | ~180 | 10 |
 | `infra/` | 部署 | 四依赖容器 + embedding 服务 | — | 10 |
 | `scripts/` | 工具 | 运维脚本 / 验收脚本 | — | 10 |
@@ -93,6 +96,20 @@ POST /api/papers/ingest/files（多文件 multipart，流式写 staging 边算 s
 
 检索链路（GET/POST /api/search）见 05、06；元数据导入链路（POST /api/metadata/import）见 08。
 
+一条 **MCP 链路**（agent 视角，同一进程内的另一条入口）：
+
+```
+POST /mcp（Streamable HTTP，Bearer）
+  → McpAuthMiddleware（最外层：401/403，并把 agent 名放进 ContextVar）
+  → McpMountPathMiddleware（/mcp → /mcp/，避免 307）
+  → SDK 的 Host 白名单校验（不在 MCP_ALLOWED_HOSTS → 421）
+  → tools/call
+       读工具 → search_pipeline / chunk_service（与 REST 同一实现，结果逐位相同）
+       写工具 → 未开开关时**根本没注册**；开了则调 ingestion/paper_service，dry_run 默认 true
+  → 统一信封 {data, meta, warnings, citations}；失败抛 ToolFailure → isError + 契约错误 JSON
+  → 审计一行结构化日志（工具 / agent / 参数摘要 / 结果 / 影响面 / 耗时）
+```
+
 ## 6. 配置项
 
 所有配置键以 `app/core/config.py`（pydantic-settings）为源，仓库根 `.env` 提供值；容器侧变量在 `infra/.env`（AGENTS §3.4）。键名/默认值/作用见各模块文档 §6，或 `.env.example`。
@@ -107,6 +124,8 @@ POST /api/papers/ingest/files（多文件 multipart，流式写 staging 边算 s
 - 前端在独立仓库 `paperbox-webui`；本仓库只提供 REST API。
 - 已知未连通：`Redis/Celery`（任务用进程内队列）、`OCR`、`arm64` 等（plan §30）。
 - 文档口径：`docs/architecture/metadata-architecture.md` 是**设计背景**（目标/取舍/逐字段映射/术语表），**实现现状**看 `docs/architecture/08-metadata.md`（表 + 实现架构），实测数字看 `docs/progress/project.md` §17。
+- MCP 侧：**无速率限制**；仅在 Hermes 与 codex 上做过真机验收（Claude Code 本机未装、自研 harness 片段未验证）；
+  四项细化（审计字段 / 错误码 / 预算翻页 / 作业等待语义）未做，见 11 篇 §12。
 - 各模块的更细缺口见对应文档 §8。
 
 ## 文档索引
@@ -124,6 +143,7 @@ POST /api/papers/ingest/files（多文件 multipart，流式写 staging 边算 s
 | 08 | `08-metadata.md` | 元数据层（现状版） |
 | 09 | `09-upload-queue.md` | 上传入口与文件处理 |
 | 10 | `10-eval-ops.md` | 评测闭环与运维部署 |
+| 11 | `11-mcp-agent-interface.md` | MCP agent 接口：传输、鉴权、10 个工具契约、验收与客户端接入 |
 
 **同级补充文档**（非编号）：`metadata-architecture.md`（元数据层设计稿：逐字段映射、术语表）、
 `hermes-integration.md`（Hermes 工具定义与调用范式）、`MVP-SPEC.md`（接口摘要）。

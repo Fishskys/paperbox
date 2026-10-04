@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.2.0**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.3.0**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.2.0 starting`；`curl http://127.0.0.1:8077/health` 四个依赖都是 `ok` |
+| 6) 启动 | 日志出现 `paperbox 0.3.0 starting`；`curl http://127.0.0.1:8077/health` 四个依赖都是 `ok` |
 
 一键自检（推荐）：
 
@@ -350,7 +350,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 基址 | `http://<host>:8077`（默认端口 8077） |
 | 鉴权 | 除 `/`、`/health`、`/docs` 外，所有接口都要 `Authorization: Bearer <PAPER_API_KEY>` |
 | 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
-| 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调） |
+| 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 §1.7） |
+| 签名下载 | `GET /api/downloads/{paper_id}?exp=&sig=`（**免 Bearer**，签名即凭据，TTL 10–3600 s，过期或被改 403） |
 | 错误体 | `{"detail": "..."}`（422 校验错误为 FastAPI 默认结构，含 `loc`/`msg`/`type`） |
 | 幂等性 | 建索引、建快照、清理解包目录等运维接口可重复执行 |
 | 长任务 | 导入类接口返回 `202` + `job_id`，进度用作业接口轮询 |
@@ -627,3 +628,23 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 **Q14 机器内存吃紧 / 容器被 OOM-kill？**
 按影响顺序调：`RERANK_MAX_BATCH`（精排激活内存≈候选数 × 文本长度）、`ORT_THREADS`、`MAX_BATCH`、
 `INFERENCE_QUEUE_DEPTH`；docling 容器另设 `DOCLING_MEM_LIMIT` / `DOCLING_CPUS`（宁可它被杀，应用会降级 pypdf）。
+
+**Q15 客户端连 MCP 报 421 / "Invalid Host header"？**
+客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` 里。把**该客户端实际访问用的 IP/主机名**加进去 ——
+每个地址都要写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`，只写主机名会漏），改完**重启应用**。
+启动日志会打印生效白名单，是排查 421 的第一手材料。注意这是**裸文本** 421，不是 JSON。
+
+**Q16 MCP 报 401 / 403？**
+401 = 没带 `Authorization: Bearer`；403 = key 不匹配（对齐 `PAPER_API_KEYS` 里那个 agent 的 key 或 `PAPER_API_KEY`，
+注意不要多空格）。**不支持 `?key=` 查询参数**。想区分是谁在调，就给每个 agent **各发一把 key**：
+`PAPER_API_KEYS` 按**值**认身份，两把相同的 key 在审计里会同名。
+
+**Q17 agent 的工具列表里没有写工具？**
+设计如此：`MCP_WRITE_ENABLED` 或对应的 `MCP_ALLOW_*` 关掉时，写工具**根本不注册**（不在 `tools/list`，
+按名字猜也调不到）。要开就开总闸 + 分开关并重启，然后用 `tools/list` 确认，别只看文档。
+
+**Q18 怎么确认 MCP 是好的？会不会把我库里的论文弄坏？**
+一条命令：`uv run python scripts/acceptance_mcp.py [--with-writes]`（脚本见 §1.6）。
+它自带清理：导入一份**每次运行内容都不同**的合成 PDF，跑完按快照 diff 删掉**自己新建的那篇**，
+并断言既有论文一篇没少；探针必须落在 `INGEST_LOCAL_ROOTS` 内。
+带写模式因产品删除是软删，会留一条 `deleted` 状态的探针记录，需要时用 `scripts/purge_deleted.py --hard` 清掉。

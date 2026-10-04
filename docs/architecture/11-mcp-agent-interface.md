@@ -6,12 +6,15 @@
 
 **端点**：`http://<host>:8077/mcp`（Streamable HTTP；带不带尾斜杠都可以 —— 服务端内部会把 `/mcp`
 改写为挂载点根路径，**不会**回 307 让客户端重来一次；2026-10-04 真机验收发现并修，见 §2 末尾）
-**状态**：v1（工具集冻结，见 §8）　**客户端验收**：Hermes（其余三家给配置片段，标"待验证"）
+**状态**：v1（工具集冻结，见 §8）　**客户端验收**：**Hermes ✅ 与 codex ✅ 端到端通过**（见 §9/§10）；
+Claude Code 与自研 harness 片段**未验证**（见 §12）
 
-> **实现进度（2026-10-04，二次更新）**：**6 个读工具全部落地**（`paper_search` / `paper_get` /
-> `paper_get_chunks` / `paper_get_context` / `paper_get_file` / `paper_job_status`），
-> 写工具 4 个未做。传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、
-> 宿主机 lifespan 托管 session manager 均已验收。
+> **实现进度（2026-10-05，终态）**：**10 个工具全部落地并验收** —— 读 6 个（`paper_search` / `paper_get` /
+> `paper_get_chunks` / `paper_get_context` / `paper_get_file` / `paper_job_status`）+ 写 4 个
+> （`paper_import` / `paper_reindex` / `paper_delete` / `paper_update_metadata`，默认不可见）。
+> 传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、
+> 宿主机 lifespan 托管 session manager、静态 Bearer 鉴权、SSRF 闸、签名下载、结构化审计均已落地。
+> **脚本化验收**：`scripts/acceptance_mcp.py` 只读面 **37/37**、带写面 **50/50**（退出码即结论，自带清理）。
 > **真机验收（30 篇语料）**：`paper_search` 真实排序（int8 交叉编码器在位，3.2s）→ 9 条 citation
 > **全部带页码与章节**；`paper_get` 报 15 块 + 7 个字段的来源账本；分页游标不重叠；`paper_get_context`
 > 窗口 5 块且恰好 1 块 `primary`；**签名下载 200 / 2.2 MB 真 PDF / 篡改签名 403**；
@@ -19,8 +22,7 @@
 > 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、
 > `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、
 > `app/services/download_signing.py` + `app/api/downloads.py`（签名链接与流式下载）、`app/mcp/citations.py`。
-> 待做：鉴权（T-A3）、写工具（T-A6）、错误码细化（T-A7）、SSRF 闸（T-A11）、验收脚本（T-A13）、
-> Hermes 真机任务式验收（T-A14）、四客户端配置片段（T-A15）。
+> 剩余待办口径见 **§12**（四个细化项 + 速率限制；均非缺口，不阻塞发布）。
 
 ---
 
@@ -343,7 +345,7 @@ PAPER_API_KEY=<key> uv run python scripts/acceptance_mcp.py --with-writes  # 加
 uv run python scripts/acceptance_mcp.py --json report.json                 # 机器可读副本
 ```
 
-脚本的**自清理纪律**（吃过一次亏，见 §12）：导入的探针 PDF 是**每次运行唯一字节**的合成件，
+脚本的**自清理纪律**（吃过一次亏：拿一份与语料某篇逐字节相同的夹具做「导入→删除」，结果按 id 删掉了那篇真论文；所以现在归属不由名字或哈希判定，而由**运行前快照**判定）：导入的探针 PDF 是**每次运行唯一字节**的合成件，
 跑完用**语料快照 diff** 找出"这次新建的那篇"再删；若 diff 不是恰好一篇，**直接中止、什么都不删**；
 `decide_cleanup()` 拒绝删除任何**运行前就存在**的论文，`missing_from()` 在收尾处断言"既有论文一篇没少"。
 探针必须落在 `INGEST_LOCAL_ROOTS` 之内（脚本默认取该变量第一项，可用 `--probe-dir` 覆盖），
@@ -468,28 +470,43 @@ curl -sS -X POST "http://<IP>:8077/mcp" \
 Python 侧直接 `pip install mcp` 后用 `mcp.client.streamable_http.streamablehttp_client(url, headers=...)`
 建会话；这条路径与协议本身**未在本项目做真机验证**（Hermes 用的是它自带的客户端）。
 
-### 排障速查（跨客户端通用）
-
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| **421 Misdirected Request**（裸文本 `Invalid Host header`） | 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` | 把**该客户端访问用的 IP/主机名**（`host` 与 `host:*` 两种写法）加进 `MCP_ALLOWED_HOSTS` 并重启 |
-| **401** 且带 `WWW-Authenticate: Bearer` | 没带 `Authorization` 头（或缺 key） | 客户端配置里补 header；`?key=` 不支持 |
-| **403** | key 不匹配 | 对齐 `PAPER_API_KEYS` / `PAPER_API_KEY`；确认没多空格 |
-| 服务端启动就报 `MCP_ALLOWED_HOSTS is empty` / `needs a credential` | `MCP_ENABLED=true` 但白名单空或没有任何 key | 补 `MCP_ALLOWED_HOSTS` 与 `PAPER_API_KEYS`（或 `PAPER_API_KEY`） |
-| 工具列表里少了写工具 | `MCP_WRITE_ENABLED` 关 | 要写能力就开总闸 + 对应分开关并重启 |
-| 现象是"连不上"而不是明确报错 | 客户端没装 MCP 支持（例：Hermes 缺 `mcp` 包会被静默禁用） | 装依赖、重启，再 `hermes mcp test paperbox` |
-| 超时 | 客户端 per-tool timeout < `MCP_WAIT_SECONDS` | 把客户端 timeout 提到 ≥ 等待上限（Hermes 用 `timeout: 300`） |
-| `localhost` 连不上 | Windows 先解析到 IPv6 回环 | `url` 一律写 IP |
-
 ---
 
 ## 11. 排障速查
 
-| 现象 | 最可能的原因 |
-|---|---|
-| 启不来，日志说白名单为空 | `MCP_ENABLED=true` 但 `MCP_ALLOWED_HOSTS` 没配（§2） |
-| 启动正常，但所有请求 **421** | 客户端用的 Host 不在白名单里（加 IP **和** 主机名，`host` 与 `host:*` 各一条） |
-| 连接被拒但看不出原因 | 421 是纯文本、不是 JSON-RPC 错误；看**服务端**日志里那一行 host 警告 |
-| 首个请求必失败、后续正常 | 父应用 lifespan 没进 `mcp.session_manager.run()` |
-| 长导入报超时 | 客户端 `timeout` < `MCP_WAIT_SECONDS`；或用 `paper_job_status` 续查 |
-| 看不到写工具 | 写开关默认全关（`MCP_WRITE_ENABLED` 及三个细分开关） |
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 启不来，日志说白名单为空 / `needs a credential` | `MCP_ENABLED=true` 但 `MCP_ALLOWED_HOSTS` 没配，或一把 key 都没有 | 补 `MCP_ALLOWED_HOSTS` 与 `PAPER_API_KEYS`（或 `PAPER_API_KEY`）（§2） |
+| **421 Misdirected Request**（**裸文本** `Invalid Host header`，不是 JSON-RPC 错误） | 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` | 把**该客户端访问用的 IP/主机名**（`host` 与 `host:*` 两种写法）加进去并重启；看服务端启动日志里打印的生效白名单 |
+| **401** 且带 `WWW-Authenticate: Bearer` | 没带 `Authorization` 头（或缺 key） | 客户端配置里补 header；`?key=` 不支持 |
+| **403** | key 不匹配 | 对齐 `PAPER_API_KEYS` / `PAPER_API_KEY`；确认没多空格；共用同一把 key 的 agent 在审计里会同名（§4.2） |
+| 首个请求必失败、后续正常 | 父应用 lifespan 没进 `mcp.session_manager.run()`（挂载的子应用不跑自己的 lifespan） | 这是代码层回归，`tests/test_mcp_transport.py` 有专门用例 |
+| 工具列表里少了写工具 | `MCP_WRITE_ENABLED` 或对应 `MCP_ALLOW_*` 关 | **设计如此**（关 = 不注册）；要写能力就开总闸 + 分开关并重启，再以 `tools/list` 为准 |
+| 现象是"连不上"而不是明确报错 | 客户端没装 MCP 支持（例：Hermes 缺 `mcp` 包会被静默禁用） | 装依赖、重启，再 `hermes mcp test paperbox` |
+| 超时 / 长导入没结果 | 客户端 per-tool timeout < `MCP_WAIT_SECONDS` | 把客户端 timeout 提到 ≥ 等待上限（Hermes 用 `timeout: 300`）；或用 `paper_job_status` 续查 |
+| `localhost` 连不上 | Windows 先解析到 IPv6 回环 | `url` 一律写 IP |
+| `paper_import` 报 `FORBIDDEN`（路径不在允许的根里） | 本地路径导入受 `INGEST_LOCAL_ROOTS` 限制 | 把探针/文件放进白名单目录，或给 `--probe-dir` 指到那里 |
+| codex 说"我没有 paperbox 工具"却在配置里看得见 | `codex mcp add` 的成功提示**不等于落盘**；或 codex 的审批策略拦下了 MCP 调用 | `codex mcp get paperbox` 复核配置 → 跑真会话复核工具；非交互用 `--dangerously-bypass-approvals-and-sandbox`（§10） |
+
+---
+
+## 12. 待办与未验证事项（当前口径）
+
+**未验证**（不要当成可用承诺）：
+
+- **Claude Code**：本机未安装，片段按官方形态书写、未真机验证。
+- **自研 harness / 裸协议**：给了不依赖 SDK 的 `curl` 最小握手，未在本项目真机验证。
+- **SSRF 闸的 DNS rebinding 残留风险**：解析与连接之间的竞态，已在 `app/services/net_guard.py` 明文标注。
+
+**未做（明确记录，非遗忘）**：
+
+| 项 | 内容 | 为什么现在不做 |
+|---|---|---|
+| T-A4 | 审计字段细化（更多上下文字段、采样策略） | 现有审计已够定位问题；字段豪华化收益低 |
+| T-A7 | 错误码细化（把 `INTERNAL` 类再分） | 现有 14 + 2 个错误码已覆盖真实失败面 |
+| T-A8 | 预算与翻页边界细化（更细的 `truncated` 语义） | 现有游标语义在真机验收中够用 |
+| T-A9 | 作业等待语义细化（分段等待 / 进度回传） | `wait_seconds` + 轮询已满足 §9 的两个任务 |
+| — | **速率限制** | 审计能看见调用量，但没有任何 per-key 限流；局域网单用户场景暂不需要 |
+
+**已验收（可作为承诺）**：10 个工具 + 传输/鉴权/错误契约在 **Hermes** 与 **codex** 上端到端通过；
+`scripts/acceptance_mcp.py` 可重复复验（只读 37 项 / 带写 50 项，退出码即结论）。
