@@ -352,33 +352,86 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 
 ## 10. 客户端接入
 
-### Hermes（已验收）
+> **状态口径**：只有 **Hermes 做了真机任务式验收**（§9）。其余客户端的片段按各自 CLI 的**实际形态**写成，
+> 状态逐条标注；「配置已就绪」≠「端到端已验证」。
 
-```yaml
-# ~/.hermes/config.yaml
-mcp_servers:
-  paperbox:
-    url: "http://<paperbox 的 LAN IP 或 127.0.0.1>:8077/mcp"
-    headers:
-      Authorization: "Bearer <该 agent 的 key>"
-    timeout: 300            # 要 ≥ MCP_WAIT_SECONDS
-    connect_timeout: 30
+### Hermes（✅ 端到端验收通过）
+
+```bash
+# 落点：~/.hermes/config.yaml（用 CLI 写，别手改 YAML）
+hermes config set mcp_servers.paperbox.url "http://<paperbox 的 LAN IP>:8077/mcp"
+hermes config set mcp_servers.paperbox.headers.Authorization "Bearer <该 agent 的 key>"
+hermes config set mcp_servers.paperbox.timeout 300          # ≥ MCP_WAIT_SECONDS
+hermes config set mcp_servers.paperbox.connect_timeout 30
+hermes mcp test paperbox                                    # 期望：Connected + 列出工具
 ```
 
-工具在 Hermes 里以 `mcp_paperbox_<tool>` 出现（例：`mcp_paperbox_paper_search`）。
+工具在 Hermes 里是 `mcp__paperbox__<tool>`（例：`mcp__paperbox__paper_search`）。
+**改完必须重启 Hermes**（无热加载；网关 host 的会话重启后会自动恢复）。
 
-前置检查（都是踩过的坑）：
+### codex CLI（🟡 配置已就绪，端到端未验证）
 
-1. Hermes 侧装了 `mcp` 包（**未装 = MCP 支持静默禁用**）；
-2. 改完 `config.yaml` **重启 Hermes**（无热加载）；
-3. `url` 用 IP，不要写 `localhost`（Windows 会先撞 IPv6 回环超时）；
-4. 客户端 `timeout` ≥ `MCP_WAIT_SECONDS`；
-5. **`MCP_ALLOWED_HOSTS` 必须包含这个 IP/主机名**，否则一律 421。
+```bash
+# token 从环境变量读，不进配置文件
+export PAPERBOX_MCP_TOKEN="<该 agent 的 key>"     # Windows 持久化：setx PAPERBOX_MCP_TOKEN ...
+codex mcp add paperbox --url http://<IP>:8077/mcp --bearer-token-env-var PAPERBOX_MCP_TOKEN
+codex mcp list      # 期望：paperbox / streamable_http / enabled / Bearer token
+codex mcp get paperbox
+```
 
-### 其他客户端（待验证）
+本机实测（2026-10-04，codex-cli 0.153.4）：`codex mcp add` 成功、`codex mcp get paperbox` 显示
+`transport: streamable_http` + `bearer_token_env_var: PAPERBOX_MCP_TOKEN` + `enabled: true` ✓。
+**端到端调用没能验证**：本机 codex 的模型后端（CC Switch 代理 `127.0.0.1:15721`）当时**没有在监听**，
+任何模型调用都 `502 Bad Gateway` —— 与 paperbox 无关，代理恢复后按上面的片段即可用。
 
-codex / claude code / deepseek harness：按各自的 MCP 配置格式填 `url` + `Authorization` 头，配置片段见 `UserManual.md`。
-**未经真机验证**，遇到连接问题先按 §2 的 421 与鉴权两条自查。
+### Claude Code（⚪ 未验证，本机未安装）
+
+```bash
+# CLI 方式（HTTP 传输 + 自定义头）
+claude mcp add --transport http paperbox http://<IP>:8077/mcp \
+  --header "Authorization: Bearer <该 agent 的 key>"
+```
+
+```jsonc
+// 或项目内 .mcp.json（可提交给协作者，但别把 key 提交上去）
+{ "mcpServers": { "paperbox": {
+    "type": "http", "url": "http://<IP>:8077/mcp",
+    "headers": { "Authorization": "Bearer <key>" } } } }
+```
+
+本机**没有安装** Claude Code，上述片段按官方 MCP 配置形态书写但**未经真机验证**；
+若连接失败，先按 §2（421 = Host 不在白名单）与 §4（401/403 = key 问题）自查。
+
+### 其他 MCP 客户端 / 自研 harness（⚪ 未验证）
+
+任何支持 **Streamable HTTP** 的 MCP 客户端都行，只要满足两点：请求带 `Authorization: Bearer <key>`，
+且它的 `Host` 在 `MCP_ALLOWED_HOSTS` 里。最小握手（不需要任何 SDK）：
+
+```bash
+curl -sS -X POST "http://<IP>:8077/mcp" \
+  -H "Authorization: Bearer <key>" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":
+       {"protocolVersion":"2025-06-18","capabilities":{},
+        "clientInfo":{"name":"my-harness","version":"0"}}}'
+```
+
+Python 侧直接 `pip install mcp` 后用 `mcp.client.streamable_http.streamablehttp_client(url, headers=...)`
+建会话；这条路径与协议本身**未在本项目做真机验证**（Hermes 用的是它自带的客户端）。
+
+### 排障速查（跨客户端通用）
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| **421 Misdirected Request**（裸文本 `Invalid Host header`） | 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` | 把**该客户端访问用的 IP/主机名**（`host` 与 `host:*` 两种写法）加进 `MCP_ALLOWED_HOSTS` 并重启 |
+| **401** 且带 `WWW-Authenticate: Bearer` | 没带 `Authorization` 头（或缺 key） | 客户端配置里补 header；`?key=` 不支持 |
+| **403** | key 不匹配 | 对齐 `PAPER_API_KEYS` / `PAPER_API_KEY`；确认没多空格 |
+| 服务端启动就报 `MCP_ALLOWED_HOSTS is empty` / `needs a credential` | `MCP_ENABLED=true` 但白名单空或没有任何 key | 补 `MCP_ALLOWED_HOSTS` 与 `PAPER_API_KEYS`（或 `PAPER_API_KEY`） |
+| 工具列表里少了写工具 | `MCP_WRITE_ENABLED` 关 | 要写能力就开总闸 + 对应分开关并重启 |
+| 现象是"连不上"而不是明确报错 | 客户端没装 MCP 支持（例：Hermes 缺 `mcp` 包会被静默禁用） | 装依赖、重启，再 `hermes mcp test paperbox` |
+| 超时 | 客户端 per-tool timeout < `MCP_WAIT_SECONDS` | 把客户端 timeout 提到 ≥ 等待上限（Hermes 用 `timeout: 300`） |
+| `localhost` 连不上 | Windows 先解析到 IPv6 回环 | `url` 一律写 IP |
 
 ---
 

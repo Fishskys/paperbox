@@ -31,6 +31,11 @@
 
 ### Changed
 
+- **补上 MCP 的接入文档**：`UserManual.md` 新增「§1.7 MCP 接入」（开关表、10 个工具、起服务示例），
+  `docs/architecture/11-mcp-agent-interface.md` §10 重写为**四客户端片段**（Hermes ✅ 端到端验收、
+  codex 🟡 配置已就绪/端到端未验证、Claude Code ⚪ 未安装、自研 harness 含 `curl` 最小握手）
+  + 跨客户端排障速查（421/401/403/超时/localhost IPv6）。
+
 - **README 精简为概览**（简介 / 快速开始 / 架构 / 目录 / 端点一览 / 声明）：配置项、接口参数、使用示例与服务器部署
   迁入用户手册；旧版 README 归档到 `docs/old/README-20261004.md`。
 - **仓库根 `.env.example` 的默认凭据与 `infra/.env.example` 对齐**（PostgreSQL 口令、MinIO 用户名/口令），
@@ -94,6 +99,11 @@
   `facets`、`rewrite`（查询改写信息）字段。
 
 ### Changed
+
+- **补上 MCP 的接入文档**：`UserManual.md` 新增「§1.7 MCP 接入」（开关表、10 个工具、起服务示例），
+  `docs/architecture/11-mcp-agent-interface.md` §10 重写为**四客户端片段**（Hermes ✅ 端到端验收、
+  codex 🟡 配置已就绪/端到端未验证、Claude Code ⚪ 未安装、自研 harness 含 `curl` 最小握手）
+  + 跨客户端排障速查（421/401/403/超时/localhost IPv6）。
 
 - **`total` 的口径**：从「候选池大小」改为**论文数真值**（独立聚合统计，失败只降级不影响检索），
   新增 `candidates` 承接旧数字，避免「为什么返回的论文比候选少」这类困惑。

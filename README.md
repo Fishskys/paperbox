@@ -83,6 +83,10 @@ paperbox/
 
 ## 5. 能力一览
 
+> **给 agent 用**：paperbox 也能作为 **MCP 服务**被 codex / Claude Code / Hermes 等直接调用
+> （检索 + 读正文 + 导入/维护，默认关闭，需配 `MCP_ENABLED` 与白名单）。接入片段与排障见
+> `UserManual.md` §1.7 与 `docs/architecture/11-mcp-agent-interface.md` §10。
+
 所有接口都在 `/api/**` 下，除 `/`、`/health`、`/docs` 外均需 `Authorization: Bearer <PAPER_API_KEY>`。
 
 | 分组 | 方法 | 端点 | 说明 |
