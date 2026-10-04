@@ -4,21 +4,22 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-05
+
+paperbox 从"只有 REST 接口"变成"REST + MCP 双面服务"：agent 可以直接把论文库当检索与阅读工具用。
 
 ### Added
 
-- **MCP agent interface 的传输层与第一个工具**：paperbox 现在可以在自身进程里挂载
-  `/mcp`（Streamable HTTP），把检索/阅读/维护能力直接暴露给 agent。**默认关闭**
-  （`MCP_ENABLED=false`），开启时**必须**显式给出 `MCP_ALLOWED_HOSTS`（白名单为空则启动报错，
-  不使用 SDK 的 localhost 默认值），白名单外的 `Host` 返回 421。已实现 `paper_job_status`
-  （可带 `wait_seconds` 有界等待）；其余工具按契约文档 `docs/architecture/11-mcp-agent-interface.md`
-  推进。新增配置键：`MCP_ENABLED`/`MCP_ALLOWED_HOSTS`/`MCP_WRITE_ENABLED`/`MCP_ALLOW_DELETE`/
+- **MCP 端点（Streamable HTTP，默认关闭）**：在自身进程里挂载 `/mcp`，与 REST **共用**配置、鉴权、
+  日志与 service 层 —— 同一查询在两条路径上的 `total` 与排序**逐位相同**。
+  开启必须显式给出 `MCP_ALLOWED_HOSTS`（白名单为空则**启动报错**，不使用 SDK 的 localhost 默认值；
+  白名单要同时写 `host` 与 `host:*`），白名单外的 `Host` 返回 **421**；
+  `/mcp` 不带尾斜杠也一次命中（服务端内部改写路径，不回 307）。新增配置键：`MCP_ENABLED`/`MCP_ALLOWED_HOSTS`/`MCP_WRITE_ENABLED`/`MCP_ALLOW_DELETE`/
   `MCP_ALLOW_METADATA_WRITE`/`MCP_ALLOW_REINDEX`/`MCP_MAX_CHARS`/`MCP_MAX_CHARS_CEILING`/
   `MCP_WAIT_SECONDS`/`MCP_DOWNLOAD_TTL_SECONDS`/`MCP_TOOLSET`/`PAPER_API_KEYS`。
 - **MCP 读工具全部可用（6 个）**：`paper_search`（默认开精排，带 `filters`/`facets`）、`paper_get`
   （元数据 + 字段来源 + 降级记录）、`paper_get_chunks`（按阅读顺序分页，带字符预算与续读游标）、
-  `paper_get_context`（取检索命中前后文，目标块标 `primary`）、`paper_get_file`、`paper_job_status`。
+  `paper_get_context`（取检索命中前后文，目标块标 `primary`）、`paper_get_file`、`paper_job_status`（有界等待）。
   每个工具都返回统一的 `Envelope{data,meta,warnings,citations}`，`citations[]` 带 `paper_id`/页码/章节/
   `chunk_id`/≤200 字原文片段 —— agent 可以直接写"该结论见第 7 页 III-B 节"。检索/读取逻辑走
   `app/services/search_pipeline.py` 与 `app/services/chunk_service.py`（REST 与 MCP 共用同一实现，
@@ -26,8 +27,8 @@
 - **短期签名下载链接**：`paper_get_file` 返回 `GET /api/downloads/{paper_id}?exp=&sig=`（HMAC 覆盖
   `paper_id`+过期时间，默认 300 s，`MCP_DOWNLOAD_TTL_SECONDS` 可调）。链接**不含长期凭据**，
   过期或签名被改一律 403，对象存储仍经应用代理、桶保持私有。
-- **`scripts/acceptance_mcp.py`**：MCP 端点的一键脚本化验收（传输 + 鉴权 + 六读工具 + 四写工具 +
-  异常路径，50 项断言；只读面 37 项）。自带清理：导入**每次运行唯一字节**的合成 PDF，跑完按**语料快照
+- **脚本化验收 `scripts/acceptance_mcp.py`**：一条命令跑完传输 + 鉴权（401/403/421）+ 六读工具（含真的下载 PDF）
+  + 四写工具全链路 + 异常路径，**只读面 37 项 / 带写面 50 项**，退出码即结论。自带清理：导入**每次运行唯一字节**的合成 PDF，跑完按**语料快照
   diff** 删除自己新建的那篇，拒绝触碰任何运行前已存在的论文，并断言"既有论文一篇没少"。
 - **用户手册（`UserManual.md`）**：完整的部署与配置说明（应用 + 四个容器，按变量逐项列出作用/默认值/可选值）、
   全部接口的说明与参数、以及排障清单（状态码、作业错误码、解析降级码与常见问题）。
@@ -35,17 +36,15 @@
 ### Changed
 
 - **补上 MCP 的接入文档**：`UserManual.md` 新增「§1.7 MCP 接入」（开关表、10 个工具、起服务示例），
-  `docs/architecture/11-mcp-agent-interface.md` §10 重写为**四客户端片段**（Hermes ✅ 端到端验收、
-  codex 🟡 配置已就绪/端到端未验证、Claude Code ⚪ 未安装、自研 harness 含 `curl` 最小握手）
-  + 跨客户端排障速查（421/401/403/超时/localhost IPv6）。
+  `docs/architecture/11-mcp-agent-interface.md` §10 重写为**四客户端片段**（**Hermes ✅ 与 codex ✅ 均已端到端验收**、
+  Claude Code ⚪ 未安装、自研 harness ⚪ 含 `curl` 最小握手）+ 跨客户端排障速查。
+  **codex 的两个坑**也写进了契约 §10：`codex mcp add` 报成功不等于落盘、codex 对 MCP 调用走自己的审批策略。
 
 - **README 精简为概览**（简介 / 快速开始 / 架构 / 目录 / 端点一览 / 声明）：配置项、接口参数、使用示例与服务器部署
   迁入用户手册；旧版 README 归档到 `docs/old/README-20261004.md`。
 - **仓库根 `.env.example` 的默认凭据与 `infra/.env.example` 对齐**（PostgreSQL 口令、MinIO 用户名/口令），
   两份模板可直接复制使用；`DOCLING_URL` 默认留空（关闭 docling 后端、立即降级为内置 pypdf），
   不再指向私网地址。
-
-### Added
 
 - **MCP 写工具（4 个，默认全部关闭）**：`paper_import`（URL 或服务端 PDF 路径，带 sha256 去重）、
   `paper_reindex`、`paper_delete`、`paper_update_metadata`。开关：`MCP_WRITE_ENABLED` 总闸 +
@@ -79,6 +78,18 @@
   落到 PostgreSQL 触发 `DataError`。现在在服务层就判为"查不到"，REST 返回 404、MCP 返回
   `NOT_FOUND`（MCP 验收时发现，两条路径一起修好）。
 
+### 验收（可复现）
+
+- **Hermes 真机任务式验收**：①"找出 3 篇关于 X 的论文 + 页码引用"；②"读指定论文的 Method 部分并给页码"
+  —— 两段会话都走 `paper_search → paper_get → paper_get_chunks（翻页）→ paper_get_context`，
+  引用带页码与章节，**全程零 curl/REST 兜底**。证据 `docs/examine/mcp-hermes-acceptance-20261004/`。
+- **codex 端到端**：`codex exec` 调 `paper_search` + `paper_get` 答出《Attention Is All You Need》
+  并给出 p.1 / p.2 引文。
+- **脚本化**：只读 **37/37**、带写 **50/50**，`EXIT=0`；语料 30 → 31 → **30**；全量 pytest `EXIT=0`；
+  三端一致性 `problems=0`（30 live / 2302 块，孤儿对象与孤儿文档均为 0）。
+- **未验证**：Claude Code（本机未安装）与自研 harness 的接入片段；SSRF 闸残留 DNS rebinding 风险。
+  **未做**：速率限制，以及四个细化项（审计字段 / 错误码 / 预算翻页 / 作业等待语义）—— 见契约 §12。
+
 ## [0.2.0] - 2026-10-01
 
 检索质量收口 + 原生融合后端定档 + 精排轻量化。本版的核心变化是**默认检索路径换了实现**，
@@ -102,11 +113,6 @@
   `facets`、`rewrite`（查询改写信息）字段。
 
 ### Changed
-
-- **补上 MCP 的接入文档**：`UserManual.md` 新增「§1.7 MCP 接入」（开关表、10 个工具、起服务示例），
-  `docs/architecture/11-mcp-agent-interface.md` §10 重写为**四客户端片段**（Hermes ✅ 端到端验收、
-  codex 🟡 配置已就绪/端到端未验证、Claude Code ⚪ 未安装、自研 harness 含 `curl` 最小握手）
-  + 跨客户端排障速查（421/401/403/超时/localhost IPv6）。
 
 - **`total` 的口径**：从「候选池大小」改为**论文数真值**（独立聚合统计，失败只降级不影响检索），
   新增 `candidates` 承接旧数字，避免「为什么返回的论文比候选少」这类困惑。

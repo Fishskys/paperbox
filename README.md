@@ -41,15 +41,22 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 ## 3. 项目架构
 
 ```
-调用方（Hermes / 其他程序）
-      │  HTTP + Bearer
+调用方（Hermes / codex / 其他程序）
+      │  HTTP + Bearer                                        （REST：/api/**）
+      │  MCP Streamable HTTP + Bearer                          （agent：/mcp，默认关闭）
       ▼
-  paperbox API（FastAPI）
+  paperbox API（FastAPI，同一进程）
       │
       ├─ 导入流水线：上传 → 解析 → 切块 → 向量化 → 索引
+      ├─ 检索：双路召回 → 融合 → 折叠 → 精排 → 证据聚合
+      └─ MCP 端点：10 个工具（读 6 + 写 4）直调同一套 service 层
       ▼
 PostgreSQL（元数据）  MinIO（PDF 原件与解析产物）  OpenSearch（全文 + 向量）  Embedding 容器（向量与精排推理）
 ```
+
+MCP 端点与 REST **同进程、共用配置/鉴权/日志**：检索与读正文走的是同一份实现，
+所以同一查询在两条路径上的 `total` 与排序逐位相同。契约见
+[docs/architecture/11-mcp-agent-interface.md](docs/architecture/11-mcp-agent-interface.md)。
 
 | 环节 | 做什么 | 用什么实现 |
 |---|---|---|
@@ -61,6 +68,7 @@ PostgreSQL（元数据）  MinIO（PDF 原件与解析产物）  OpenSearch（�
 | 索引 | 块级文档进检索库（全文 + 向量） | OpenSearch，CJK bigram 分词 + kNN；别名切换做迁移 |
 | 检索 | 双路召回 → 融合 → 按论文折叠 → 精排 → 聚合证据 | **引擎侧 RRF(k=60) + collapse**（默认，`app/search/native.py`）；可切回应用侧双路融合 + 聚合（`app/search/hybrid.py`） |
 | 元数据 | 论文 / 来源记录 / 字段级账本三层模型，标识符去重 | PostgreSQL + SQLAlchemy + Alembic 迁移 |
+| 给 agent 的接口 | 把检索 / 读正文 / 导入维护暴露为 **10 个 MCP 工具**（读 6 + 写 4），带页码与章节引用、统一信封、结构化审计 | `app/mcp/`（传输 / 鉴权 / 审计 + 工具定义），工具直调 service 层；默认关闭，写工具再单独受开关约束 |
 | 服务与运维 | REST API、检索日志、一致性对账、健康检查、快照 | FastAPI + `scripts/` 下的运维脚本 |
 
 ## 4. 目录结构
@@ -68,7 +76,8 @@ PostgreSQL（元数据）  MinIO（PDF 原件与解析产物）  OpenSearch（�
 ```
 paperbox/
 ├─ app/           应用代码：api（路由）· services（业务）· search（检索）· parsing（解析与切块）
-│                · workers（进程内队列与流水线）· db（模型）· schemas（契约）· core（配置与日志）· eval（指标）
+│                · workers（进程内队列与流水线）· db（模型）· schemas（契约）· core（配置与日志）
+│                · mcp（MCP 端点与工具）· eval（指标）
 ├─ infra/         依赖服务的 docker compose（PostgreSQL / OpenSearch / MinIO / Embedding）+ docling 镜像
 ├─ migrations/    Alembic 数据库迁移
 ├─ scripts/       运维与验收脚本（建索引 / 批量导入 / 评测 / 对账 / 快照 / 健康检查 / 真机验收）
@@ -119,10 +128,12 @@ paperbox/
 | 元数据 | POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL-JSON / JSON） |
 | 元数据 | POST | `/api/metadata/apply` | 提交复核决定 |
 | 元数据 | POST | `/api/metadata/sources/{source_id}/attach` | 把来源记录挂到指定论文 |
+| 论文 | GET | `/api/downloads/{paper_id}` | 签名短链下载（免 Bearer，签名即凭据，过期 403） |
+| **agent** | **POST** | **`/mcp`** | **MCP Streamable HTTP 端点**（10 个工具；默认关闭，需 `MCP_ENABLED` + Host 白名单；**不在 `/docs` 里**，见架构文档 11） |
 
 ## 6. 声明
 
-本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.2.0**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.3.0**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 使用中遇到问题或有想法，欢迎提 [Issue](https://github.com/Fishskys/paperbox/issues) 与 Pull Request；
 如果它对你的工作有帮助，欢迎点一个 ⭐ [Star](https://github.com/Fishskys/paperbox)。

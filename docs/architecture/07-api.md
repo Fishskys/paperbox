@@ -23,7 +23,7 @@
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用，带行号）
 
-### 2.1 路由总表（28 条，包含不在 schema 的 `GET /`）
+### 2.1 路由总表（29 条，包含不在 schema 的 `GET /`；另有 `/mcp` 挂载，见 §2.5）
 
 `Bearer` 列：`是` = 该 router 构造时带 `dependencies=[Depends(require_api_key)]`。
 
@@ -44,6 +44,7 @@
 | GET | `/api/papers` | 论文列表 | 是 | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py:65-80` |
 | GET | `/api/papers/{paper_id}` | 单篇元数据 | 是 | — | `app/api/papers.py:110` |
 | GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | 是 | — | `app/api/papers.py:118` |
+| GET | `/api/downloads/{paper_id}` | **签名**短链下载（MCP `paper_get_file` 用；**免 Bearer**，签名即凭据，`exp`/`sig` 过期或被改 → 403） | 免 | `exp`、`sig` | `app/api/downloads.py` |
 | GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | 是 | `limit`、`offset`（夹取 1..200） | `app/api/papers.py:157`, `papers.py:162` |
 | GET | `/api/papers/{paper_id}/degradations` | **T7.3** 降级账本：该论文各阶段「能用但更薄」的原因 | 是 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py:201` |
 | GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 是 | — | `app/api/papers.py:242` |
@@ -123,8 +124,27 @@
 | 关闭 | `await housekeeping.stop()` | `main.py:54` | cancel 周期任务 |
 | 关闭 | `await job_queue.stop()` | `main.py:55` | cancel worker 协程；**不等待**，线程内已开始的流水线跑到结束（`queue.py:139-154`） |
 | 关闭 | `logger.info("paperbox stopping")` | `main.py:56` | 无 DB/索引收尾：未调用 `job_queue.join()`（存在，`queue.py:156-160`），未调用 `dispose_engine()`（存在，`app/db/session.py:79`） |
+| 启动 | `await mcp_server.session_manager.run()`（**仅当 `MCP_ENABLED=true`**） | `main.py:60` 附近 | 挂载的子应用**不会**执行自己的 lifespan，所以 MCP 会话管理器必须由宿主 lifespan 进入；漏掉 = `/mcp` 路由在、**首个请求 500**（有回归测试） |
+| 启动 | `mcp.auth.warn_about_shared_keys()` | `main.py` | 多 agent 共用同一把 key 时启动告警（审计里无法区分 agent） |
 
 启动**不**做 OpenSearch 索引存在性检查：`main.py:19-36` 的 import 列表不含 `app.search.opensearch`，lifespan 内亦无相关调用。
+
+### 2.5 MCP 端点（挂载，不在 OpenAPI 里）
+
+`/mcp` 是一个 **Mount**（`main.py:119` 附近 `app.mount("/mcp", build_streamable_http_app(...))`），
+所以它**不出现在 `/openapi.json`** 与 `/docs` 里；契约与工具清单见
+`docs/architecture/11-mcp-agent-interface.md`。要点：
+
+| 项 | 实现 |
+|---|---|
+| 传输 | Streamable HTTP，`streamable_http_path="/"` + `stateless_http=True`（无会话状态，两个调用之间不依赖会话） |
+| `Host` 白名单 | 显式 `TransportSecuritySettings(allowed_hosts=…)`（**不依赖 SDK 默认**，SDK 默认只认 `127.0.0.1`/`localhost`）；白名单外一律 **421**；`MCP_ALLOWED_HOSTS` 为空且 `MCP_ENABLED=true` → **启动即报错** |
+| 路径规范化 | `McpMountPathMiddleware` 在服务端内部把 `/mcp` 改写成 `/mcp/`（Starlette 的 `Mount` 正则要求尾斜杠）；**不带尾斜杠也必须一次命中**，不能回 307 |
+| 鉴权 | 自写静态 Bearer（**不用** SDK 的 `AuthSettings`——那是 OAuth 形态）：`McpAuthMiddleware` 置于**最外层**（先鉴权再谈 Host），缺凭据 401 / 不匹配 403；**不支持 `?key=`**；命中后把 agent 名放进 ContextVar 供审计 |
+| 工具 ↔ REST 的关系 | 工具直接调 **service 层**（`search_pipeline.run_search`、`chunk_service`、`paper_service.delete_preview/purge`、`ingestion_service.create_reindex_job`、`metadata_manual.current_value`），不绕 HTTP：同一查询在 REST 与 MCP 上的 `total` 与排序逐位相同（不变式 2） |
+| 失败通道 | 工具抛 `ToolFailure`（继承 SDK `ToolError`）→ 客户端拿 `isError:true` + 契约错误 JSON 文本；抛其它异常 = 崩贴、客户端看不到细节（`app/mcp/errors.py`） |
+| 写工具开关 | 关掉的写工具**不注册**：不出现在 `tools/list`，按名字也调不到 |
+| 审计 | 每次调用一行结构化日志（`app.mcp.audit`）：工具、agent、参数摘要、结果、错误码、耗时、影响面；**不落库、不落新表** |
 
 ## 3. 数据结构
 
@@ -187,6 +207,9 @@
 10. **DELETE 的补偿语义**：先清 OpenSearch、再清 MinIO、最后才标记软删（`papers.py:242-242`），任一步 503 时论文仍可见且可原样重试——不要把顺序调换。
 11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py:65`）；`source_type` 只来自 query（`metadata.py:98-101`）。README §3.4 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
 12. **无 CORS 中间件**：全仓 grep `CORS` 0 命中，浏览器跨源调用会失败；Hermes/脚本这类非浏览器客户端不受影响。
+13. **`/mcp` 不能有重定向**：客户端（如 Hermes）在 307 后**不会重放 `Authorization`**，所以 `/mcp` 必须在服务端内部补斜杠一次命中；断言这件事必须 `follow_redirects=False`，否则 TestClient 会自动跟随、测试等于没测。
+14. **MCP 写工具"关 = 不注册"**：`MCP_WRITE_ENABLED` 与三个 `MCP_ALLOW_*` 决定工具是否注册，不是运行时才拒绝；想确认当下能力请看 `tools/list`，不要看文档。
+15. **`/api/downloads/{paper_id}` 是唯一免 Bearer 的业务端点**：凭证是 URL 里的 HMAC 签名（覆盖 `paper_id:exp`），TTL 10–3600 s；它不是"公开下载"，泄露链接就等于限时授权。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处）
 
@@ -210,6 +233,11 @@
 | `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:129-130` |
 | `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:83`, `:89`；`search.py:107-111` |
 | `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:104-106`, `:220-238` |
+| `MCP_ENABLED` / `MCP_ALLOWED_HOSTS` | `False` / `""` | 是否挂载 `/mcp`；开启时白名单**必填**（空则启动报错）。白名单要同时写 `host` 与 `host:*` | `config.py:132`, `:138`, `_check_mcp` |
+| `MCP_WRITE_ENABLED` + `MCP_ALLOW_DELETE`/`_METADATA_WRITE`/`_REINDEX` | `False` | 写工具总闸与三个分开关；关掉的工具**不注册** | `config.py:140-146` |
+| `PAPER_API_KEYS` | `""` | 多 agent 的 `名字:key`（分号分隔），命中则审计记该 agent 名；**按值认身份**，共用一把 key 会同名 | `config.py:165`, `app/mcp/auth.py` |
+| `MCP_MAX_CHARS` / `_CEILING`、`MCP_WAIT_SECONDS`、`MCP_DOWNLOAD_TTL_SECONDS`、`MCP_DOWNLOAD_SECRET`、`MCP_TOOLSET`、`MCP_PUBLIC_BASE_URL` | `8000`/`32000`、`120`、`300`、`""`（回落 `PAPER_API_KEY`）、`v1`、`""` | 正文预算与上限（超上限报错不夹紧）、写工具等待上限、签名链接 TTL（夹取 10–3600）、签名密钥、工具集版本、无请求上下文时的兜底基址 | `config.py:149-163` |
+| `INGEST_ALLOW_PRIVATE_HOSTS` | `""` | `paper_import`/`/ingest` 访问私网地址的白名单（主机名或 CIDR）；空 = 只允许公网（SSRF 闸逃逸阀） | `config.py:227`, `app/services/net_guard.py` |
 
 非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py:36`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py:27`）（原先还有 `CANDIDATE_FACTOR = 5` = 「请求时估算的候选池」，2026-09-30 随 T-A2 删除：候选数改由检索实际结果给出）、chunk 分页上限 200（`app/api/papers.py:178`）。
 
@@ -241,5 +269,8 @@
 6. **`GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无上下界**，可通过极大值放大查询。
 7. **`GET /health` 恒 200**，无法作为就绪探针区分「进程活」与「依赖可用」。
 8. **`Retry-After` 固定 2 秒**，不是配置项，积压很深时可能过于乐观。
+9. **MCP 侧的四项细化未做**（非缺口，见 `docs/architecture/11-mcp-agent-interface.md` §12）：审计字段细化（T-A4）、错误码细化（T-A7）、预算与翻页边界细化（T-A8）、作业等待语义细化（T-A9）。
+10. **MCP 无速率限制**：审计能看见谁调了多少，但没有任何 per-key 限流（"限流未做"是明确记录在案的缺口）。
+11. **MCP 只在 Hermes 与 codex 上做过真机验收**：Claude Code（本机未安装）与自研 harness 的片段**未验证**；SSRF 闸残留 DNS rebinding 风险（解析与连接之间的竞态，已在 `net_guard.py` 明文标注）。
 9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` §2（`:29-53`）未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` §3.4 的导入示例含无效的 `-F source_type=…`（`:238-239`）且响应示例字段名写作 `total_records`（`:240`），代码实际返回 `total`（`app/schemas/metadata.py:132`、`app/services/metadata_import.py:600-612`）；`docs/architecture/MVP-SPEC.md:9` 提示该文件部分表述已过期。
 10. **鉴权零单测**：401/403 与 `X-API-Key` 回退路径均无测试；测试统一绕过依赖，因此「precondition 挂了但鉴权漏配」这类回归不会被发现。
