@@ -369,7 +369,7 @@ hermes mcp test paperbox                                    # 期望：Connected
 工具在 Hermes 里是 `mcp__paperbox__<tool>`（例：`mcp__paperbox__paper_search`）。
 **改完必须重启 Hermes**（无热加载；网关 host 的会话重启后会自动恢复）。
 
-### codex CLI（🟡 配置已就绪，端到端未验证）
+### codex CLI（✅ 端到端验收通过，2026-10-04）
 
 ```bash
 # token 从环境变量读，不进配置文件
@@ -379,14 +379,33 @@ codex mcp list      # 期望：paperbox / streamable_http / enabled / Bearer tok
 codex mcp get paperbox
 ```
 
-本机实测（2026-10-04，codex-cli 0.153.4）：`codex mcp add` 成功、`codex mcp get paperbox` 显示
-`transport: streamable_http` + `bearer_token_env_var: PAPERBOX_MCP_TOKEN` + `enabled: true` ✓。
-**端到端调用仍未能验证**，卡在 codex 自己的模型后端上（**与 paperbox 无关**，两次原因依次是）：
-① CC Switch 代理 `127.0.0.1:15721` 没在监听 → `502 Bad Gateway`；
-② 代理起起来后，**逐个模型探测全部 `HTTP 402 INSUFFICIENT_BALANCE`（TokenRhythm 余额不足）**
-（fl 探的 `deepseek-flash`/`deepseek-chat`/`deepseek-v3`/`kimi-k2`/`glm-4.6`/`gpt-5`/`claude-sonnet-4-5` 无一例外）。
-⇒ codex 连模型请求都发不出去，谈不上调 MCP。**额度或 key 在 CC Switch 侧解决后按上面的片段即可用**
-（注意：同一台机器上 Hermes 跑 `TokenRhythm/deepseek-flash` 是正常的 —— 两边很可能不是同一把 key/账号）。
+本机实测（2026-10-04，codex-cli 0.153.4）**已通过**：`codex exec` 用 `paper_search` ×2 + `paper_get` ×3，
+正确答出《Attention Is All You Need》（arXiv 1706.03762, NIPS 2017）并给出**页级引用**
+（p.1 Abstract、p.2 Introduction，附原文引文）。**两个必须知道的坑**：
+
+1. **`codex mcp add` 报 Added ≠ 落盘成功**。本机出现过一次"Added global MCP server 'paperbox'"，
+   但随后 `codex mcp list` / `config.toml` 里**没有**该条目，codex 静默地带着 0 个 MCP 工具跑完，
+   还一本正经地报告"我没有 paperbox 工具"（**没有任何报错**）。所以：**每步都要复核** ——
+   `codex mcp get paperbox` 看配置真的在，再跑一次真会话看工具真的在。
+2. **codex 对 MCP 工具调用走它的审批策略**：默认 `approval: never` 时每次调用都会被拒，
+   客户端只会看到 `MCP tool call requires approval, but approval policy is never`。
+   **非交互验收**（`codex exec`）加 `--dangerously-bypass-approvals-and-sandbox`；
+   **交互式会话**里批准一次即可，或把审批策略切到 `on-request`/`untrusted`。
+
+```bash
+# 端到端复验（本机已跑通）
+export PAPERBOX_MCP_TOKEN="<key>"
+codex mcp get paperbox    # 先确认配置真的在
+codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+  '用 paperbox 的 MCP 工具找一篇讲 Transformer 的论文，给出标题和页码引用'
+```
+
+**顺带一条审计事实**：`PAPER_API_KEYS` 是按**值**认身份的 —— 两个 agent 共用同一把 key 时，
+审计行里都会记成先出现的那个名字（本次 codex 的调用在服务端记成了 `agent=hermes`，因为我给两者配了同一把 key）。
+**想区分 agent，就必须给每个 agent 各发一把不同的 key。**
+
+> 排查记录（第一版失败原因，留档）：① CC Switch 代理没监听 → `502`；② 代理起来后该账号
+> `HTTP 402 INSUFFICIENT_BALANCE`（7 个模型全 402）→ 与 paperbox 无关，额度解决后即通。
 
 ### Claude Code（⚪ 未验证，本机未安装）
 

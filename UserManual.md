@@ -332,8 +332,10 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 写 | `paper_delete` | 删除某篇（默认 `dry_run=true`，软删） |
 | 写 | `paper_update_metadata` | 改元数据，返回「旧值 → 新值」 |
 
-四个客户端的配置片段、以及 401/403/421 的排障速查，见
-`docs/architecture/11-mcp-agent-interface.md` §10（**只有 Hermes 做过真机任务式验收**，其余标注状态）。
+四个客户端的配置片段、以及 401/403/421 的排障速查，见 `docs/architecture/11-mcp-agent-interface.md` §10。
+**已真机验收通过：Hermes、codex**（codex 非交互跑要给 `--dangerously-bypass-approvals-and-sandbox`，
+因为 codex 对 MCP 调用走自己的审批策略）；Claude Code（本机未装）与自研 harness 的片段**未验证**。
+**想区分 agent 就各发一把 key**：`PAPER_API_KEYS` 按值认身份，共用一把 key 的 agent 在审计里会同名。
 自检：`hermes mcp test paperbox`（Hermes）或直接 `curl` 一次 `initialize` 握手。
 
 ---
