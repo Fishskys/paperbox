@@ -37,6 +37,7 @@ from app.workers import housekeeping
 from mcp.server import MCPServer
 
 from app.mcp.auth import McpAuthMiddleware, warn_about_shared_keys
+from app.mcp.server import McpMountPathMiddleware
 from app.mcp.server import build_server, build_streamable_http_app
 from app.workers import queue as job_queue
 
@@ -94,6 +95,8 @@ async def request_id_middleware(
 # MCP auth runs outermost: an unauthenticated caller is refused before anything else
 # (and before the transport reveals which Host names this server accepts).
 app.add_middleware(McpAuthMiddleware)
+# Serving /mcp without a trailing slash is in-process, not a 307 (see the class).
+app.add_middleware(McpMountPathMiddleware)
 
 app.include_router(health_api.router)
 app.include_router(consistency_api.router)

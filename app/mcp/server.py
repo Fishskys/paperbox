@@ -22,6 +22,7 @@ from __future__ import annotations
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import __version__
 from app.core.config import settings
@@ -29,6 +30,9 @@ from app.core.logging import get_logger
 from app.mcp import tools_read, tools_write
 
 logger = get_logger(__name__)
+
+#: Path the MCP endpoint is mounted at (and the one clients are configured with).
+MCP_PATH = "/mcp"
 
 #: Instructions handed to the client at ``initialize`` (agent-facing prompt).
 INSTRUCTIONS = (
@@ -72,6 +76,27 @@ def transport_security() -> TransportSecuritySettings:
             "localhost only and answers anything else with 421."
         )
     return TransportSecuritySettings(allowed_hosts=allowed, allowed_origins=[])
+
+
+class McpMountPathMiddleware:
+    """Serve ``/mcp`` (the documented URL) as ``/mcp/`` internally.
+
+    Starlette's ``Mount("/mcp")`` regex only matches paths that continue with a
+    slash, so a request to the bare mount point -- which is exactly the URL the
+    contract documents and every client is configured with -- is answered with
+    **307** to ``/mcp/``. That doubles the round trips of every MCP request, and a
+    client that refuses to replay the ``Authorization`` header across a redirect
+    cannot talk to the endpoint at all (seen with the Hermes client, 2026-10-04).
+    Rewriting the path in-process keeps both spellings working in one hop.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("path") == MCP_PATH:
+            scope = {**scope, "path": f"{MCP_PATH}/", "raw_path": f"{MCP_PATH}/".encode()}
+        await self.app(scope, receive, send)
 
 
 def build_streamable_http_app(server: MCPServer | None = None) -> Starlette:
