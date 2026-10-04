@@ -345,37 +345,37 @@ def test_rewrite_max_chars_must_be_positive() -> None:
 # API layer
 # --------------------------------------------------------------------------- #
 def test_api_gate_skips_the_llm_when_disabled(monkeypatch) -> None:
-    from app.api import search as search_api
+    from app.services import search_pipeline
 
     def boom(query):  # pragma: no cover - must never run
         raise AssertionError("rewrite_query must not run while disabled")
 
     monkeypatch.setattr(settings, "query_rewrite_enabled", False)
-    monkeypatch.setattr(search_api.query_rewrite_service, "rewrite_query", boom)
+    monkeypatch.setattr(search_pipeline.query_rewrite_service, "rewrite_query", boom)
 
-    outcome = search_api._maybe_rewrite("中文查询")
+    outcome = search_pipeline.maybe_rewrite("中文查询")
 
     assert outcome.applied is False
     assert outcome.rewritten == "中文查询"
 
 
 def test_api_gate_skips_ascii_queries_even_when_enabled(monkeypatch) -> None:
-    from app.api import search as search_api
+    from app.services import search_pipeline
 
     def boom(query):  # pragma: no cover - must never run
         raise AssertionError("ASCII queries must not be rewritten")
 
     monkeypatch.setattr(settings, "query_rewrite_enabled", True)
-    monkeypatch.setattr(search_api.query_rewrite_service, "rewrite_query", boom)
+    monkeypatch.setattr(search_pipeline.query_rewrite_service, "rewrite_query", boom)
 
-    outcome = search_api._maybe_rewrite("stochastic time-to-digital converter")
+    outcome = search_pipeline.maybe_rewrite("stochastic time-to-digital converter")
 
     assert outcome.applied is False
     assert outcome.rewritten == "stochastic time-to-digital converter"
 
 
 def test_api_gate_rewrites_cjk_queries_when_enabled(monkeypatch) -> None:
-    from app.api import search as search_api
+    from app.services import search_pipeline
 
     called: list[str] = []
 
@@ -384,9 +384,9 @@ def test_api_gate_rewrites_cjk_queries_when_enabled(monkeypatch) -> None:
         return rewrite.RewriteOutcome(query, "english query", True, model="m", took_ms=7)
 
     monkeypatch.setattr(settings, "query_rewrite_enabled", True)
-    monkeypatch.setattr(search_api.query_rewrite_service, "rewrite_query", fake)
+    monkeypatch.setattr(search_pipeline.query_rewrite_service, "rewrite_query", fake)
 
-    outcome = search_api._maybe_rewrite("中文查询")
+    outcome = search_pipeline.maybe_rewrite("中文查询")
 
     assert called == ["中文查询"]
     assert outcome.applied is True

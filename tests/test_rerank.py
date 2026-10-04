@@ -376,7 +376,7 @@ def test_response_rerank_block_can_report_a_model() -> None:
 
 def test_logged_result_shape_keeps_both_scores() -> None:
     """The search log stores the same score fields the client sees (P1 B)."""
-    from app.api import search as search_api
+    from app.services import search_pipeline
 
     payload = [
         SearchResult(
@@ -389,7 +389,7 @@ def test_logged_result_shape_keeps_both_scores() -> None:
         )
     ]
 
-    logged = search_api.serialize_results(payload)[0]
+    logged = search_pipeline.serialize_results(payload)[0]
 
     assert logged["retrieval_score"] == 0.3
     assert logged["rerank_score"] == 0.95

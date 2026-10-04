@@ -7,13 +7,19 @@
 **端点**：`http://<host>:8077/mcp`（Streamable HTTP）
 **状态**：v1（工具集冻结，见 §8）　**客户端验收**：Hermes（其余三家给配置片段，标"待验证"）
 
-> **实现进度（2026-10-04）**：传输层已上线并可验收 —— 服务端 `app/mcp/`、挂载 `/mcp`、显式
-> `TransportSecuritySettings`（无默认、空白名单即启动失败）、stateless HTTP、宿主机 lifespan 托管
-> session manager；工具已实现 1/10（**`paper_job_status`**，含 `wait_seconds` 有界等待）。
-> 本机验收五项全过：`initialize` 200 → `tools/list` 返回带 `outputSchema` 的 `paper_job_status` →
-> `tools/call`（不存在的 job）返回 `isError` + 可解析错误 JSON → 白名单外 `Host` **421** →
-> 白名单内 LAN `Host` `10.181.116.220:8077` **200**；启动日志打印生效白名单。
-> 其余 9 个工具、鉴权（T-A4）、SSRF 闸（T-A11）、签名下载 URL（T-A10）待实现，按 §8 的 v1 契约推进。
+> **实现进度（2026-10-04，二次更新）**：**6 个读工具全部落地**（`paper_search` / `paper_get` /
+> `paper_get_chunks` / `paper_get_context` / `paper_get_file` / `paper_job_status`），
+> 写工具 4 个未做。传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、
+> 宿主机 lifespan 托管 session manager 均已验收。
+> **真机验收（30 篇语料）**：`paper_search` 真实排序（int8 交叉编码器在位，3.2s）→ 9 条 citation
+> **全部带页码与章节**；`paper_get` 报 15 块 + 7 个字段的来源账本；分页游标不重叠；`paper_get_context`
+> 窗口 5 块且恰好 1 块 `primary`；**签名下载 200 / 2.2 MB 真 PDF / 篡改签名 403**；
+> REST 与 MCP 同查询 **total 与排序逐位相同**（不变式 2）。
+> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、
+> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、
+> `app/services/download_signing.py` + `app/api/downloads.py`（签名链接与流式下载）、`app/mcp/citations.py`。
+> 待做：鉴权（T-A3）、写工具（T-A6）、错误码细化（T-A7）、SSRF 闸（T-A11）、验收脚本（T-A13）、
+> Hermes 真机任务式验收（T-A14）、四客户端配置片段（T-A15）。
 
 ---
 
@@ -205,7 +211,9 @@ PAPER_API_KEYS=hermes:<key1>;codex:<key2>;claude-code:<key3>
 | `limit` | int | `10` | 每页块数 |
 | `max_chars` | int | `8000` | 本次返回正文上限；**> `MCP_MAX_CHARS_CEILING` 直接报 `INVALID_ARGUMENT`** |
 
-返回 `data`：`chunks[]`（`chunk_id`/`page`/`section`/`text`/`chars`）+ `truncated` + `next_offset`（超预算时给出）。
+返回 `data`：`chunks[]`（`chunk_id`/`chunk_index`/`page`/`page_end`/`section`/`subsection`/`text`/`chars`/`token_count`/`primary`/`truncated`）
++ `total`/`returned`/`offset`/`limit` + `truncated` + `next_offset`。
+**`next_offset` 是"接着读的游标"**：超预算被截断时给出，论文还有未读块时也给出（`None` = 这篇你已看到底）。
 
 #### `paper_get_context`
 

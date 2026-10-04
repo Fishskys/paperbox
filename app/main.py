@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, Response
 from app import __version__
 from app.api import ingestion as ingestion_api
 from app.api import jobs as jobs_api
+from app.api import downloads as downloads_api
 from app.api import health as health_api
 from app.api import consistency as consistency_api
 from app.api import metadata as metadata_api
@@ -97,6 +98,8 @@ app.include_router(papers_api.router)
 app.include_router(metadata_api.router)
 app.include_router(search_api.router)
 app.include_router(search_logs_api.router)
+# Signed downloads carry their credential in the URL (no API key dependency).
+app.include_router(downloads_api.router)
 
 # --- MCP agent interface (contract: docs/architecture/11-mcp-agent-interface.md) ---
 # Built only when MCP_ENABLED=true; an empty MCP_ALLOWED_HOSTS is a startup error

@@ -9,9 +9,12 @@ schema is generated from these models, so nothing here may degrade into a bare
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+from datetime import datetime
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.paper import PaperDegradationOut, PaperOut
 
 T = TypeVar("T")
 
@@ -80,3 +83,112 @@ class ErrorEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     error: ErrorInfo
+
+
+class ChunkView(BaseModel):
+    """One chunk of a paper as the reading tools publish it.
+
+    ``page``/``page_end``/``section`` come from the parser (they are what makes a
+    citation exact); ``primary`` marks the chunk the caller asked about in
+    ``paper_get_context``; ``truncated`` means the text was cut to fit the caller's
+    character budget -- the schema never silently shortens a chunk.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: str
+    #: Reading order inside the paper (0-based).
+    chunk_index: int
+    page: int | None = None
+    page_end: int | None = None
+    section: str | None = None
+    subsection: str | None = None
+    text: str
+    #: Characters of ``text`` in this response (after any budget cut).
+    chars: int
+    token_count: int | None = None
+    #: True for the chunk the caller asked for (``paper_get_context`` only).
+    primary: bool = False
+    #: True when ``text`` was cut to fit the character budget.
+    truncated: bool = False
+
+
+class ChunkPageData(BaseModel):
+    """``paper_get_chunks``: one page of a paper's chunks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str
+    title: str = ""
+    #: Chunks this paper has in total (so a caller knows how much is left).
+    total: int
+    returned: int
+    offset: int
+    #: The window the caller asked for, after validation.
+    limit: int
+    #: True when the character budget cut the page short.
+    truncated: bool
+    #: Pass this as ``offset`` to continue reading the paper; ``None`` when the
+    #: caller has seen everything (either the budget cut the page or the paper
+    #: simply continues -- both cases set it).
+    next_offset: int | None = None
+    chunks: list[ChunkView] = Field(default_factory=list)
+
+
+class ContextData(BaseModel):
+    """``paper_get_context``: a chunk plus its neighbours, in reading order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str
+    title: str = ""
+    target_chunk_id: str
+    returned: int
+    truncated: bool
+    #: Neighbours the caller asked for that the paper does not have (the window
+    #: hit the start or the end of the paper).
+    missing_before: int = 0
+    missing_after: int = 0
+    chunks: list[ChunkView] = Field(default_factory=list)
+
+
+class ProvenanceClaimView(BaseModel):
+    """One metadata claim behind a paper field (the "where did this come from")."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provenance_id: str
+    value: Any = None
+    source_id: str | None = None
+    confidence: float | None = None
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+
+
+class PaperDetailData(BaseModel):
+    """``paper_get``: metadata plus where it came from and how it was parsed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper: PaperOut
+    #: Field name -> the claim that currently holds (full history is on REST).
+    provenance: dict[str, list[ProvenanceClaimView]] = Field(default_factory=dict)
+    #: Unresolved parsing degradations (also summarised in ``warnings``).
+    degradations: list[PaperDegradationOut] = Field(default_factory=list)
+    #: Chunks the paper has in PostgreSQL -- 0 means it was never chunked.
+    chunk_count: int = 0
+
+
+class FileData(BaseModel):
+    """``paper_get_file``: a short-lived link to the stored original."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Signed URL, valid until ``expires_at``; carries no long-lived credential.
+    download_url: str
+    expires_at: datetime
+    filename: str
+    bytes: int | None = None
+    content_type: str | None = None
+    #: Highest page number the chunks mention (``None`` when unknown).
+    page_count: int | None = None
