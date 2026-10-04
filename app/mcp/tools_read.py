@@ -19,7 +19,6 @@ business rules:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from collections.abc import Sequence
 from typing import Any
@@ -30,7 +29,7 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.mcp import auth, citations, errors
+from app.mcp import auth, citations, errors, jobs
 from app.mcp.audit import log_call
 from app.mcp.models import (
     ChunkPageData,
@@ -59,12 +58,8 @@ from app.services import (
     search_service,
 )
 
-#: Stages after which a job will not move on its own.
-TERMINAL_STAGES = frozenset({"COMPLETED", "FAILED"})
-
-#: Poll interval and hard ceiling for ``wait_seconds`` on the status tool.
-POLL_INTERVAL_SECONDS = 1.0
-MAX_STATUS_WAIT_SECONDS = 600
+#: Waiting on a job is shared with the writing tools (``app/mcp/jobs.py``).
+MAX_STATUS_WAIT_SECONDS = jobs.MAX_WAIT_SECONDS
 
 
 # --------------------------------------------------------------------------- #
@@ -613,23 +608,13 @@ def register(server: MCPServer) -> None:
         started = time.perf_counter()
         arguments = {"job_id": job_id, "wait_seconds": wait_seconds}
         try:
-            if wait_seconds < 0:
-                raise errors.invalid_argument("wait_seconds must be >= 0")
-            if wait_seconds > MAX_STATUS_WAIT_SECONDS:
-                raise errors.invalid_argument(
-                    f"wait_seconds must be <= {MAX_STATUS_WAIT_SECONDS}",
-                    hint="poll again instead of waiting longer in one call",
-                )
-            deadline = started + wait_seconds
-            while True:
-                job = await asyncio.to_thread(_load_job, job_id)
-                if _status_of(job) != "running" or time.perf_counter() >= deadline:
-                    break
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            job, waited = await jobs.wait_for_job(job_id, wait_seconds)
             took_ms = int((time.perf_counter() - started) * 1000)
             warnings: list[str] = []
-            if _status_of(job) == "running":
-                warnings.append("still running; poll paper_job_status again")
+            if jobs.status_of(job) == "running":
+                warnings.append(
+                    f"still running after {waited}s; poll paper_job_status again"
+                )
             log_call(
                 tool="paper_job_status",
                 agent=auth.agent_name(),
@@ -656,33 +641,4 @@ def register(server: MCPServer) -> None:
             raise
 
 
-# --------------------------------------------------------------------------- #
-# job helpers (module level so tests can stub the database boundary)
-# --------------------------------------------------------------------------- #
-def _load_job(job_id: str):
-    """Read one job through the service layer (same shape as the REST endpoint)."""
-    from app.schemas.job import JobOut
-    from app.services import ingestion_service
-
-    session = SessionLocal()
-    try:
-        job = ingestion_service.get_job(session, job_id)
-        if job is None:
-            raise errors.not_found("job", job_id)
-        return JobOut.model_validate(ingestion_service.serialize_job(job))
-    finally:
-        session.close()
-
-
-def _status_of(job) -> str:
-    if job.stage in TERMINAL_STAGES:
-        return "completed" if job.stage == "COMPLETED" else "failed"
-    return "running"
-
-
-__all__ = [
-    "MAX_STATUS_WAIT_SECONDS",
-    "POLL_INTERVAL_SECONDS",
-    "TERMINAL_STAGES",
-    "register",
-]
+__all__ = ["MAX_STATUS_WAIT_SECONDS", "register"]

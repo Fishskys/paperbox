@@ -26,7 +26,7 @@ from starlette.applications import Starlette
 from app import __version__
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.mcp import tools_read
+from app.mcp import tools_read, tools_write
 
 logger = get_logger(__name__)
 
@@ -50,6 +50,10 @@ def build_server() -> MCPServer:
         instructions=INSTRUCTIONS,
     )
     tools_read.register(server)
+    if settings.mcp_write_enabled:
+        # Invisible unless the operator opted in: the switches decide what exists, so
+        # a disabled tool cannot be called by guessing its name either.
+        tools_write.register(server)
     return server
 
 

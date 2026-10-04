@@ -254,8 +254,18 @@ PAPER_API_KEYS=hermes:<key1>;codex:<key2>;claude-code:<key3>
 | `paper_delete` | `paper_id`（必填）、**`dry_run`=`true`** | — | `dry_run=true` 返回影响面（论文、块数、对象数）；显式 `false` 才执行（**软删**） |
 | `paper_update_metadata` | `paper_id`（必填）、`fields: MetadataPatch`（必填）、`dry_run`=`false` | — | 改元数据，返回"字段旧值→新值"；回滚走 REST |
 
-- 写工具**只支持 URL 与服务端目录**两种导入源：MCP 不传文件字节（要传文件走 REST `/api/papers/ingest/files`）。
-- `local_path` 必须落在 `INGEST_LOCAL_ROOTS` 白名单内（默认空 = 该能力关闭）。
+- 写工具**只支持 URL 与服务端路径**两种导入源：MCP 不传文件字节（要传文件走 REST `/api/papers/ingest/files`）。
+- `local_path` 指的是**服务端上的一个 PDF 文件路径**（不是目录 —— 目录批量导入走 REST `/ingest/dir`，
+  它有逐文件报告和自己的 `dry_run`），必须落在 `INGEST_LOCAL_ROOTS` 白名单内（默认空 = 该能力关闭）。
+- **开关决定"存不存在"**：`MCP_WRITE_ENABLED` 关 → 四个写工具**都不注册**；分别打开
+  `MCP_ALLOW_DELETE`/`MCP_ALLOW_REINDEX`/`MCP_ALLOW_METADATA_WRITE` 才注册对应工具
+  （`paper_import` 只受总开关管）。没注册的工具不出现在 `tools/list`，按名字猜也调不到。
+- **危险操作默认是预览**：`paper_delete` / `paper_reindex` 的 `dry_run` 默认 `true`，且
+  `dry_run=true` 时**零次**改动型 service 调用（单测用"调用即抛错"的替身钉住）。
+- **`paper_import` 的 sha256 去重**：与 REST 同一套流水线，导入一个**内容已存在**的 PDF 会命中已有论文
+  （返回那篇的 `paper_id`，不是新建）。⚠️ 因此"导入→删除"式的验收脚本必须先快照语料，
+  只删自己新建的那篇（2026-10-04 真踩过：夹具与语料里的 arXiv 1706.03762 逐字节相同，
+  一次误删把语料论文删了，靠"重放原件 + 重建索引"复原）。
 
 ### 5.3 `filters`（复用 `SearchFilters`）
 
@@ -286,7 +296,8 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 | 主机解析 | 解析出的**每个** A/AAAA 记录都要通过校验（防 DNS 轮换绕过） |
 | 默认拒绝 | 回环（`127/8`、`::1`）、私网（`10/8`、`172.16/12`、`192.168/16`、`fc00::/7`）、link-local（`169.254/16`、`fe80::/10`，含云元数据 `169.254.169.254`）、`0.0.0.0`/`::`、多播/广播 |
 | 重定向 | **每一跳重新校验** |
-| 白名单 | `INGEST_ALLOW_PRIVATE_HOSTS`（默认**空**）：主机名或 CIDR |
+| 白名单 | `INGEST_ALLOW_PRIVATE_HOSTS`（默认**空**）：主机名或 CIDR。**名字**条目整体信任（不再校验它解析出的地址 —— 否则名字白名单在 DNS 一变就失效）；**CIDR** 条目只放行地址 |
+| 落地 | `app/services/net_guard.py`；`ingestion_service.download_pdf` 用 `net_guard.open_stream`（`follow_redirects=False` 手工逐跳校验）；REST `/ingest` 与 MCP `paper_import` 都在**建作业前**先过闸（失败：REST 400 / MCP `SSRF_BLOCKED`）。重定向到内网、或被 DNS 改成内网，都会在下载那一步再被拦（此时按既有码记 `DOWNLOAD_FAILED`，因为作业错误码是 API 面、不新增） |
 | 失败 | `SSRF_BLOCKED`（`retryable=false`，`hint` 指向该白名单变量） |
 
 > ⚠️ 这是对 **REST 既有行为**的加固：加闸之后，"从内网地址导入 PDF"必须显式写白名单。

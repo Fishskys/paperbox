@@ -45,6 +45,7 @@ from app.schemas.ingestion import (
     IngestRequest,
 )
 from app.services import ingestion_service as ingest
+from app.services import net_guard
 from app.services import (
     archive_service,
     local_scan,
@@ -246,6 +247,15 @@ def ingest_url(
     except ingest.UnsupportedSource as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    # Fail before a job exists: the gate is also inside the download path (per-hop,
+    # for redirects and DNS changes), but a refused URL should not become a job the
+    # user then watches fail.
+    try:
+        net_guard.check_url(source)
+    except net_guard.URLBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"url not allowed: {exc.reason}"
         ) from exc
 
     job = ingest.create_job(session, source_type="url", source=source)

@@ -192,3 +192,97 @@ class FileData(BaseModel):
     content_type: str | None = None
     #: Highest page number the chunks mention (``None`` when unknown).
     page_count: int | None = None
+
+
+class JobRefData(BaseModel):
+    """``paper_import`` / ``paper_reindex``: the job a write queued."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    paper_id: str | None = None
+    #: ``completed`` / ``failed`` / ``running`` (``running`` = the wait bound expired).
+    status: str
+    stage: str
+    error_code: str | None = None
+    error_message: str | None = None
+    #: How long this call waited before answering.
+    waited_s: int = 0
+
+
+class ImportPreviewData(BaseModel):
+    """``paper_import(dry_run=true)``: what would be queued, and nothing else."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    source_type: str
+    #: Always ``False``: a dry run creates no job. Present so the shape is explicit.
+    queued: bool = False
+    filename: str | None = None
+    size_bytes: int | None = None
+    content_type: str | None = None
+    #: For ``local_path``: the resolved path that passed the whitelist check.
+    resolved_path: str | None = None
+
+
+class ReindexPreviewData(BaseModel):
+    """``paper_reindex(dry_run=true)``: the blast radius of a rebuild."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str
+    title: str = ""
+    #: Chunks currently stored for this paper (they are replaced by the rebuild).
+    chunks: int
+    has_original_file: bool
+    filename: str | None = None
+    running_jobs: int = 0
+    queued: bool = False
+
+
+class DeletePreviewData(BaseModel):
+    """``paper_delete``: what was (or would be) removed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str
+    title: str = ""
+    chunks: int
+    objects: int
+    object_bytes: int = 0
+    #: Jobs still running for this paper -- deleting during a pipeline run is the
+    #: caller's decision, but it must be visible.
+    running_jobs: int = 0
+    #: ``False`` on a dry run; ``True`` once the paper was actually soft-deleted.
+    deleted: bool = False
+    #: Objects removed (only meaningful when ``deleted`` is true).
+    objects_removed: int = 0
+
+
+class ChangeView(BaseModel):
+    """One metadata field, before and after (``paper_update_metadata``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    before: Any = None
+    #: On a dry run this is the value the caller asked for, not what the writers
+    #: would derive (venue resolution, fingerprint) -- applying it is what decides.
+    after: Any = None
+
+
+class MetadataPatchData(BaseModel):
+    """``paper_update_metadata``: what changed (or would change)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str
+    applied: bool = False
+    changes: dict[str, ChangeView] = Field(default_factory=dict)
+    #: Fields the service actually wrote (empty on a dry run).
+    changed: list[str] = Field(default_factory=list)
+    #: Keys the service refused (unknown patch keys).
+    rejected: list[str] = Field(default_factory=list)
+    fingerprint: str | None = None
+    #: Where to undo it (contract section 5.2: rollback stays on REST).
+    rollback: str | None = None

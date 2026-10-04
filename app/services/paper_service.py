@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import inspect as sqlalchemy_inspect, select
+from sqlalchemy import func, inspect as sqlalchemy_inspect, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
@@ -271,6 +271,99 @@ def _paper_query():
         selectinload(Paper.paper_authors).selectinload(PaperAuthor.author),
         selectinload(Paper.venue),
         selectinload(Paper.files),
+    )
+
+
+#: Ingestion stages after which a job will not progress on its own.
+TERMINAL_JOB_STAGES = ("COMPLETED", "FAILED")
+
+
+@dataclass(slots=True)
+class DeletePreview:
+    """What deleting a paper would affect (``paper_delete`` dry_run)."""
+
+    paper_id: str
+    title: str
+    chunks: int
+    objects: int
+    object_bytes: int
+    #: Jobs still running for this paper: deleting under a running pipeline is the
+    #: caller's call, but the preview has to say so.
+    running_jobs: int
+
+
+@dataclass(slots=True)
+class PurgeOutcome:
+    """What deleting a paper actually did."""
+
+    paper_id: str
+    chunks_removed: int
+    objects_removed: int
+
+
+def delete_preview(session: Session, paper: Paper) -> DeletePreview:
+    """Count what a delete would remove: chunks, stored objects, running jobs.
+
+    The object walk talks to object storage (there is no cheaper truthful answer);
+    everything else is a database query.
+    """
+    from app.db.models import IngestionJob
+    from app.services import chunk_service, object_storage
+
+    chunks = chunk_service.count_chunks(session, paper.id)
+    objects = 0
+    total_bytes = 0
+    try:
+        for item in object_storage.list_objects(f"papers/{paper.id}/"):
+            objects += 1
+            total_bytes += int(getattr(item, "size", 0) or 0)
+    except object_storage.ObjectStorageError as exc:  # storage down: say "unknown"
+        logger.warning("delete preview could not list objects for %s: %s", paper.id, exc)
+    running = session.execute(
+        select(func.count(IngestionJob.id)).where(
+            IngestionJob.paper_id == paper.id,
+            IngestionJob.stage.not_in(TERMINAL_JOB_STAGES),
+        )
+    ).scalar_one()
+    return DeletePreview(
+        paper_id=paper.id,
+        title=paper.title or "",
+        chunks=chunks,
+        objects=objects,
+        object_bytes=total_bytes,
+        running_jobs=int(running),
+    )
+
+
+def purge_paper(session: Session, paper: Paper) -> PurgeOutcome:
+    """Delete a paper everywhere, in the order the REST endpoint documents.
+
+    Chunks out of OpenSearch -> objects out of object storage -> soft delete in
+    PostgreSQL. Both purge steps are idempotent, so a failure leaves the paper
+    visible and the caller can simply retry instead of facing a half-deleted paper.
+    Exceptions propagate unchanged (:class:`SearchIndexError`,
+    :class:`ObjectStorageError`): mapping them to HTTP 503 or an MCP error is the
+    surface's job.
+    """
+    from app.search import opensearch
+    from app.services import object_storage
+
+    removed_chunks = opensearch.delete_by_paper_id(paper.id)
+    removed_objects = object_storage.delete_prefix(paper.id)
+    soft_delete_paper(session, paper)
+    session.commit()
+    logger.info(
+        "paper purged",
+        extra={
+            "extra_fields": {
+                "paper_id": paper.id,
+                "chunks_removed": removed_chunks,
+                "objects_removed": removed_objects,
+            }
+        },
+    )
+    return PurgeOutcome(
+        paper_id=paper.id, chunks_removed=removed_chunks, objects_removed=removed_objects
     )
 
 
