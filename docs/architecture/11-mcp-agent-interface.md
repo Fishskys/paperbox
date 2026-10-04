@@ -145,8 +145,11 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 |---|---|
 | 唯一路径 | `Authorization: Bearer <key>` |
 | query-string key | **不支持**（v1 明确不做：key 进 URL 会落进代理/网关日志与浏览器历史） |
-| 凭证来源 | `PAPER_API_KEYS`（多 key）→ 命中则得 agent 名；否则回落到 `PAPER_API_KEY`（agent 名 = `default`） |
-| 失败 | 缺凭证 → 401；凭证不匹配 → 403（与 REST 现有语义一致） |
+| 凭证来源 | `PAPER_API_KEYS`（多 key）→ 命中则得 agent 名；否则回落到 `PAPER_API_KEY`（agent 名 = `default`）。`MCP_ENABLED=true` 而两者都空 → **启动报错**（不许静默全 401）|
+| 失败 | 缺凭证 → 401（带 `WWW-Authenticate: Bearer`）；凭证不匹配 → 403（与 REST 现有语义一致） |
+| 实现 | `app/mcp/auth.py` + `app/main.py` 的 `McpAuthMiddleware`（**纯 ASGI**，不是 BaseHTTPMiddleware —— 端点会流式返回，缓冲型中间件会破坏它）。**不用 SDK 自带的 `AuthSettings`/`TokenVerifier`**：那套是 OAuth 资源服务器形态（强制 `issuer_url`/`resource_server_url`、宣告 RFC 9728 发现端点），静态 key 部署下客户端会去走一个永远走不通的 OAuth 流程 |
+| 与 421 的**顺序** | 鉴权在传输之前：**未鉴权的请求一律 401，即使 Host 不在白名单**（不让没通过鉴权的调用方探测本机接受哪些 Host 名）；白名单检查对**已鉴权**的请求照常生效（421，硬要求 2 的反面测试保留）。两种顺序都有测试钉住 |
+| 身份传播 | 中间件把 `AgentIdentity` 放进 contextvar，工具层用它填 `Envelope.meta.agent` 与审计行 `agent`（真机验证：`"agent": "hermes"`）|
 
 ### 4.2 多 key 格式
 

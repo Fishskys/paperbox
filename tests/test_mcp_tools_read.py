@@ -484,7 +484,10 @@ def test_get_file_returns_a_signed_link_without_credentials(
 
     query = dict(part.split("=") for part in url.split("?", 1)[1].split("&"))
     assert download_signing.verify(paper_id, int(query["exp"]), query["sig"])
-    assert download_signing.verify(paper_id, int(query["exp"]), query["sig"][:-1] + "0") is False
+    # Flip one character for real: patching a hex digit with itself (an earlier
+    # version of this test wrote "0" over a "0") would assert nothing.
+    tampered = query["sig"][:-1] + ("f" if query["sig"][-1] != "f" else "0")
+    assert download_signing.verify(paper_id, int(query["exp"]), tampered) is False
 
 
 def test_download_host_falls_back_to_configuration_without_a_request(monkeypatch) -> None:
