@@ -289,6 +289,7 @@ cd infra && docker compose --profile local-docling up -d docling
 | `uv run python scripts/purge_deleted.py --hard` | 清理已删论文的索引文档、对象与数据库行（不可逆） |
 | `uv run python scripts/eval.py` | 对运行中的服务跑定标集评测（检索质量） |
 | `uv run python scripts/bulk_ingest_dir.py <目录>` | 批量导入一个目录（同机零传输） |
+| `uv run python scripts/acceptance_mcp.py [--with-writes]` | MCP 端点一键验收：传输/鉴权/十工具/异常路径，**自带清理**（只读 37 项、带写 50 项） |
 
 ### 1.7 MCP 接入（让 agent 直接查/读论文）
 

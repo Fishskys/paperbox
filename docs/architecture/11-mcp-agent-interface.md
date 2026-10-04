@@ -332,6 +332,29 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 
 ## 9. 验收（Hermes）
 
+**脚本化验收（可重复、可进 CI）**：`scripts/acceptance_mcp.py` 一次跑完传输 + 鉴权 + 六读工具 +
+四个写工具 + 异常路径，共 **50 项断言**（只读面 37 项 / 加上写工具 50 项），退出码 0 = 全过。
+本地实测（2026-10-04）：只读面 **37/37**（`EXIT=0`）、带写 **50/50**（`EXIT=0`，语料 30 → 31 → **30**）。
+
+```bash
+uv run python scripts/acceptance_mcp.py --with-writes      # 需要写开关全开；只读则去掉 --with-writes
+uv run python scripts/acceptance_mcp.py --json report.json # 机器可读副本
+```
+
+脚本的**自清理纪律**（吃过一次亏，见 §12）：导入的探针 PDF 是**每次运行唯一字节**的合成件，
+跑完用**语料快照 diff** 找出"这次新建的那篇"再删；若 diff 不是恰好一篇，**直接中止、什么都不删**；
+`decide_cleanup()` 拒绝删除任何**运行前就存在**的论文，`missing_from()` 在收尾处断言"既有论文一篇没少"。
+探针必须落在 `INGEST_LOCAL_ROOTS` 之内（脚本默认取该变量第一项，可用 `--probe-dir` 覆盖），
+否则服务端会正确拒绝（`FORBIDDEN`）。
+
+**会留下的唯一痕迹**：`paper_delete` 是**软删**（产品行为），所以带写模式每跑一次会在库里留一条
+`deleted` 状态的探针记录（`live` 数不变）。要彻底清掉：`uv run python scripts/purge_deleted.py --hard`
+（本次验收后已跑过，语料恢复 `live=30 / deleted=0`，三端一致性 `problems=0`）。
+
+两个踩过的客户端坑，脚本里已固化：**httpx 默认 `trust_env=True` 会走 Windows 系统代理**，
+带自定义 `Host` 的请求于是变成 502（服务器其实正确回 421）——脚本用 `trust_env=False`；
+**搜索结果在 `data.results`**，而 `citations` 挂在**信封**上（不在 `data` 里）。
+
 两个任务式验收（无人工提示）：
 
 1. "**找出 3 篇关于 X 的论文，带页码引用**"。
