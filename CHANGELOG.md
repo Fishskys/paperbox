@@ -60,6 +60,10 @@
 
 ### Fixed
 
+- **`POST /mcp` 被 307 重定向到 `/mcp/`**：Starlette 的 `Mount("/mcp")` 正则要求尾斜杠，而文档与所有客户端
+  配置用的都是不带斜杠的 URL —— 每个 MCP 请求都多一次往返，且**不重放 `Authorization` 的客户端会直接失败**。
+  现在服务端内部完成路径改写（`app/mcp/server.py::McpMountPathMiddleware`），两种写法都一次命中。
+  （Hermes 真机验收时发现；回归测试用 `follow_redirects=False` 断言，第一版被 TestClient 自动跟随掩盖。）
 - **非 ASCII 文件名导致下载 500**：`Content-Disposition: attachment; filename=<中文名>.pdf` 被 Starlette
   按 latin-1 编码，抛 `UnicodeEncodeError` —— 任何文件名含中文的论文都下不下来（REST 与 MCP 共用的
   流式下载路径）。改为 RFC 6266 双段头（ASCII 回退名 + `filename*=UTF-8''<百分号编码>`）。

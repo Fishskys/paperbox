@@ -60,7 +60,11 @@ def _settings(**overrides) -> Settings:
 
 
 def _mount_mcp(*, with_session_manager: bool = True) -> Starlette:
-    """Mounted layout mirroring ``app.main`` (``/mcp`` + host-owned lifespan)."""
+    """Mounted layout mirroring ``app.main`` (``/mcp`` + host-owned lifespan).
+
+    The path middleware is part of the composition under test: without it ``/mcp``
+    is answered with a 307, which is what production used to do.
+    """
     server = build_server()
     app = Starlette()
     if with_session_manager:
@@ -71,6 +75,7 @@ def _mount_mcp(*, with_session_manager: bool = True) -> Starlette:
                 yield
 
         app.router.lifespan_context = lifespan
+    app.add_middleware(mcp_server_module.McpMountPathMiddleware)
     app.mount("/mcp", build_streamable_http_app(server))
     return app
 
@@ -146,6 +151,25 @@ def test_session_manager_must_be_entered_by_the_host_lifespan(monkeypatch) -> No
     with TestClient(app, raise_server_exceptions=False) as client:
         response = _rpc(client, "initialize", INITIALIZE_PARAMS)
     assert response.status_code >= 500
+
+
+def test_the_mount_root_is_served_without_a_redirect(mcp_app: Starlette) -> None:
+    """``/mcp`` (the documented URL) answers in one hop, not a 307 to ``/mcp/``.
+
+    Redirecting costs every MCP request a second round trip, and a client that drops
+    the credential header on redirects cannot talk to us at all (2026-10-04).
+    """
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": INITIALIZE_PARAMS}
+    )
+    with TestClient(mcp_app) as client:
+        # follow_redirects=False is the point of this test: a TestClient follows
+        # 307s silently, which is how the redirect went unnoticed the first time.
+        direct = client.post("/mcp", content=body, headers=MCP_HEADERS, follow_redirects=False)
+        slashed = client.post("/mcp/", content=body, headers=MCP_HEADERS, follow_redirects=False)
+    assert direct.status_code == 200, f"expected a direct answer, got {direct.status_code}"
+    assert slashed.status_code == 200
+    assert direct.json()["result"]["serverInfo"]["name"] == "paperbox"
 
 
 def test_mounting_with_the_manager_running_serves_calls(mcp_app: Starlette) -> None:
