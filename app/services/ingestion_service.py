@@ -25,6 +25,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services import net_guard
 from app.core.logging import get_logger
 from app.db.models import IngestionJob, Paper, new_uuid
 from app.services import paper_service
@@ -510,16 +511,55 @@ def recover_jobs(
 # --------------------------------------------------------------------------- #
 # payload acquisition
 # --------------------------------------------------------------------------- #
+def create_reindex_job(session: Session, paper, record) -> IngestionJob:
+    """Queue a re-parse/re-chunk/re-embed/re-index of one paper.
+
+    Shared by ``POST /api/papers/{id}/reindex`` and the MCP ``paper_reindex`` tool,
+    so "reindex" means one thing. ``record`` is the paper's original file row (the
+    caller checks it exists first -- a paper without bytes cannot be reindexed).
+    """
+    from app.workers import queue as job_queue
+
+    job = create_job(
+        session,
+        source_type="reindex",
+        source=paper.url,
+        filename=record.filename,
+        content_type=record.content_type,
+        size_bytes=record.size_bytes,
+    )
+    job.paper_id = paper.id
+    session.commit()
+    return job_queue.submit(session, job.id, job_queue.KIND_REINDEX) or job
+
+
+def count_running_jobs(session: Session, paper_id: str) -> int:
+    """Jobs for one paper that are not in a terminal stage."""
+    from sqlalchemy import func
+
+    from app.db.models import IngestionJob
+
+    return int(
+        session.execute(
+            select(func.count(IngestionJob.id)).where(
+                IngestionJob.paper_id == paper_id,
+                IngestionJob.stage.not_in(("COMPLETED", "FAILED")),
+            )
+        ).scalar_one()
+    )
+
+
 def download_pdf(url: str) -> DownloadResult:
     """Download a PDF over HTTP(S) with a streaming size guard."""
     limit = max_file_bytes()
     filename = filename_from_url(url)
     try:
-        with httpx.stream(
-            "GET",
-            url,
-            follow_redirects=True,
-            timeout=settings.ingest_download_timeout,
+        # ``net_guard.open_stream`` re-checks every redirect hop (httpx's
+        # ``follow_redirects=True`` would happily chase a public URL into the LAN or
+        # into the cloud metadata address). Everything else -- streaming size guard,
+        # timeouts, error types -- is unchanged.
+        with net_guard.open_stream(
+            url, timeout=settings.ingest_download_timeout
         ) as response:
             response.raise_for_status()
             content_type = response.headers.get("Content-Type")

@@ -155,12 +155,12 @@ def test_agent_name_reaches_the_tool_envelope(mcp_http) -> None:
 
     # Call a tool whose data path is stubbed at the repository boundary; only the
     # identity plumbing is under test here.
-    from app.mcp import tools_read
+    from app.mcp import jobs
     from app.schemas.job import JobOut
 
     job = JobOut(job_id="job-1", stage="COMPLETED", progress=1.0)
-    original = tools_read._load_job
-    tools_read._load_job = lambda job_id: job
+    original = jobs.load_job
+    jobs.load_job = lambda job_id: job
     try:
         payload = rpc(
             mcp_http,
@@ -169,7 +169,7 @@ def test_agent_name_reaches_the_tool_envelope(mcp_http) -> None:
             token=CODEX_KEY,
         ).json()["result"]
     finally:
-        tools_read._load_job = original
+        jobs.load_job = original
     envelope = Envelope[object].model_validate(payload["structuredContent"])
     assert envelope.meta.agent == "codex"
 

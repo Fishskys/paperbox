@@ -42,6 +42,7 @@ from app.services.ingestion_service import (
     LocalSourceUnavailable,
     UnsupportedSource,
 )
+from app.services.net_guard import URLBlocked
 from app.services.object_storage import ObjectStorageError
 
 #: Every code the API may return; kept as a tuple so tests can assert coverage.
@@ -139,6 +140,15 @@ def classify_failure(exc: BaseException) -> Failure:
             "DUPLICATE_FINGERPRINT",
             f"DUPLICATE_FINGERPRINT: another live paper already claims this fingerprint ({detail})",
         )
+
+    if isinstance(exc, URLBlocked):
+        # The inbound-URL gate refused the target (private/loopback/link-local, or a
+        # redirect that led there). ``SSRF_BLOCKED`` exists on the MCP/REST surface,
+        # where the refusal happens *before* a job is created; a job that reaches the
+        # worker and gets blocked there is a download that could not be performed,
+        # and the failure codes are an API surface that does not grow without a
+        # migration (2026-10-04).
+        return Failure("DOWNLOAD_FAILED", f"DOWNLOAD_FAILED: blocked by the URL safety gate ({detail})")
 
     if isinstance(exc, LocalSourceUnavailable):
         # A server-side path (``/ingest/dir``, archive extraction) disappeared

@@ -28,6 +28,7 @@ from app.core.security import require_api_key
 from app.db.models import Paper, PaperChunk
 from app.db.session import get_db
 from app.main import app as paperbox_app
+from app.mcp import jobs
 from app.mcp import server as mcp_server_module
 from app.mcp import tools_read
 from app.mcp.models import ChunkView

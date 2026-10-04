@@ -70,6 +70,50 @@ class PatchResult:
         }
 
 
+#: Patch keys whose "current value" comes from somewhere other than ``read_field``.
+def current_value(session: Session, paper: Paper, key: str) -> Any:
+    """Current value of one patch key, as the claim value shape.
+
+    Used by the ``dry_run`` preview and by the before/after diff of a manual edit
+    (contract section 5.2: ``paper_update_metadata`` reports "old -> new"). Unknown
+    keys return ``None`` rather than raising: they are reported as ``rejected`` by
+    :func:`patch_metadata`, and a preview is not the place to fail.
+    """
+    if key == "tags":
+        try:
+            return tags.tags_for_paper(session, paper)
+        except Exception:  # pragma: no cover - defensive: tags are cosmetic
+            return None
+    if key == "venue_year":
+        return getattr(paper, "venue_year", None)
+    field = SIMPLE_PATCH_FIELDS.get(key) or IDENTIFIER_PATCH_FIELDS.get(key)
+    if key == "venue":
+        field = prov.FIELD_VENUE
+    elif key == "authors":
+        field = prov.FIELD_AUTHORS
+    if field is None:
+        return None
+    try:
+        return prov.read_field(paper, field)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def preview_patch(
+    session: Session, paper: Paper, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """What a patch would look like right now: ``{key: current value}``.
+
+    Read-only, so a ``dry_run`` can show the caller exactly which fields change
+    without a claim row, a fingerprint or a single database write.
+    """
+    return {
+        key: current_value(session, paper, key)
+        for key in payload
+        if key in PATCH_FIELDS
+    }
+
+
 def manual_source(session: Session, paper: Paper) -> PaperSource:
     """The paper's single ``manual`` source row (created on first edit)."""
     source = sources.find_source(

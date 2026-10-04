@@ -37,6 +37,18 @@
   两份模板可直接复制使用；`DOCLING_URL` 默认留空（关闭 docling 后端、立即降级为内置 pypdf），
   不再指向私网地址。
 
+### Added
+
+- **MCP 写工具（4 个，默认全部关闭）**：`paper_import`（URL 或服务端 PDF 路径，带 sha256 去重）、
+  `paper_reindex`、`paper_delete`、`paper_update_metadata`。开关：`MCP_WRITE_ENABLED` 总闸 +
+  `MCP_ALLOW_DELETE`/`MCP_ALLOW_REINDEX`/`MCP_ALLOW_METADATA_WRITE` 分开关 —— **关掉的工具根本不注册**，
+  不出现在 `tools/list`、按名字也调不到。删除与重建默认 `dry_run=true`（只报影响面：块数/对象数/是否已有作业在跑），
+  显式 `false` 才执行；`paper_update_metadata` 返回"字段旧值→新值"并给出 REST 回滚入口。
+- **入站 URL 安全闸**（`app/services/net_guard.py`）：只允许 http(s)；解析出的**每个**地址都要是公网地址
+  （回环/私网/link-local/云元数据 169.254.169.254/多播/未指定一律拒绝）；**重定向逐跳校验**
+  （`follow_redirects=False` 手工跟跳）；`INGEST_ALLOW_PRIVATE_HOSTS`（默认空）按主机名或 CIDR 放行。
+  REST `/ingest` 与 MCP `paper_import` 都在建作业前先过闸（400 / `SSRF_BLOCKED`），下载路径再校验一次。
+
 ### Security
 
 - **MCP 端点强制鉴权**：`/mcp` 现在只接受 `Authorization: Bearer <key>`（`PAPER_API_KEYS` 里的命名 key，

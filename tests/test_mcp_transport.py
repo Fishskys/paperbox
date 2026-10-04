@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
 from app.core.config import Settings
+from app.mcp import jobs
 from app.mcp import server as mcp_server_module
 from app.mcp import tools_read
 from app.mcp.models import Envelope, ToolMeta
@@ -193,7 +194,7 @@ def test_output_schema_bans_bare_objects() -> None:
 def test_job_status_returns_an_envelope(mcp_app: Starlette, monkeypatch) -> None:
     """One successful call end to end, with the database boundary stubbed."""
     job = JobOut(job_id="job-1", paper_id="paper-1", stage="COMPLETED", progress=1.0)
-    monkeypatch.setattr(tools_read, "_load_job", lambda job_id: job)
+    monkeypatch.setattr(jobs, "load_job", lambda job_id: job)
     with TestClient(mcp_app) as client:
         _rpc(client, "initialize", INITIALIZE_PARAMS)
         response = _rpc(
@@ -217,7 +218,7 @@ def test_unknown_job_id_reports_the_contract_error_code(mcp_app: Starlette, monk
     def _missing(job_id: str):
         raise errors.not_found("job", job_id)
 
-    monkeypatch.setattr(tools_read, "_load_job", _missing)
+    monkeypatch.setattr(jobs, "load_job", _missing)
     with TestClient(mcp_app) as client:
         _rpc(client, "initialize", INITIALIZE_PARAMS)
         response = _rpc(

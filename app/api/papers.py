@@ -248,35 +248,18 @@ def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
     simply retry the same request instead of ending up half-deleted.
     """
     paper = _load_paper(session, paper_id)
-
     try:
-        removed_chunks = opensearch.delete_by_paper_id(paper.id)
+        papers.purge_paper(session, paper)
     except SearchIndexError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"search index cleanup failed: {exc}",
         ) from exc
-
-    try:
-        removed_objects = object_storage.delete_prefix(paper.id)
     except object_storage.ObjectStorageError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"object storage cleanup failed: {exc}",
         ) from exc
-
-    papers.soft_delete_paper(session, paper)
-    session.commit()
-    logger.info(
-        "paper deleted",
-        extra={
-            "extra_fields": {
-                "paper_id": paper.id,
-                "chunks_removed": removed_chunks,
-                "objects_removed": removed_objects,
-            }
-        },
-    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -295,17 +278,7 @@ def reindex_paper_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="paper file not found"
         )
-    job = ingest.create_job(
-        session,
-        source_type="reindex",
-        source=paper.url,
-        filename=record.filename,
-        content_type=record.content_type,
-        size_bytes=record.size_bytes,
-    )
-    job.paper_id = paper.id
-    session.commit()
-    job = job_queue.submit(session, job.id, job_queue.KIND_REINDEX) or job
+    job = ingest.create_reindex_job(session, paper, record)
     return {
         "job_id": job.id,
         "paper_id": paper.id,

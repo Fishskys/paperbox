@@ -221,6 +221,12 @@ class Settings(BaseSettings):
     #: **Empty means the endpoint is disabled** (404): reading the server's own
     #: filesystem is a new attack surface, so it is opt-in per deployment.
     ingest_local_roots: str = Field(default="", alias="INGEST_LOCAL_ROOTS")
+    #: Escape hatch for the inbound-URL safety gate (``app/services/net_guard.py``):
+    #: comma-separated host names and/or CIDRs that may resolve to a non-public
+    #: address. Empty = every private/loopback/link-local target is refused.
+    ingest_allow_private_hosts: str = Field(
+        default="", alias="INGEST_ALLOW_PRIVATE_HOSTS"
+    )
 
     # --- archive import (2026-09-19, plan section 3.3) ---
     #: Size ceiling for the uploaded archive itself.
