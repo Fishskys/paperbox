@@ -36,7 +36,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 > 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成
 > `wsl -e bash -lc "cd /mnt/<盘>/.../paperbox/infra && docker compose up -d"` 即可。
 
-具体部署（服务器形态、数据目录、备份迁移）与全部配置项、接口参数、使用示例，参考用户手册（`UserManual.md`）。
+具体部署（服务器形态、数据目录、备份迁移）与全部配置项、接口参数、使用示例，参考[用户手册](UserManual.md)。
 
 ## 3. 项目架构
 

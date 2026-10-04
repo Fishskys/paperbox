@@ -147,10 +147,11 @@ class SearchRequest(BaseModel):
     backend: str | None = Field(
         default=None,
         description=(
-            "Hybrid fusion backend. 'python' (default, from SEARCH_BACKEND) runs "
-            "two queries and fuses them in the app; 'native' sends one hybrid "
-            "request that the search pipeline fuses and collapse(paper_id) turns "
-            "into papers. Only mode=hybrid is affected, and on the native path "
+            "Hybrid fusion backend. 'native' (default, from SEARCH_BACKEND) sends "
+            "one hybrid request that the search pipeline fuses and "
+            "collapse(paper_id) turns into papers; 'python' (baseline/fallback) "
+            "runs two queries and fuses them in the app. Only mode=hybrid is "
+            "affected, and on the native path "
             "keyword_score/semantic_score come back null (one fused score is all "
             "the engine reports). The response echoes the backend that ran."
         ),
