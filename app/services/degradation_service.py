@@ -167,6 +167,22 @@ def resolve_stage(
     return resolved
 
 
+def to_out(row: PaperDegradation) -> "PaperDegradationOut":
+    """One ledger row in the published shape (REST and MCP both use this)."""
+    from app.schemas.paper import PaperDegradationOut
+
+    return PaperDegradationOut(
+        stage=row.stage,
+        code=row.code,
+        detail=row.detail or {},
+        occurrences=row.occurrences or 1,
+        first_seen_at=row.first_seen_at,
+        last_seen_at=row.last_seen_at,
+        resolved_at=row.resolved_at,
+        job_id=row.job_id,
+    )
+
+
 def list_for_paper(
     session: Session,
     paper_id: str,

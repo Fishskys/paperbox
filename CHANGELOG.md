@@ -16,6 +16,16 @@
   推进。新增配置键：`MCP_ENABLED`/`MCP_ALLOWED_HOSTS`/`MCP_WRITE_ENABLED`/`MCP_ALLOW_DELETE`/
   `MCP_ALLOW_METADATA_WRITE`/`MCP_ALLOW_REINDEX`/`MCP_MAX_CHARS`/`MCP_MAX_CHARS_CEILING`/
   `MCP_WAIT_SECONDS`/`MCP_DOWNLOAD_TTL_SECONDS`/`MCP_TOOLSET`/`PAPER_API_KEYS`。
+- **MCP 读工具全部可用（6 个）**：`paper_search`（默认开精排，带 `filters`/`facets`）、`paper_get`
+  （元数据 + 字段来源 + 降级记录）、`paper_get_chunks`（按阅读顺序分页，带字符预算与续读游标）、
+  `paper_get_context`（取检索命中前后文，目标块标 `primary`）、`paper_get_file`、`paper_job_status`。
+  每个工具都返回统一的 `Envelope{data,meta,warnings,citations}`，`citations[]` 带 `paper_id`/页码/章节/
+  `chunk_id`/≤200 字原文片段 —— agent 可以直接写"该结论见第 7 页 III-B 节"。检索/读取逻辑走
+  `app/services/search_pipeline.py` 与 `app/services/chunk_service.py`（REST 与 MCP 共用同一实现，
+  同查询 total 与排序逐位相同）。
+- **短期签名下载链接**：`paper_get_file` 返回 `GET /api/downloads/{paper_id}?exp=&sig=`（HMAC 覆盖
+  `paper_id`+过期时间，默认 300 s，`MCP_DOWNLOAD_TTL_SECONDS` 可调）。链接**不含长期凭据**，
+  过期或签名被改一律 403，对象存储仍经应用代理、桶保持私有。
 - **用户手册（`UserManual.md`）**：完整的部署与配置说明（应用 + 四个容器，按变量逐项列出作用/默认值/可选值）、
   全部接口的说明与参数、以及排障清单（状态码、作业错误码、解析降级码与常见问题）。
 
@@ -29,6 +39,9 @@
 
 ### Fixed
 
+- **非 ASCII 文件名导致下载 500**：`Content-Disposition: attachment; filename=<中文名>.pdf` 被 Starlette
+  按 latin-1 编码，抛 `UnicodeEncodeError` —— 任何文件名含中文的论文都下不下来（REST 与 MCP 共用的
+  流式下载路径）。改为 RFC 6266 双段头（ASCII 回退名 + `filename*=UTF-8''<百分号编码>`）。
 - **`GET /api/jobs/{job_id}` 传入非 UUID 的 id 会 500**：作业 id 是 UUID 列，非法字符串直接
   落到 PostgreSQL 触发 `DataError`。现在在服务层就判为"查不到"，REST 返回 404、MCP 返回
   `NOT_FOUND`（MCP 验收时发现，两条路径一起修好）。

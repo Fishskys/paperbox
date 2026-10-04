@@ -157,6 +157,9 @@ class Settings(BaseSettings):
     mcp_download_secret: str = Field(default="", alias="MCP_DOWNLOAD_SECRET")
     #: Tool contract version (frozen at v1, see the contract doc section 8).
     mcp_toolset: str = Field(default="v1", alias="MCP_TOOLSET")
+    #: Fallback download host for clients that do not send one through the request
+    #: (stdio shells). Empty means "use the Host the agent reached us on".
+    mcp_public_base_url: str = Field(default="", alias="MCP_PUBLIC_BASE_URL")
     #: ``name:key`` pairs (``;`` separated) that name the calling agent in the
     #: audit log. Empty falls back to ``PAPER_API_KEY`` (agent name ``default``).
     paper_api_keys: str = Field(default="", alias="PAPER_API_KEYS")

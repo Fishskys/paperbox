@@ -10,17 +10,15 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+from app.api.downloads import stream_original
 
 from app.core.logging import get_logger
 from app.core.security import require_api_key
-from app.db.models import PaperChunk
 from app.db.session import get_db
 from app.schemas.paper import (
     PaperChunkList,
-    PaperChunkOut,
     PaperDegradationList,
     PaperDegradationOut,
     PaperListOut,
@@ -35,6 +33,7 @@ from app.schemas.metadata import (
 )
 from app.search import opensearch
 from app.search.opensearch import SearchIndexError
+from app.services import chunk_service
 from app.services import degradation_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_manual
@@ -51,7 +50,6 @@ router = APIRouter(
 )
 
 NOT_FOUND = "paper not found"
-DISPOSITION = "attachment; filename={name}"
 
 
 def _load_paper(session: Session, paper_id: str):
@@ -117,41 +115,19 @@ def get_paper(paper_id: str, session: Session = Depends(get_db)) -> PaperOut:
 
 @router.get("/{paper_id}/file")
 def get_paper_file(paper_id: str, session: Session = Depends(get_db)):
-    """Stream the stored original PDF with an attachment disposition."""
+    """Stream the stored original PDF with an attachment disposition.
+
+    The API key is the credential here; the agent-facing alternative is the
+    short-lived signed URL from ``GET /api/downloads/{paper_id}`` (same bytes,
+    same streaming code).
+    """
     paper = _load_paper(session, paper_id)
     record = papers.original_file(paper)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="paper file not found"
         )
-
-    try:
-        stream = object_storage.open_stream(record.object_key, bucket=record.bucket)
-    except object_storage.ObjectNotFound as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="paper file not found"
-        ) from exc
-    except object_storage.ObjectStorageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="object storage unavailable",
-        ) from exc
-
-    filename = record.filename or object_storage.ORIGINAL_FILENAME
-    media_type = record.content_type or object_storage.DEFAULT_PDF_CONTENT_TYPE
-    headers = {"Content-Disposition": DISPOSITION.format(name=filename)}
-    if record.size_bytes is not None:
-        headers["Content-Length"] = str(record.size_bytes)
-
-    def _iterate():
-        with stream as body:
-            while True:
-                chunk = body.read(64 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-
-    return StreamingResponse(_iterate(), media_type=media_type, headers=headers)
+    return stream_original(record)
 
 
 @router.get("/{paper_id}/chunks", response_model=PaperChunkList)
@@ -165,37 +141,11 @@ def get_paper_chunks(
 
     ``limit``/``offset`` page through long papers (default 50 chunks per call);
     each chunk carries its page range and section so an answer can cite them.
+    The ordering and clamping rules live in :mod:`app.services.chunk_service`,
+    which the MCP reading tools share.
     """
     _load_paper(session, paper_id)
-    total = session.execute(
-        select(func.count(PaperChunk.id)).where(PaperChunk.paper_id == paper_id)
-    ).scalar_one()
-    rows = (
-        session.execute(
-            select(PaperChunk)
-            .where(PaperChunk.paper_id == paper_id)
-            .order_by(PaperChunk.chunk_index)
-            .limit(max(1, min(limit, 200)))
-            .offset(max(0, offset))
-        )
-        .scalars()
-        .all()
-    )
-    chunks = [
-        PaperChunkOut(
-            chunk_id=row.id,
-            chunk_index=row.chunk_index,
-            page_start=row.page_start,
-            page_end=row.page_end,
-            section=row.section,
-            subsection=row.subsection,
-            text=row.text,
-            token_count=row.token_count,
-            char_count=row.char_count,
-        )
-        for row in rows
-    ]
-    return PaperChunkList(paper_id=paper_id, total=total, chunks=chunks)
+    return chunk_service.list_chunks(session, paper_id, limit=limit, offset=offset)
 
 
 @router.get("/{paper_id}/degradations", response_model=PaperDegradationList)
@@ -218,19 +168,7 @@ def get_paper_degradations(
     rows = degradation_service.list_for_paper(
         session, paper_id, include_resolved=include_resolved
     )
-    items = [
-        PaperDegradationOut(
-            stage=row.stage,
-            code=row.code,
-            detail=row.detail or {},
-            occurrences=row.occurrences or 1,
-            first_seen_at=row.first_seen_at,
-            last_seen_at=row.last_seen_at,
-            resolved_at=row.resolved_at,
-            job_id=row.job_id,
-        )
-        for row in rows
-    ]
+    items = [degradation_service.to_out(row) for row in rows]
     return PaperDegradationList(
         paper_id=paper_id,
         total=len(items),

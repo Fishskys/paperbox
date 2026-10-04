@@ -346,7 +346,8 @@ curl -X POST http://127.0.0.1:8077/api/papers/ingest/files \
 | GET | `/api/papers/{paper_id}` | 论文详情（含文件列表） | `paper_id`（路径，**必填**） |
 | DELETE | `/api/papers/{paper_id}` | 删除论文（软删，返回 204） | `paper_id`（路径，**必填**） |
 | GET | `/api/papers/{paper_id}/chunks` | 该论文的切块列表 | `paper_id`（**必填**）、`limit`（默认 50）、`offset`（默认 0） |
-| GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件 | `paper_id`（**必填**） |
+| GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件（需 API key） | `paper_id`（**必填**） |
+| GET | `/api/downloads/{paper_id}` | 下载 PDF 原件（**短期签名链接，无需 API key**；由 MCP 的 `paper_get_file` 发放） | `paper_id`（**必填**）、`exp`（Unix 过期时间）、`sig`（HMAC 签名） |
 | GET | `/api/papers/{paper_id}/degradations` | 该论文的解析降级记录 | `paper_id`（**必填**）、`include_resolved`（默认 `false`） |
 | POST | `/api/papers/{paper_id}/reindex` | 重建该论文的切块与向量（返回 202） | `paper_id`（**必填**） |
 
