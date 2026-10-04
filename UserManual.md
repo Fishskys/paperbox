@@ -290,6 +290,52 @@ cd infra && docker compose --profile local-docling up -d docling
 | `uv run python scripts/eval.py` | 对运行中的服务跑定标集评测（检索质量） |
 | `uv run python scripts/bulk_ingest_dir.py <目录>` | 批量导入一个目录（同机零传输） |
 
+### 1.7 MCP 接入（让 agent 直接查/读论文）
+
+paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Claude Code / Hermes / 自研 harness
+这类 agent 把论文库当成「检索 + 阅读」工具用，无需写 HTTP 代码。**默认关闭**，需要显式开两个配置：
+
+| 配置 | 作用 | 默认 | 说明 |
+|---|---|---|---|
+| `MCP_ENABLED` | 是否挂载 `/mcp` | `false` | 打开时**必须**同时给白名单，否则**启动报错** |
+| `MCP_ALLOWED_HOSTS` | 允许访问的 `Host` 白名单 | 空 | 逗号分隔；**每个 agent 访问用的 IP 与主机名都要写**，且各写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`） |
+| `PAPER_API_KEYS` | 多 key（`名字:key` 分号分隔） | 空 | 命中则审计日志里记该 agent 名；空则回落到 `PAPER_API_KEY`（agent 名 = `default`） |
+| `MCP_WRITE_ENABLED` | 写工具总闸 | `false` | 关闭时 4 个写工具**不存在**（不出现在工具列表，按名字也调不到） |
+| `MCP_ALLOW_DELETE` / `MCP_ALLOW_REINDEX` / `MCP_ALLOW_METADATA_WRITE` | 三个写工具分开关 | `false` | 受总闸约束；导入工具只受总闸管 |
+| `MCP_MAX_CHARS` / `MCP_MAX_CHARS_CEILING` | 单次正文预算 / 上限 | `8000` / `32000` | 超上限**报错不裁剪** |
+| `MCP_WAIT_SECONDS` | 写工具等待作业完成的秒数 | `120` | 客户端 per-tool timeout 要 ≥ 它 |
+| `MCP_DOWNLOAD_TTL_SECONDS` | `paper_get_file` 签名链接有效期 | `300` | 链接不含长期凭据，过期/篡改一律 403 |
+
+起服务（示例，把 `<IP>` 换成 agent 会访问的地址）：
+
+```bash
+# .env 里加上：
+#   MCP_ENABLED=true
+#   MCP_ALLOWED_HOSTS=127.0.0.1,127.0.0.1:*,192.168.1.20,192.168.1.20:*,my-host,my-host:*
+#   PAPER_API_KEYS=hermes:<key1>;codex:<key2>
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
+# 启动日志会打印生效白名单（排查 421 的第一手材料）
+```
+
+**10 个工具**（只读 6 个默认可用；写工具 4 个默认关闭）：
+
+| 类型 | 工具 | 作用 |
+|---|---|---|
+| 读 | `paper_search` | 自然语言检索（中文/英文），返回论文 + 证据块，每条都带页码与章节 |
+| 读 | `paper_get` | 单篇元数据 + 字段来源（provenance）+ 解析降级记录 |
+| 读 | `paper_get_chunks` | 按阅读顺序读正文，带字符预算与续读游标 |
+| 读 | `paper_get_context` | 取某个证据块的前后文（把结论放回上下文） |
+| 读 | `paper_get_file` | 取短期签名链接下载 PDF 原件 |
+| 读 | `paper_job_status` | 跟踪导入/重建作业 |
+| 写 | `paper_import` | 导入一篇（URL 或服务器上的 PDF 路径） |
+| 写 | `paper_reindex` | 重建某篇的切块与向量（默认 `dry_run=true` 只报影响面） |
+| 写 | `paper_delete` | 删除某篇（默认 `dry_run=true`，软删） |
+| 写 | `paper_update_metadata` | 改元数据，返回「旧值 → 新值」 |
+
+四个客户端的配置片段、以及 401/403/421 的排障速查，见
+`docs/architecture/11-mcp-agent-interface.md` §10（**只有 Hermes 做过真机任务式验收**，其余标注状态）。
+自检：`hermes mcp test paperbox`（Hermes）或直接 `curl` 一次 `initialize` 握手。
+
 ---
 
 ## 2. API
