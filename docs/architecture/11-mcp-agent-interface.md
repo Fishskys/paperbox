@@ -337,8 +337,10 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 本地实测（2026-10-04）：只读面 **37/37**（`EXIT=0`）、带写 **50/50**（`EXIT=0`，语料 30 → 31 → **30**）。
 
 ```bash
-uv run python scripts/acceptance_mcp.py --with-writes      # 需要写开关全开；只读则去掉 --with-writes
-uv run python scripts/acceptance_mcp.py --json report.json # 机器可读副本
+# key 走环境变量（别用 --token：命令行会进 shell 历史与调用方日志）
+PAPER_API_KEY=<key> uv run python scripts/acceptance_mcp.py               # 只读面
+PAPER_API_KEY=<key> uv run python scripts/acceptance_mcp.py --with-writes  # 加四个写工具
+uv run python scripts/acceptance_mcp.py --json report.json                 # 机器可读副本
 ```
 
 脚本的**自清理纪律**（吃过一次亏，见 §12）：导入的探针 PDF 是**每次运行唯一字节**的合成件，
