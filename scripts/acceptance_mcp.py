@@ -23,9 +23,12 @@ did delete a corpus paper. This script cannot repeat that.)
 
 Usage::
 
-    uv run python scripts/acceptance_mcp.py                     # read-only surface
-    uv run python scripts/acceptance_mcp.py --with-writes        # + the four write tools
-    uv run python scripts/acceptance_mcp.py --json report.json   # machine-readable copy
+    PAPER_API_KEY=<key> uv run python scripts/acceptance_mcp.py               # read-only
+    PAPER_API_KEY=<key> uv run python scripts/acceptance_mcp.py --with-writes # + write tools
+    uv run python scripts/acceptance_mcp.py --json report.json                # machine-readable
+
+Pass the key through the environment (``PAPER_API_KEY``) rather than ``--token``: a token
+given on the command line ends up in shell history and in whatever logs the caller keeps.
 
 Exit code is 0 only when every check passed. With ``--with-writes`` the server must
 run with ``MCP_WRITE_ENABLED=true`` plus ``MCP_ALLOW_DELETE`` / ``MCP_ALLOW_REINDEX`` /
@@ -677,7 +680,12 @@ class Snapshot:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Scripted acceptance for the MCP endpoint")
     parser.add_argument("--base-url", default=os.getenv("MCP_BASE_URL", DEFAULT_BASE_URL))
-    parser.add_argument("--token", default=os.getenv("PAPER_API_KEY", ""))
+    parser.add_argument(
+        "--token",
+        default=os.getenv("PAPER_API_KEY", ""),
+        help="prefer the PAPER_API_KEY environment variable: a token on the command line "
+        "leaks into shell history and caller logs",
+    )
     parser.add_argument(
         "--with-writes",
         action="store_true",
