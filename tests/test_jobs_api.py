@@ -187,6 +187,27 @@ def test_service_offset_is_applied_in_sql(session_factory):
     assert [row.id for row in rows] == [middle]
 
 
+def test_non_uuid_job_id_is_a_miss_not_a_crash(session_factory) -> None:
+    """A malformed id must not reach PostgreSQL (2026-10-04, found via MCP).
+
+    ``ingestion_jobs.id`` is a UUID column, so passing a plain string used to raise
+    ``DataError: invalid input syntax for type uuid``: a 500 on the REST endpoint and
+    an unexplained "tool crashed" on the MCP one. Both surfaces now answer 404 /
+    NOT_FOUND instead.
+    """
+    session = session_factory()
+    try:
+        assert ingest.get_job(session, "does-not-exist") is None
+        assert ingest.get_job(session, "") is None
+    finally:
+        session.close()
+
+
+def test_non_uuid_job_id_returns_404(client) -> None:
+    response = client.get("/api/jobs/does-not-exist")
+    assert response.status_code == 404
+
+
 def _make_paper(session_factory) -> str:
     """A minimal live paper row, for the ``paper_id`` filter test."""
     from app.db.models import Paper, new_uuid

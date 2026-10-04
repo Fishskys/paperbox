@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlparse
@@ -277,7 +278,18 @@ def create_job(
 
 
 def get_job(session: Session, job_id: str) -> IngestionJob | None:
-    """Fetch one job by id."""
+    """Fetch one job by id; ``None`` when the id cannot name a job at all.
+
+    Job ids are UUIDs, so a malformed id used to reach PostgreSQL as a string and
+    come back as ``DataError: invalid input syntax for type uuid`` -- a 500 for the
+    REST endpoint and an unexplained "tool crashed" for the MCP one (found by the
+    MCP acceptance run, 2026-10-04). Rejecting it here keeps both surfaces on the
+    same answer: 404 / NOT_FOUND, not an internal error.
+    """
+    try:
+        uuid.UUID(str(job_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
     return session.execute(
         select(IngestionJob).where(IngestionJob.id == job_id)
     ).scalar_one_or_none()
