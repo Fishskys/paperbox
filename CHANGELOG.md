@@ -8,6 +8,14 @@
 
 ### Added
 
+- **MCP agent interface 的传输层与第一个工具**：paperbox 现在可以在自身进程里挂载
+  `/mcp`（Streamable HTTP），把检索/阅读/维护能力直接暴露给 agent。**默认关闭**
+  （`MCP_ENABLED=false`），开启时**必须**显式给出 `MCP_ALLOWED_HOSTS`（白名单为空则启动报错，
+  不使用 SDK 的 localhost 默认值），白名单外的 `Host` 返回 421。已实现 `paper_job_status`
+  （可带 `wait_seconds` 有界等待）；其余工具按契约文档 `docs/architecture/11-mcp-agent-interface.md`
+  推进。新增配置键：`MCP_ENABLED`/`MCP_ALLOWED_HOSTS`/`MCP_WRITE_ENABLED`/`MCP_ALLOW_DELETE`/
+  `MCP_ALLOW_METADATA_WRITE`/`MCP_ALLOW_REINDEX`/`MCP_MAX_CHARS`/`MCP_MAX_CHARS_CEILING`/
+  `MCP_WAIT_SECONDS`/`MCP_DOWNLOAD_TTL_SECONDS`/`MCP_TOOLSET`/`PAPER_API_KEYS`。
 - **用户手册（`UserManual.md`）**：完整的部署与配置说明（应用 + 四个容器，按变量逐项列出作用/默认值/可选值）、
   全部接口的说明与参数、以及排障清单（状态码、作业错误码、解析降级码与常见问题）。
 
@@ -18,6 +26,12 @@
 - **仓库根 `.env.example` 的默认凭据与 `infra/.env.example` 对齐**（PostgreSQL 口令、MinIO 用户名/口令），
   两份模板可直接复制使用；`DOCLING_URL` 默认留空（关闭 docling 后端、立即降级为内置 pypdf），
   不再指向私网地址。
+
+### Fixed
+
+- **`GET /api/jobs/{job_id}` 传入非 UUID 的 id 会 500**：作业 id 是 UUID 列，非法字符串直接
+  落到 PostgreSQL 触发 `DataError`。现在在服务层就判为"查不到"，REST 返回 404、MCP 返回
+  `NOT_FOUND`（MCP 验收时发现，两条路径一起修好）。
 
 ## [0.2.0] - 2026-10-01
 

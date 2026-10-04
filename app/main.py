@@ -33,6 +33,9 @@ from app.core.logging import (
     get_logger,
 )
 from app.workers import housekeeping
+from mcp.server import MCPServer
+
+from app.mcp.server import build_server, build_streamable_http_app
 from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
@@ -50,7 +53,14 @@ async def lifespan(_: FastAPI):
     # Housekeeping runs once right after recovery (it cleans the debris of the
     # process that died) and then on its own interval.
     housekeeping.start()
-    yield
+    if mcp_server is not None:
+        # The MCP session manager has to be entered by the *host* app: a mounted
+        # sub-application's own lifespan never runs, and without this line the
+        # endpoint resolves but the first request fails (contract doc, section 2).
+        async with mcp_server.session_manager.run():
+            yield
+    else:
+        yield
     await housekeeping.stop()
     await job_queue.stop()
     logger.info("paperbox stopping")
@@ -87,6 +97,14 @@ app.include_router(papers_api.router)
 app.include_router(metadata_api.router)
 app.include_router(search_api.router)
 app.include_router(search_logs_api.router)
+
+# --- MCP agent interface (contract: docs/architecture/11-mcp-agent-interface.md) ---
+# Built only when MCP_ENABLED=true; an empty MCP_ALLOWED_HOSTS is a startup error
+# (settings validator), never a silent fallback to the SDK's localhost-only default.
+mcp_server: MCPServer | None = None
+if settings.mcp_enabled:
+    mcp_server = build_server()
+    app.mount("/mcp", build_streamable_http_app(mcp_server))
 
 
 @app.get("/", include_in_schema=False)

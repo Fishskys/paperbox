@@ -1,3 +1,8 @@
+> **⚠️ 工具契约已迁移（2026-10-04）**：本文 §1 的 5 个工具定义与 §4 的"后续"已并入
+> `docs/architecture/11-mcp-agent-interface.md`（MCP 工具契约真源，含参数/返回/权限/传输安全）。
+> 本文保留**价值在于 §2 的调用范式**（中文查询怎么问、evidence 的 page/section 怎么引用），
+> 工具 schema 与新增工具一律以 11 号文档为准，别在这里加新工具。
+
 # Hermes 集成（plan §18 / §33）
 
 Hermes 不直接连接 PostgreSQL / OpenSearch / MinIO，只通过 paperbox 的 REST API 拿事实。

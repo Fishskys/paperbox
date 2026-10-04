@@ -31,6 +31,11 @@ PARSER_BACKENDS = frozenset({"pypdf", "docling"})
 #: is affected -- keyword/semantic are single-leg and always use the Python path.
 SEARCH_BACKENDS = frozenset({"python", "native"})
 
+#: Accepted values of ``MCP_TOOLSET``. Frozen at ``v1`` (docs/architecture/11-mcp-agent-interface.md
+#: section 8): a breaking change to a tool schema ships as a new value, so a client
+#: can pin the one it was written against.
+MCP_TOOLSETS = frozenset({"v1"})
+
 #: Accepted values of ``CHUNK_MODE``. Kept here rather than imported from
 #: ``app.parsing.chunking``: that module imports ``app.core.logging``, which
 #: imports this one, so the dependency has to point this way.
@@ -118,6 +123,43 @@ class Settings(BaseSettings):
     #: against the same process. An unknown value fails at startup, not at
     #: query time.
     search_backend: str = Field(default="native", alias="SEARCH_BACKEND")
+
+    # --- MCP agent interface (2026-10-04) ---
+    #: Contract: docs/architecture/11-mcp-agent-interface.md
+    #: Mount the Streamable HTTP MCP endpoint at /mcp. Off by default on purpose:
+    #: turning it on also requires an explicit host allowlist, so an existing
+    #: deployment cannot be broken by an upgrade.
+    mcp_enabled: bool = Field(default=False, alias="MCP_ENABLED")
+    #: Comma separated ``Host`` allowlist for the Streamable HTTP transport.
+    #: **No default**: the SDK default accepts ``127.0.0.1``/``localhost`` only and
+    #: answers every other Host with a bare-text 421, so a LAN agent would look
+    #: broken for no visible reason. Empty while ``MCP_ENABLED=true`` fails at
+    #: startup (see ``_check_mcp``).
+    mcp_allowed_hosts: str = Field(default="", alias="MCP_ALLOWED_HOSTS")
+    #: Master switch for every writing tool; off means they are not even listed.
+    mcp_write_enabled: bool = Field(default=False, alias="MCP_WRITE_ENABLED")
+    #: Per-tool switches, all gated behind ``mcp_write_enabled`` as well.
+    mcp_allow_delete: bool = Field(default=False, alias="MCP_ALLOW_DELETE")
+    mcp_allow_metadata_write: bool = Field(
+        default=False, alias="MCP_ALLOW_METADATA_WRITE"
+    )
+    mcp_allow_reindex: bool = Field(default=False, alias="MCP_ALLOW_REINDEX")
+    #: Character budget for one tool result's body text, and the ceiling a caller
+    #: may ask for. Asking above the ceiling is an error, never a silent clamp.
+    mcp_max_chars: int = Field(default=8000, alias="MCP_MAX_CHARS")
+    mcp_max_chars_ceiling: int = Field(default=32000, alias="MCP_MAX_CHARS_CEILING")
+    #: How long a writing tool waits for its job before handing back a job id.
+    #: Must stay below the client's per-tool timeout.
+    mcp_wait_seconds: int = Field(default=120, alias="MCP_WAIT_SECONDS")
+    #: Lifetime of the signed download URL returned by ``paper_get_file``.
+    mcp_download_ttl_seconds: int = Field(default=300, alias="MCP_DOWNLOAD_TTL_SECONDS")
+    #: Optional signing secret; empty derives one from ``PAPER_API_KEY``.
+    mcp_download_secret: str = Field(default="", alias="MCP_DOWNLOAD_SECRET")
+    #: Tool contract version (frozen at v1, see the contract doc section 8).
+    mcp_toolset: str = Field(default="v1", alias="MCP_TOOLSET")
+    #: ``name:key`` pairs (``;`` separated) that name the calling agent in the
+    #: audit log. Empty falls back to ``PAPER_API_KEY`` (agent name ``default``).
+    paper_api_keys: str = Field(default="", alias="PAPER_API_KEYS")
 
     # --- query rewrite (SPEC-P1 section I1) ---
     #: Off by default: when disabled the search path behaves exactly as before
@@ -410,6 +452,51 @@ class Settings(BaseSettings):
                 "QUERY_REWRITE_ENABLED=true requires " + ", ".join(missing)
             )
         return self
+
+    @model_validator(mode="after")
+    def _check_mcp(self) -> "Settings":
+        """MCP: never let the transport fall back to the SDK's localhost default.
+
+        ``streamable_http_app()`` arms DNS-rebinding protection with a localhost
+        allowlist, and answers every other Host with a bare-text 421 -- invisible
+        from the client side. So enabling MCP without naming the hosts we serve is
+        a startup error, not a runtime surprise.
+        """
+        if self.mcp_max_chars <= 0:
+            raise ValueError("MCP_MAX_CHARS must be positive")
+        if self.mcp_max_chars_ceiling < self.mcp_max_chars:
+            raise ValueError("MCP_MAX_CHARS_CEILING must be >= MCP_MAX_CHARS")
+        if self.mcp_wait_seconds < 0:
+            raise ValueError("MCP_WAIT_SECONDS must be >= 0")
+        if self.mcp_download_ttl_seconds <= 0:
+            raise ValueError("MCP_DOWNLOAD_TTL_SECONDS must be positive")
+        if self.mcp_toolset not in MCP_TOOLSETS:
+            raise ValueError(f"MCP_TOOLSET must be one of {sorted(MCP_TOOLSETS)}")
+        if self.mcp_enabled and not self.mcp_allowed_host_list:
+            raise ValueError(
+                "MCP_ENABLED=true requires MCP_ALLOWED_HOSTS to list every host "
+                "agents use (the LAN IP and the hostname, each as 'host' and "
+                "'host:*'); the SDK default accepts localhost only and answers "
+                "anything else with 421"
+            )
+        return self
+
+    @property
+    def mcp_allowed_host_list(self) -> list[str]:
+        """Comma separated Host allowlist for the MCP transport (may be empty)."""
+        return [item.strip() for item in self.mcp_allowed_hosts.split(",") if item.strip()]
+
+    @property
+    def agent_keys(self) -> dict[str, str]:
+        """``agent name -> key`` from ``PAPER_API_KEYS`` (invalid entries dropped)."""
+        pairs: dict[str, str] = {}
+        for item in self.paper_api_keys.split(";"):
+            name, separator, key = item.partition(":")
+            name = name.strip()
+            key = key.strip()
+            if separator and name and key:
+                pairs[name] = key
+        return pairs
 
     @property
     def database_url(self) -> str:
