@@ -36,6 +36,7 @@ from app.core.logging import (
 from app.workers import housekeeping
 from mcp.server import MCPServer
 
+from app.mcp.auth import McpAuthMiddleware, warn_about_shared_keys
 from app.mcp.server import build_server, build_streamable_http_app
 from app.workers import queue as job_queue
 
@@ -90,6 +91,10 @@ async def request_id_middleware(
     return response
 
 
+# MCP auth runs outermost: an unauthenticated caller is refused before anything else
+# (and before the transport reveals which Host names this server accepts).
+app.add_middleware(McpAuthMiddleware)
+
 app.include_router(health_api.router)
 app.include_router(consistency_api.router)
 app.include_router(ingestion_api.router)
@@ -106,6 +111,7 @@ app.include_router(downloads_api.router)
 # (settings validator), never a silent fallback to the SDK's localhost-only default.
 mcp_server: MCPServer | None = None
 if settings.mcp_enabled:
+    warn_about_shared_keys()
     mcp_server = build_server()
     app.mount("/mcp", build_streamable_http_app(mcp_server))
 

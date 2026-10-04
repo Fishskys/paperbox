@@ -475,6 +475,11 @@ class Settings(BaseSettings):
             raise ValueError("MCP_DOWNLOAD_TTL_SECONDS must be positive")
         if self.mcp_toolset not in MCP_TOOLSETS:
             raise ValueError(f"MCP_TOOLSET must be one of {sorted(MCP_TOOLSETS)}")
+        if self.mcp_enabled and not self.agent_keys and not self.paper_api_key:
+            raise ValueError(
+                "MCP_ENABLED=true needs a credential: set PAPER_API_KEYS (agent_name:key; "
+                "...) or PAPER_API_KEY, otherwise every /mcp request is a 401"
+            )
         if self.mcp_enabled and not self.mcp_allowed_host_list:
             raise ValueError(
                 "MCP_ENABLED=true requires MCP_ALLOWED_HOSTS to list every host "

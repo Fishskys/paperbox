@@ -37,6 +37,15 @@
   两份模板可直接复制使用；`DOCLING_URL` 默认留空（关闭 docling 后端、立即降级为内置 pypdf），
   不再指向私网地址。
 
+### Security
+
+- **MCP 端点强制鉴权**：`/mcp` 现在只接受 `Authorization: Bearer <key>`（`PAPER_API_KEYS` 里的命名 key，
+  或回落到共享的 `PAPER_API_KEY`）。缺凭证 401（带 `WWW-Authenticate: Bearer`）、凭证不匹配 403、
+  **`?key=` 不支持**（key 进 URL 会落进代理与 shell 历史）。调用方身份（agent 名）进 `Envelope.meta.agent`
+  与审计日志 `agent` 字段。鉴权跑在传输层之前：未鉴权的请求即使 Host 不在白名单也先得 401，
+  不向未通过鉴权的调用方透露本机接受哪些 Host；已鉴权请求的白名单外 Host 仍是 421。
+  `MCP_ENABLED=true` 但一个凭据都没配 → **启动报错**。
+
 ### Fixed
 
 - **非 ASCII 文件名导致下载 500**：`Content-Disposition: attachment; filename=<中文名>.pdf` 被 Starlette

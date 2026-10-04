@@ -30,7 +30,7 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.mcp import citations, errors
+from app.mcp import auth, citations, errors
 from app.mcp.audit import log_call
 from app.mcp.models import (
     ChunkPageData,
@@ -139,7 +139,7 @@ def _fit_chunks(
 
 
 def _meta(tool: str, took_ms: int) -> ToolMeta:
-    return ToolMeta(tool=tool, agent="default", toolset=settings.mcp_toolset, took_ms=took_ms)
+    return ToolMeta(tool=tool, agent=auth.agent_name(), toolset=settings.mcp_toolset, took_ms=took_ms)
 
 
 def _base_url(ctx: Context | None) -> str:
@@ -270,7 +270,7 @@ def register(server: MCPServer) -> None:
         found = citations.from_search_results(response.results)
         log_call(
             tool="paper_search",
-            agent="default",
+            agent=auth.agent_name(),
             arguments={
                 "query": query,
                 "mode": request.mode,
@@ -347,7 +347,7 @@ def register(server: MCPServer) -> None:
             warnings.append("this paper has no chunks: never parsed, or parsing failed")
         log_call(
             tool="paper_get",
-            agent="default",
+            agent=auth.agent_name(),
             arguments={"paper_id": paper_id},
             outcome="ok",
             affected={"chunks": data.chunk_count, "degradations": len(data.degradations)},
@@ -423,7 +423,7 @@ def register(server: MCPServer) -> None:
         found = citations.from_chunks(paper_id, title, views)
         log_call(
             tool="paper_get_chunks",
-            agent="default",
+            agent=auth.agent_name(),
             arguments={
                 "paper_id": paper_id,
                 "offset": offset,
@@ -518,7 +518,7 @@ def register(server: MCPServer) -> None:
         found = citations.from_chunks(window.paper_id, title, views)
         log_call(
             tool="paper_get_context",
-            agent="default",
+            agent=auth.agent_name(),
             arguments={
                 "chunk_id": chunk_id,
                 "before": before,
@@ -582,7 +582,7 @@ def register(server: MCPServer) -> None:
         took_ms = int((time.perf_counter() - started) * 1000)
         log_call(
             tool="paper_get_file",
-            agent="default",
+            agent=auth.agent_name(),
             arguments={"paper_id": paper_id},
             outcome="ok",
             affected={"bytes": data.bytes, "ttl_s": download_signing.ttl_seconds()},
@@ -632,7 +632,7 @@ def register(server: MCPServer) -> None:
                 warnings.append("still running; poll paper_job_status again")
             log_call(
                 tool="paper_job_status",
-                agent="default",
+                agent=auth.agent_name(),
                 arguments=arguments,
                 outcome="ok",
                 affected={"stage": job.stage},
@@ -647,7 +647,7 @@ def register(server: MCPServer) -> None:
         except errors.ToolFailure as failure:
             log_call(
                 tool="paper_job_status",
-                agent="default",
+                agent=auth.agent_name(),
                 arguments=arguments,
                 outcome="error",
                 code=failure.code,
