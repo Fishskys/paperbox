@@ -381,8 +381,12 @@ codex mcp get paperbox
 
 本机实测（2026-10-04，codex-cli 0.153.4）：`codex mcp add` 成功、`codex mcp get paperbox` 显示
 `transport: streamable_http` + `bearer_token_env_var: PAPERBOX_MCP_TOKEN` + `enabled: true` ✓。
-**端到端调用没能验证**：本机 codex 的模型后端（CC Switch 代理 `127.0.0.1:15721`）当时**没有在监听**，
-任何模型调用都 `502 Bad Gateway` —— 与 paperbox 无关，代理恢复后按上面的片段即可用。
+**端到端调用仍未能验证**，卡在 codex 自己的模型后端上（**与 paperbox 无关**，两次原因依次是）：
+① CC Switch 代理 `127.0.0.1:15721` 没在监听 → `502 Bad Gateway`；
+② 代理起起来后，**逐个模型探测全部 `HTTP 402 INSUFFICIENT_BALANCE`（TokenRhythm 余额不足）**
+（fl 探的 `deepseek-flash`/`deepseek-chat`/`deepseek-v3`/`kimi-k2`/`glm-4.6`/`gpt-5`/`claude-sonnet-4-5` 无一例外）。
+⇒ codex 连模型请求都发不出去，谈不上调 MCP。**额度或 key 在 CC Switch 侧解决后按上面的片段即可用**
+（注意：同一台机器上 Hermes 跑 `TokenRhythm/deepseek-flash` 是正常的 —— 两边很可能不是同一把 key/账号）。
 
 ### Claude Code（⚪ 未验证，本机未安装）
 
