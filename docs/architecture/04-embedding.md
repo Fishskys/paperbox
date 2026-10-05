@@ -15,7 +15,7 @@
 不做：
 - 不做 `query:`/`passage:` 前缀（e5 前缀未加，见 §8）。
 - 不做文本截断/分块：容器不对入参做 token 限长（`server.py` 中无 `max_length`/截断逻辑），分块由 `app/parsing/chunking.py` 负责（`DEFAULT_TARGET_TOKENS=400`、`MAX_TOKENS=450`，`app/parsing/chunking.py:41-42`）。
-- 向量不落 PostgreSQL：PG 只存 `embedding_model`/`embedding_dimension`/`embedded_at`（`app/workers/tasks.py:1093-1116`）。
+- 向量不落 PostgreSQL：PG 只存 `embedding_model`/`embedding_dimension`/`embedded_at`（`app/workers/tasks.py:1099-1122`）。
 - 本模块不定义精排/改写策略（候选窗口、降级语义、双分数属 06 号文档）。
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用，带行号）
@@ -36,9 +36,9 @@
 | | `embedding_metadata()` :152 | 返回 model/dimension 字典（当前无调用方） |
 | `app/workers/tasks.py` | `_advance_stage()` :194 | 阶段标记并 COMMIT（可见性） |
 | | `_run_pipeline()` :446 起；CHUNKING 段 :518-559（`on_degrade=degradations` :552、`degradations.resolve(...)` :559）；EMBEDDING 段 :561-569 | 调用 embed、数量核对、写溯源；降级留痕（T7.3） |
-| | `_write_embeddings()` :1099 | PG 侧 model/dimension/embedded_at |
-| | `_index_rows()` :1135 | 构造待索引文档（含 `embedding`） |
-| | `_record_failure()` :1201 | FAILED 簿记（`classify_failure` → `error_code`） |
+| | `_write_embeddings()` :1105 | PG 侧 model/dimension/embedded_at |
+| | `_index_rows()` :1141 | 构造待索引文档（含 `embedding`） |
+| | `_record_failure()` :1207 | FAILED 簿记（`classify_failure` → `error_code`） |
 | `app/search/hybrid.py` | `_semantic_hits()` :624 | 查询侧 `embed_text(query)`，把 `EmbeddingError` 转 `SearchError` |
 | `app/core/errors.py` | `classify_failure()` :127；`EmbeddingError` 分支 :179 | `EMBEDDING_FAILED` 归类 |
 | `app/services/degradation_service.py` | `record()` :81 / `resolve_stage()` :133 / `Recorder` :226 | **T7.3 降级账本**：`(stage, code, detail)` 落 `paper_degradations` |
@@ -59,12 +59,12 @@ PostgreSQL（`app/db/models.py`）：
 
 | 表 | 字段 | 说明 |
 |---|---|---|
-| `papers` | `embedding_model` :132 / `embedding_dimension` :133 | STORED 阶段先写（`tasks.py:279-280`），EMBEDDING 后重申（:1108-1109） |
-| `paper_chunks` | `embedding_model` :402 / `embedding_dimension` :399 / `embedded_at` :400 / `doc_metadata`(JSONB) :398 | 不含向量；`doc_metadata["embedding_dimension"]` 记的是返回向量实际长度（`tasks.py:1082-1084`） |
+| `papers` | `embedding_model` :132 / `embedding_dimension` :133 | STORED 阶段先写（`tasks.py:279-280`），EMBEDDING 后重申（:1114-1115） |
+| `paper_chunks` | `embedding_model` :402 / `embedding_dimension` :399 / `embedded_at` :400 / `doc_metadata`(JSONB) :398 | 不含向量；`doc_metadata["embedding_dimension"]` 记的是返回向量实际长度（`tasks.py:1088-1090`） |
 | `ingestion_jobs` | `stage` :432 / `progress` :435 / `error_code` :440 / `error_message` :441 | 失败时保留失败阶段与进度 |
-| `paper_degradations` | `stage` :725 / `code` :707 / `detail`(JSONB) :709 / `occurrences` :712 / `first_seen_at` :715 / `last_seen_at` :718 / `resolved_at` :723 / `job_id` :705 | **T7.3 降级账本**：`UNIQUE(paper_id, stage, code)`；`resolved_at IS NULL` = 当前仍然成立 |
+| `paper_degradations` | `stage` :731 / `code` :713 / `detail`(JSONB) :721 / `occurrences` :724 / `first_seen_at` :715 / `last_seen_at` :718 / `resolved_at` :729 / `job_id` :711 | **T7.3 降级账本**：`UNIQUE(paper_id, stage, code)`；`resolved_at IS NULL` = 当前仍然成立 |
 
-OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimension = settings.embedding_dimension`，`hnsw/l2/lucene`，`ef_construction=128`、`m=16`（:125-134）；`embedding_model`(keyword)/`embedding_dimension`(integer)（:135-136）；索引级 `knn=true`（:156）。文档体由 `_index_rows()` 组装（`tasks.py:1160-1161` 的 payload 起始）并经 `build_chunk_document()`（`app/search/opensearch.py:243-285`）落库，`embedding` 仅在非空时写入（`opensearch.py:243-245`）。
+OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimension = settings.embedding_dimension`，`hnsw/l2/lucene`，`ef_construction=128`、`m=16`（:125-134）；`embedding_model`(keyword)/`embedding_dimension`(integer)（:135-136）；索引级 `knn=true`（:156）。文档体由 `_index_rows()` 组装（`tasks.py:1166-1167` 的 payload 起始）并经 `build_chunk_document()`（`app/search/opensearch.py:243-285`）落库，`embedding` 仅在非空时写入（`opensearch.py:243-245`）。
 
 ## 4. 调用链（从入口到落地，逐跳，带函数名）
 
@@ -120,7 +120,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 6 | 容器失败码：推理本身出错 `/embed` = **500**、`/rerank` = **503**；T7.3 起**队满一侧统一 503**（带 `Retry-After: 5`）——`AGENTS.md` §3.3 的“未就绪返回 503”只对精排与“队满”成立 | `server.py:259-260`（500） vs :124-128 + :145-151（队满 503）、:313-314（精排 503） |
 | 7 | `/v1/embeddings` 不受 `MAX_BATCH` 限制，且应用侧不使用它（应用只走 `/embed`）；它同样排在队列后面 | `server.py:211-214`、:318-322；`embedding_service.py:21`（`EMBED_PATH="/embed"`） |
 | 8 | 向量条数不匹配（第 8 跳）落 `IngestionError`，不在 `EmbeddingError` 分支 → `error_code=INTERNAL`，不是 `EMBEDDING_FAILED` | `tasks.py:518-539`；`errors.py:152-197`（`EmbeddingError` 分支 :182，尾部兜底 :200） |
-| 9 | 失败保留现场：`_advance_stage` 已 COMMIT，`EMBEDDING/80` 是可读的失败点；`_record_failure` 只改 job 与 paper.status。降级账本骑在同一个事务上：作业回滚则降级行一并回滚（不是漏记——那次运行没留下产物） | `tasks.py:194-210`、:1201-1220；`degradation_service.py:226-283` |
+| 9 | 失败保留现场：`_advance_stage` 已 COMMIT，`EMBEDDING/80` 是可读的失败点；`_record_failure` 只改 job 与 paper.status。降级账本骑在同一个事务上：作业回滚则降级行一并回滚（不是漏记——那次运行没留下产物） | `tasks.py:194-210`、:1207-1226；`degradation_service.py:226-283` |
 | 9b | **T7.3 服务端队列**：`/embed`、`/v1/embeddings`、`/rerank` 共用一条 FIFO，由 `INFERENCE_WORKERS`(1) 个工作线程串行执行；积压 > `INFERENCE_QUEUE_DEPTH`（2026-10-01 起 512）直接 503，而不是无限排队（无界排队只会把等待推到客户端超时之后） | `server.py:56-59`、:66、:142 |
 | 10 | 模型惰性加载：首个请求才下载/加载（`/health` 在加载前也 200）；healthcheck 15s×30 次容错下载窗口；**首次加载发生在队列工作线程里**，所以冷启动期间其余请求都在排队等待 | `server.py:155-202`；`docker-compose.yml:110-114` |
 | 11 | `/info`、`/health` 的 `dimension` 是硬编码 1024，换模型不会自动修正 | `server.py:243`、:229 |
@@ -185,6 +185,6 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 7 | `/v1/embeddings` 无 `MAX_BATCH` 校验、`usage` token 恒 0 —— 未确认是否有外部消费者（应用不使用该端点） | `server.py:211-214`、:323-326 |
 | 8 | 容器无内存上限与资源声明；OOM 风险靠 `MAX_BATCH`/`RERANK_MAX_BATCH`/`ORT_THREADS`/`INFERENCE_WORKERS` 四个环境变量兜住 —— 是否还有宿主 cgroup 限制未确认 | `docker-compose.yml:80-118` |
 | 9 | 服务端异常返回码仍不完全统一（推理失败时 `/embed` 500、`/rerank` 503），与 `AGENTS.md` §3.3 的表述不完全一致；**队满一侧已是统一 503** | `server.py:259-260`、:145-151、:313-314 |
-| 10 | 向量只存在于 OpenSearch：PG 与索引无一致性校验（PG 有文档、索引缺向量的状态可能长期存在） | `_write_embeddings` 不写向量（`tasks.py:1099-1134`）；索引失败另走 `INDEX_FAILED`（`errors.py:182`） |
+| 10 | 向量只存在于 OpenSearch：PG 与索引无一致性校验（PG 有文档、索引缺向量的状态可能长期存在） | `_write_embeddings` 不写向量（`tasks.py:1105-1140`）；索引失败另走 `INDEX_FAILED`（`errors.py:182`） |
 | 11 | **同一段文字被嵌两遍（T7.3 留档，未优化）**：`CHUNK_MODE=semantic` 时 `chunk_document` 先用同一个 `/embed` 给**句子**打分，紧接着 EMBEDDING 阶段又给**chunk**（= 同一批句子的拼接）嵌一次；两者没有缓存或复用，等于把这篇论文的文字嵌了近两遍 | `tasks.py:552`（chunking 侧 `embed_fn`）与 :563（EMBEDDING 侧 `embed_texts`）打到同一个 `EMBEDDING_URL`；`chunking.py:279-346` 的句级批调用；探针的磁盘向量缓存只存在于 `scripts/probe_chunk_semantic.py`，生产路径没有 |
 | 12 | 服务端队列的**等待时间不可观测**：`/info` 只有计数（`waiting`/`running`/`completed`/`rejected`），没有排队时长直方图；`Retry-After: 5` 是写死的，应用侧的重试退避（0.5s/1.0s）也不读它 —— 队满时三次尝试可能全部撞墙。2026-10-01 提深度只是把阈值抬高，**没解决"客户端不读 Retry-After"**；ml-commons connector 侧已加 `max_retry_times=3` | `server.py:130-140`、:148；`embedding_service.py:111`、:138` |

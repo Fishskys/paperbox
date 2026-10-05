@@ -37,7 +37,7 @@
 | 同上 | `normalize_scores(results)` `:250` | `rerank_score` 非空时**跳过** RRF 重归一化（`:267-271`），relevance 直接由现有 `score` 判定 |
 | `app/api/search.py` | `search(request)` `:72` | 入口：改写 → 检索 → 响应块 |
 | 同上 | `_maybe_rewrite(query)` `:159` | 门控（开关 + `needs_rewrite`），关闭时零 HTTP 调用 |
-| `app/schemas/search.py` | `SearchRerankInfo` `:237` / `SearchRewriteInfo` `:250` / `SearchResponse` `:290` | 响应契约 |
+| `app/schemas/search.py` | `SearchRerankInfo` `:244` / `SearchRewriteInfo` `:257` / `SearchResponse` `:297` | 响应契约 |
 | `infra/embedding/server.py` | `rerank(req)` `:272` | 容器实现：按 `RERANK_MAX_BATCH` 分批并还原原始下标（`:284-294`），经队列 `QUEUE.submit`（`:296`）、队满转 503（`:298`）、推理异常转 503（`:302`），支持 `top_n`（`:309-310`） |
 
 ## 3. 数据结构

@@ -379,11 +379,19 @@ def upgrade_fingerprint(
         return paper.fingerprint, conflict.id
 
     previous = paper.fingerprint
-    paper.fingerprint = candidate
     try:
-        session.flush()
+        # Savepoint, not session.rollback(): the bare rollback discarded the
+        # caller's entire transaction -- on the PATCH / import paths every
+        # change made before this call was silently dropped while the response
+        # still reported success, and on the pipeline path it tore down the
+        # uncommitted adopt (whose MinIO move cannot be undone). The savepoint
+        # rolls the fingerprint flip back alone (review 2026-10-05, P1-1).
+        with session.begin_nested():
+            paper.fingerprint = candidate
+            session.flush()
     except IntegrityError:
-        session.rollback()
+        # Another live paper owns the candidate; keep the fingerprint we had.
+        paper.fingerprint = previous
         return previous, None
     logger.info(
         "fingerprint upgraded",

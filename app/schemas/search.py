@@ -133,7 +133,14 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    query: str = Field(min_length=1, description="Free-text query, zh or en.")
+    #: Ceiling keeps a runaway query out of the search log, the OpenSearch
+    #: analyzer and the embedding call in one step (review 2026-10-05, P1-16).
+    #: Real queries — zh or en — sit well below it.
+    query: str = Field(
+        min_length=1,
+        max_length=1000,
+        description="Free-text query, zh or en.",
+    )
     mode: SearchModeLiteral = DEFAULT_MODE
     top_k: int = Field(default=10, ge=MIN_TOP_K, le=MAX_TOP_K)
     filters: SearchFilters | None = None

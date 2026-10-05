@@ -91,7 +91,7 @@ OCTET_STREAM = "application/octet-stream"
 CHUNK_SIZE = 1024 * 1024
 MAX_ERROR_LENGTH = 2000
 
-_PDF_SUFFIX = re.compile(r"\\.pdf$", re.IGNORECASE)
+_PDF_SUFFIX = re.compile(r"\.pdf$", re.IGNORECASE)
 
 
 class IngestionError(RuntimeError):

@@ -168,7 +168,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `aggregate` 跳过脏值 | `bool` 与非数值不计入，`n` 反映实际观测数 | `metrics.py:163-166` |
 | 单个查询失败不中断整轮 | 记 `error` 字符串、指标置全 0，末尾打印 `success/failed` | `scripts/eval.py:442-445, 492` |
 | 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:198-199, 396-398` |
-| **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:62` |
+| **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:83` |
 | `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md` §3.1 |
 | 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:257-261` |
 | 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:245` |
@@ -238,7 +238,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 |---|---|
 | `tests/test_metrics.py` | 四个指标的正反例、手算 NDCG（`gain=2**grade-1`，`discount=log2(rank+1)`）、`k` 越过结果长度、空排名、`k` 必须为正（`test_metrics.py:179-203`）、`aggregate` 的均值/扁平行/空输入/跳过失败查询（`:214-243`） |
 | `tests/test_bulk_ingest_dir.py` | 客户端纯函数：`.pdf` 预筛（含隐藏/临时后缀）、`**` glob、遍历与 `--limit`、清单拆分与相对/绝对路径、`Retry-After` 优先与封顶、退避增长与抖动、`--resume` 往返、计数、控制台按 `error_code` 分组、`--dry-run` 不发请求、root/limit 用法错误（`test_bulk_ingest_dir.py:45-274`） |
-| `tests/conftest.py` | 内存 SQLite 会话（`sqlite+pysqlite:///:memory:`），PostgreSQL 专有部分唯一索引被跳过（`conftest.py:11, 62`）——这是“单测不碰真机”的落地方式 |
+| `tests/conftest.py` | 内存 SQLite 会话（`sqlite+pysqlite:///:memory:`）；四个部分唯一索引已用 `sqlite_where` 重建、在单测里真实生效（`conftest.py:14-19` 的说明与 `_sqlite_table` 的重建循环，2026-10-05 审查 P1-17 修复）——这是“单测不碰真机”的落地方式 |
 | `tests/test_consistency.py` | 三端对账：缺失对象/孤儿对象/缺失索引/缺失 chunk/孤儿文档/删除残留/坏 store（一个挂了另两个照样答）/未传 client |
 | `tests/test_index_snapshot.py` | 索引映射与 chunk 文档形状：新字段类型、tag 按 kind 分列、`identifiers` 形状、`embedding` 仍是 1024 维 knn |
 | `tests/test_refresh_index_metadata.py` | 快照刷新：每 chunk 一条 partial update（不含 embedding/text）、先 mapping 后文档、跳过软删与无 chunk 论文、`--dry-run`/`--paper-id`/`--no-mapping`、SQL 选择列覆盖 ORDER BY 列 |

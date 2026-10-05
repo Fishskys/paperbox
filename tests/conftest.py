@@ -5,19 +5,26 @@ services are exercised either as pure functions or against SQLite. ``db_session`
 below builds an in-memory SQLite copy of the ORM schema (PostgreSQL-only types
 translated) so the metadata services can be driven with real SQLAlchemy sessions.
 
-Two deliberate differences from production, both harmless for the assertions
+Deliberate differences from production, both harmless for the assertions
 these tests make:
 
-* partial indexes (``postgresql_where``) are skipped -- SQLite has no equivalent,
-  and the real behaviour is verified against PostgreSQL in the acceptance run;
-* ``JSONB`` becomes ``JSON`` and ``UUID`` becomes ``CHAR(36)``.
+* ``JSONB`` becomes ``JSON`` and ``UUID`` becomes ``CHAR(36)``;
+* check constraints are dropped.
+
+Partial unique indexes, by contrast, are **rebuilt** (``sqlite_where``): the
+four partial unique indexes are the dedupe floor of the whole metadata model
+(fingerprint, primary file, identifier ownership, current provenance), and the
+previous claim that "SQLite has no equivalent" was wrong — SQLite has supported
+partial indexes since 3.8. With them enforced, a test that violates a dedupe
+invariant now fails on IntegrityError instead of passing silently (review
+2026-10-05, P1-17).
 """
 
 from __future__ import annotations
 
 import pytest
 import sqlalchemy
-from sqlalchemy import Table, UniqueConstraint, create_engine, text
+from sqlalchemy import Index, Table, UniqueConstraint, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -38,8 +45,9 @@ def _sqlite_table(table, metadata) -> Table:
     """Copy ``table`` into ``metadata`` with SQLite-friendly types.
 
     Primary keys come along with the copied columns; unique constraints are
-    rebuilt explicitly (they are what most of these tests are about), everything
-    else (partial indexes, check constraints) is dropped.
+    rebuilt explicitly (they are what most of these tests are about), as are
+    the partial unique indexes (``postgresql_where`` -> ``sqlite_where``);
+    check constraints are dropped.
     """
     columns = [column._copy() for column in table.columns]
     for column in columns:
@@ -49,7 +57,20 @@ def _sqlite_table(table, metadata) -> Table:
         for item in table.constraints
         if isinstance(item, UniqueConstraint)
     ]
-    return Table(table.name, metadata, *columns, *constraints)
+    new_table = Table(table.name, metadata, *columns, *constraints)
+    for item in table.indexes:
+        try:
+            where = item.dialect_options["postgresql"]["where"]
+        except KeyError:
+            continue
+        if item.unique:
+            Index(
+                item.name,
+                *[new_table.c[column.name] for column in item.columns],
+                unique=True,
+                sqlite_where=where,
+            )
+    return new_table
 
 
 def build_session_factory():

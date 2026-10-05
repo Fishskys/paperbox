@@ -86,7 +86,7 @@
 两个互不相干的机制：
 
 1. **HTTP 错误** = 各 endpoint 内手写 `raise HTTPException(...)`。没有统一异常处理器，也没有业务异常基类到状态的集中映射；FastAPI 默认处理器输出字符串 `detail`，与 `docs/architecture/MVP-SPEC.md:108`「统一 `{"detail": "…"}`」一致。
-2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1202`。
+2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1208`。
 
 业务异常 → HTTP 状态映射（全部为端点内显式 raise）：
 
@@ -125,7 +125,7 @@
 | 启动 | `configure_logging(settings.log_level)` | `main.py:43` | 根 logger 只配置一次（`app/core/logging.py:87`） |
 | 启动 | `job_queue.start()` | `main.py:48` | 建 `INGEST_CONCURRENCY` 个 worker 协程（`app/workers/queue.py:119-137`） |
 | 启动 | `job_queue.recover()` | `main.py:49` | `RECEIVED/QUEUED` 且未结束的作业重新入队；中间态作业标 `FAILED` + `error_code='INTERRUPTED'`（`queue.py:240-259` → `app/services/ingestion_service.py:426-461`） |
-| 启动 | `housekeeping.start()` | `main.py:52` | 起周期任务，**首轮立即执行**（`housekeeping.py:323-334`：先 `run_gc` 再 `sleep(interval)`） |
+| 启动 | `housekeeping.start()` | `main.py:52` | 起周期任务，**首轮立即执行**（`housekeeping.py:340-351`：先 `run_gc` 再 `sleep(interval)`） |
 | 关闭 | `await housekeeping.stop()` | `main.py:54` | cancel 周期任务 |
 | 关闭 | `await job_queue.stop()` | `main.py:55` | cancel worker 协程；**不等待**，线程内已开始的流水线跑到结束（`queue.py:139-154`） |
 | 关闭 | `logger.info("paperbox stopping")` | `main.py:56` | 无 DB/索引收尾：未调用 `job_queue.join()`（存在，`queue.py:156-160`），未调用 `dispose_engine()`（存在，`app/db/session.py:79`） |
@@ -184,7 +184,7 @@
 |---|---|---|
 | `IngestQueue` | `asyncio.PriorityQueue[tuple[int,int,_Item]]`（`(priority, seq, item)`）、`_pending: dict[job_id,(kind,priority)]`、`_running: dict[job_id,kind]`、`_seq` | `app/workers/queue.py:99-108`, `:201` |
 | `UploadAdmission` | `_in_flight: int` + `threading.Lock`、`limit`、`high_watermark` | `app/services/upload_admission.py:79-84` |
-| `Housekeeping` | `_task: asyncio.Task`、`interval`、`passes`、`last` | `app/workers/housekeeping.py:288-294` |
+| `Housekeeping` | `_task: asyncio.Task`、`interval`、`passes`、`last` | `app/workers/housekeeping.py:305-311` |
 | 请求 id | `ContextVar("paperbox_request_id")` | `app/core/logging.py:24` |
 
 ## 4. 调用链（逐跳）
@@ -192,7 +192,7 @@
 **启动**：uvicorn → `app.main:lifespan`(`main.py:42`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → 请求可服务。
 
 **`POST /api/papers/ingest/files`**（`ingestion.py:262`）：
-`request_id_middleware`(`main.py:70`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:286-309`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:133`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:95` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:193-201`) → `job_queue.submit`(`:207` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:296`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:318`) → 返回 `summarize()` 的 202 响应(`:345`)。
+`request_id_middleware`(`main.py:70`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:286-309`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:133`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:95` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:242-250`) → `job_queue.submit`(`:256` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:296`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:318`) → 返回 `summarize()` 的 202 响应(`:345`)。
 
 **`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:131`) → `_maybe_rewrite`(`search.py:167`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:150`) → 逐结果构造 `SearchResult`(`:181`) → `_log_search` 另开 `SessionLocal()` 写日志(`:210`, `:208`) → `SearchResponse`(`:223`)。
 

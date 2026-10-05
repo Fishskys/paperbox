@@ -134,6 +134,55 @@ app.add_middleware(McpAuthMiddleware)
 # Serving /mcp without a trailing slash is in-process, not a 307 (see the class).
 app.add_middleware(McpMountPathMiddleware)
 
+#: Request-body ceilings (review 2026-10-05, P1-16). Code constants on purpose:
+#: they guard memory, they are not deployment knobs. ``MAX_TOTAL_BODY_BYTES``
+#: must stay above ``INGEST_MAX_REQUEST_MB`` (200 MB) — the business layer keeps
+#: its stricter multipart rule and answers 413 first; this ceiling only exists
+#: so no request can promise the process unbounded buffering (single worker:
+#: the whole service, queue included, dies with the memory).
+MAX_JSON_BODY_BYTES = 8 * 1024 * 1024
+MAX_TOTAL_BODY_BYTES = 256 * 1024 * 1024
+
+
+class BodyLimitMiddleware:
+    """Reject oversized bodies from ``Content-Length`` before anything reads them.
+
+    Check-only (no body is consumed): a request without ``Content-Length``
+    (chunked) passes and is bounded by the per-endpoint streaming limits. JSON
+    gets a much smaller ceiling than multipart — no legitimate JSON body here
+    is anywhere near 8 MB, while an 8 MB JSON payload buffered by
+    ``request.json()`` used to be a cheap way to pressure the single worker.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            headers = {
+                key.decode("latin-1").lower(): value.decode("latin-1")
+                for key, value in scope.get("headers", [])
+            }
+            content_length = headers.get("content-length", "")
+            if content_length.isdigit():
+                content_type = headers.get("content-type", "")
+                if content_type.split(";", 1)[0].strip().lower() == "application/json":
+                    limit = MAX_JSON_BODY_BYTES
+                else:
+                    limit = MAX_TOTAL_BODY_BYTES
+                if int(content_length) > limit:
+                    from starlette.responses import JSONResponse
+
+                    response = JSONResponse(
+                        {"detail": "request body too large"}, status_code=413
+                    )
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(BodyLimitMiddleware)
+
 
 class AuthContextMiddleware:
     """Resolve the caller's key once per ``/api`` request; publish it twice.
