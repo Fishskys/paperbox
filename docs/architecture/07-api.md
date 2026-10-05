@@ -61,20 +61,25 @@
 
 `/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:59-67` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:199`。
 
-### 2.2 鉴权实现
+### 2.2 鉴权实现（2026-10-05 起按 plan `2026-10-05_145619-api-auth-keys-roles` 重写）
+
+**总开关 `AUTH_ENABLED`（默认 `false`，全开全关）**：关 = 每个 `/api/*` 调用方拿到匿名 admin 身份
+（日志记 `key=anonymous`），不查库；开 = 下表的档位强制生效。`/mcp` 同受该开关（见
+`11-mcp-agent-interface.md` §4）。
 
 | 环节 | 实现 | 出处 |
 |---|---|---|
-| 取凭证 | `Authorization` 头优先；`partition(" ")` 后 scheme 必须为 `bearer`（忽略大小写）且凭证非空 | `app/core/security.py:25-30` |
-| 无 `Authorization` 时回退 | 读 `X-API-Key` | `app/core/security.py:19`, `:32-35` |
-| 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | `app/core/security.py:30` |
-| 比对 | `hmac.compare_digest`，期望值 `settings.paper_api_key` | `app/core/security.py:38-43`, `app/core/config.py:83` |
-| 缺凭证 | `401 {"detail":"Missing API key"}` + `WWW-Authenticate: Bearer` | `app/core/security.py:49-54` |
-| 凭证不符 | `403 {"detail":"Invalid API key"}` + 同头 | `app/core/security.py:55-60` |
-| 依赖挂载 | 每个 router 构造时 `dependencies=[Depends(require_api_key)]` | `ingestion.py:59-63`、`jobs.py:14-18`、`papers.py:31-35`、`metadata.py:40-44`、`search.py:40-44`、`search_logs.py:20-24` |
-| 豁免 | `health.py:25` 无 dependencies；`GET /`（`main.py:92`）、`/docs` 等框架端点无保护 | 同上 |
+| 取凭证 | `Authorization` 头优先；`partition(" ")` 后 scheme 必须为 `bearer`（忽略大小写）且凭证非空 | `app/core/security.py::extract_api_key` |
+| 无 `Authorization` 时回退 | 读 `X-API-Key` | 同上 |
+| 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | 同上 |
+| 解析（每请求一次） | `AuthContextMiddleware`（main.py）解析 Bearer → `api_key_service.authenticate(session, token)`，把身份放 `scope["state"]` 并把前缀绑进日志上下文（**纯 ASGI**；不在依赖里做，因为线程池依赖里绑 contextvar 传播不回日志上下文） | `app/main.py`、`app/services/api_key_service.py` |
+| 凭证存储 | `api_keys` 表只存 `sha256(完整密钥)`；`name`/`prefix`/`key_hash` 各唯一；三档 `read < write < admin`；env 引导行（`PAPER_API_KEY`/`PAPER_API_KEYS`）启动时 upsert 成 admin、优先于库行（恢复路径） | `app/db/models.py::ApiKey`、`app/services/api_key_service.py` |
+| 档位强制 | `require_role(min)` 工厂；router 级 `require_api_key`(=read)/`require_write`/`require_admin` 单例，端点级叠加（缺凭证 401、不匹配 403、档位不足 403 `insufficient role`） | `app/core/security.py` |
+| 依赖挂载 | ingestion 整个 router `require_write`；jobs/metadata/papers router 级 read + 写/admin 端点级叠加；search/search_logs/consistency 级 read | 各 `app/api/*.py` |
+| 豁免 | `health.py` 无 dependencies；`GET /`、`/docs` 等框架端点无保护；`GET /api/downloads/{paper_id}` 只认 HMAC 签名 | 同上、`app/api/downloads.py` |
 
-`require_api_key` 只是 `verify_api_key` 的别名函数（`app/core/security.py:64-66`），测试用 `app.dependency_overrides[require_api_key]` 整体绕过（如 `tests/test_ingest_files.py:124`）。空 `PAPER_API_KEY`（`expected` 为空）→ `api_key_matches` 返回 `False`（`security.py:41-42`），即**所有受保护请求 403**，不是开放访问。
+测试用 `app.dependency_overrides[require_api_key]`/`[require_write]` 绕过对应档位（如 `tests/test_ingest_files.py:125`）。
+端点→档位全表见 `UserManual.md` §2.1.1；启动护栏（拒 `change-me`、拒零密钥、auth-off + 非回环 WARNING）见 `app/main.py::lifespan` 与 `app/core/config.py` 的 `_check_auth`。
 
 ### 2.3 错误处理
 
