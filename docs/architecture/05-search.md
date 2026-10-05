@@ -66,7 +66,7 @@
 | `app/services/search_log_service.py` | `serialize_results` `:47`、`log_search` `:100`、`list_search_logs` `:184` | 日志压缩 / 落库（从不抛错）/ 回读 |
 | `app/api/search.py` | `search` `:50`、`_maybe_rewrite` `:167`、`serialize_results` `:180`、`_log_search` `:199` | 路由 + 改写门控 + 日志专用 session |
 | `app/api/search_logs.py` | `list_search_logs` `:28` | `GET /api/search-logs` |
-| `app/workers/tasks.py` | `_index_rows` `:1114` | chunk 文档的**唯一构造点**（元数据部分来自 `snapshot.paper_metadata_snapshot`，`tasks.py:1127`） |
+| `app/workers/tasks.py` | `_index_rows` `:1208` | chunk 文档的**唯一构造点**（元数据部分来自 `snapshot.paper_metadata_snapshot`，`tasks.py:1221`） |
 | `app/search/snapshot.py` | `paper_metadata_snapshot` `:74`、`tag_names_by_kind` `:39` | 元数据快照的**单一来源**（流水线 + 刷新脚本共用） |
 | `app/db/models.py` | `SearchQuery` `:691` | `search_queries` 表 |
 
@@ -85,7 +85,7 @@
 | `ieee_terms` / `author_terms` / `dynamic_index_terms` / `source_tags` | `keyword` | 按 `papers_tags.kind` 分列的索引词；`tags` 仍是四者的并集（`mappings.py:96`） |
 | `embedding` | `knn_vector(1024)` | `hnsw` / `l2` / `lucene`，`ef_construction=128`、`m=16`（`mappings.py:122`） |
 | `embedding_model` / `embedding_dimension` / `created_at` | `keyword` / `integer` / `date` | |
-| `parser_backend` / `parser_version` | `keyword` | **哪条解析器产出了这条 chunk**（`mappings.py:137-138`，值来自 `papers` 的两个戳列，`tasks.py:1185-1186`）。可以按它筛出「后端切换没覆盖到」的论文（`parser_backend: pypdf`）；同一个字段也是 `GET /api/consistency` 的 `parser_backends` 普查依据（加 `?parser_papers=true` 连论文 id 清单一起给，`scripts/reindex.py --parser-backend pypdf\|unknown` 直接吃这份清单） |
+| `parser_backend` / `parser_version` | `keyword` | **哪条解析器产出了这条 chunk**（`mappings.py:137-138`，值来自 `papers` 的两个戳列，`tasks.py:1279-1280`）。可以按它筛出「后端切换没覆盖到」的论文（`parser_backend: pypdf`）；同一个字段也是 `GET /api/consistency` 的 `parser_backends` 普查依据（加 `?parser_papers=true` 连论文 id 清单一起给，`scripts/reindex.py --parser-backend pypdf\|unknown` 直接吃这份清单） |
 
 索引 settings：`index.knn=true`、1 shard、0 replica；**`dynamic: "strict"`**（`mappings.py:164`，2026-09-30 由 `true` 收紧）。原来是靠纪律：新过滤字段必须**赶在第一个带该字段的文档之前**加进 `build_mapping()`，否则 `true` 会先把它映成 `text`（`pages`/`paper_type` 都踩过），而且**不会报错**；`strict` 让这种漂移变成写入报错（真机验证：往 `paper_chunks_v3` 写未声明字段 → HTTP 400）。配套不变量：`tests/test_index_snapshot.py::test_every_field_the_document_emits_is_declared` 钉住「`build_chunk_document` 吐出的每个字段都在 mapping 里声明」，所以 strict 不会误伤正常写入。文档 `_id` = `chunk_id`（`opensearch.py:320`）。
 
@@ -209,7 +209,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 ## 5. 不变量与踩过的坑
 
 1. **过滤不参与打分**：过滤器一律进 `bool.filter`（`hybrid.py:286-297`）；kNN 模式下 filter 被塞进 `knn` 子句内部（`hybrid.py:326-328`，注释称 "filter first, then kNN"）。
-2. **过滤字段是索引时快照**：文档里的 `venue`/`year`/`authors`/`doi`/`arxiv_id`/`tags`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers` 全部来自 `_index_rows` 里的 `paper` 对象（`tasks.py:1120-1154`），即索引那一刻 PG 的值；`build_filters` 只读文档（`hybrid.py:232-257`），**不查 PostgreSQL**。因此 `PATCH /metadata`、外部导入、合并**不会改变检索过滤结果**，必须 `POST /api/papers/{id}/reindex`（`docs/progress/project.md:767-769`，元数据真机验收第 5 项即先 reindex 再按 venue 命中，`docs/progress/project.md:753`）。同理 `tag` 过滤目前必然为空，因为 tag 写入路径本身未接通（`docs/progress/project.md:126`、`docs/progress/project.md:161`）。
+2. **过滤字段是索引时快照**：文档里的 `venue`/`year`/`authors`/`doi`/`arxiv_id`/`tags`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers` 全部来自 `_index_rows` 里的 `paper` 对象（`tasks.py:1214-1248`），即索引那一刻 PG 的值；`build_filters` 只读文档（`hybrid.py:232-257`），**不查 PostgreSQL**。因此 `PATCH /metadata`、外部导入、合并**不会改变检索过滤结果**，必须 `POST /api/papers/{id}/reindex`（`docs/progress/project.md:767-769`，元数据真机验收第 5 项即先 reindex 再按 venue 命中，`docs/progress/project.md:753`）。同理 `tag` 过滤目前必然为空，因为 tag 写入路径本身未接通（`docs/progress/project.md:126`、`docs/progress/project.md:161`）。
 3. **论文分取组内最大值**：`aggregate_papers` 先按 `_hit_score` 降序排组（`search_service.py:225`），再取 `ordered_group[0]` 的分（`:226`、`:241`）——是 max，不是加权和/平均；`matched_chunks` 单独记录组内 chunk 数（`:260`）。单测锁定：`tests/test_aggregation.py:93`。
 4. **论文元数据也来自最佳 chunk**：`title`/`authors`/`year`/`venue`/`doi`/`arxiv_id` 都取 `best`（`search_service.py:245-252`，锁定于 `tests/test_aggregation.py:177`）。
 5. **evidence 选取规则**：先过滤"噪声"（文本 `< MIN_EVIDENCE_CHARS` 或 `section/section_title` 命中 `NOISE_SECTION` 正则，`search_service.py:38`、`:180-185`），优先取非噪声、不足时用剩余项补齐，上限 `MAX_EVIDENCE=3`（`:187-191`）；每条文本截断到 `EVIDENCE_TEXT_LIMIT=500`（`:140`）。`evidence[].section` 优先取 `section_title`（`:232`），`page` 取 `page_start`。
