@@ -418,6 +418,35 @@ def mark_failed(
     return job
 
 
+def submit_or_fail(
+    session: Session,
+    job_id: str,
+    kind: str,
+    priority: int | None = None,
+) -> IngestionJob | None:
+    """Hand a job to the queue, guaranteeing it never stalls in ``RECEIVED``.
+
+    A failed hand-off used to leave the row RECEIVED with no worker ever
+    claiming it -- only a restart's ``recover()`` would pick it up, and until
+    then the client watched a job that would never move (review 2026-10-05,
+    P1-14). Here the job is marked FAILED and committed before the error
+    propagates, so the client can simply retry. The queue module is imported
+    lazily: it imports this module.
+    """
+    from app.workers import queue as job_queue
+
+    try:
+        if priority is None:
+            return job_queue.submit(session, job_id, kind)
+        return job_queue.submit(session, job_id, kind, priority)
+    except Exception as exc:
+        job = session.get(IngestionJob, job_id)
+        if job is not None:
+            mark_failed(session, job, f"queue hand-off failed: {exc}", code="INTERNAL")
+            session.commit()
+        raise
+
+
 def prepare_retry(session: Session, job_id: str) -> IngestionJob | None:
     """Reset a FAILED job so it can be driven again (plan section 22).
 

@@ -43,6 +43,11 @@ logger = get_logger(__name__)
 CONVERT_PATH = "/v1/convert/file"
 VERSION_PATH = "/version"
 
+#: Connect ceiling, separate from the read/document timeout (review 2026-10-05,
+#: P1-12). A code constant on purpose: connecting to the NAS is a fixed local
+#: cost, not a deployment knob.
+DOCLING_CONNECT_TIMEOUT = 10.0
+
 #: ``pdf_heading_hierarchy_options`` as frozen in the contract (plan §1.3).
 #: Measured caveat: in docling-serve 1.35.0 this is a **no-op for the markdown
 #: export** -- the relative levels actually come from ``do_pdf_heading_hierarchy``,
@@ -379,7 +384,18 @@ def convert_markdown(
 
     own_client = client is None
     if own_client:
-        client = httpx.Client(base_url=url, timeout=request_timeout)
+        client = httpx.Client(
+            base_url=url,
+            # Connect gets its own, much smaller ceiling (review 2026-10-05,
+            # P1-12): a scalar timeout made a NAS that DROPS (firewall, not
+            # refusal) hold every attempt for the full read budget -- with
+            # formula attempts up to ~33 minutes per paper, serialized by
+            # PARSER_CONCURRENCY. Reading a large PDF legitimately takes the
+            # configured document timeout; connecting never does.
+            timeout=httpx.Timeout(
+                request_timeout, connect=min(DOCLING_CONNECT_TIMEOUT, request_timeout)
+            ),
+        )
     assert client is not None  # for type checkers
 
     # Attempt plan. With formulas on, the first attempt gets one single shot: the

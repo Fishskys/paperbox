@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.db.models import (
+    IngestionJob,
     Paper,
     PaperFieldProvenance,
     PaperFile,
@@ -30,6 +31,7 @@ from app.db.models import (
 )
 from app.services import api_key_service as keys
 from app.services import metadata_identifiers, paper_service
+from tests.test_parser_service import _always_raises, _pdf_bytes
 from tests.test_primary_version import add_file, make_paper
 
 
@@ -251,3 +253,91 @@ def test_the_signing_secret_still_lives_without_auth(client, monkeypatch, sessio
         assert keys.live_key_count(session) >= 0
     finally:
         session.close()
+
+# --------------------------------------------------------------------------- #
+# P1-14 — a failed queue hand-off marks the job FAILED (never stalls RECEIVED)
+# --------------------------------------------------------------------------- #
+def test_a_failed_queue_hand_off_marks_the_job_failed(
+    monkeypatch, session_factory
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import ingestion as ingestion_api
+    from app.core.security import require_api_key
+    from app.db.session import get_db
+    from app.main import AuthContextMiddleware
+    from app.services.ingestion_service import mark_failed  # noqa: F401 (context)
+
+    monkeypatch.setattr("app.main.SessionLocal", session_factory)
+    monkeypatch.setattr(settings, "auth_enabled", False)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("event loop closed")
+
+    monkeypatch.setattr("app.workers.queue.submit", explode)
+
+    def _db():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app = FastAPI()
+    app.include_router(ingestion_api.router)
+    app.add_middleware(AuthContextMiddleware)
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[require_api_key] = lambda: "test"
+
+    with TestClient(app, raise_server_exceptions=True) as test_client:
+        with pytest.raises(RuntimeError):
+            test_client.post(
+                "/api/papers/ingest",
+                json={"source": "https://arxiv.org/pdf/1807.11311"},
+            )
+
+    session = session_factory()
+    try:
+        job = session.query(IngestionJob).one()
+        assert job.stage == "FAILED"
+        assert job.error_code == "INTERNAL"
+        assert "queue hand-off failed" in (job.error_message or "")
+    finally:
+        session.close()
+
+
+# --------------------------------------------------------------------------- #
+# P1-13 — a docling client error gets its own ledger code
+# --------------------------------------------------------------------------- #
+def test_a_docling_client_error_maps_to_docling_rejected() -> None:
+    from app.parsing.docling_client import DoclingFailed
+    from app.services import parser_service
+
+    rejected = DoclingFailed("404 preset not found")
+    rejected.client_error = True  # set by _client_error() in production
+    bundle = parser_service.parse_pdf(
+        _pdf_bytes(),
+        filename="a.pdf",
+        backend="docling",
+        converter=_always_raises(rejected),  # type: ignore[arg-type]
+    )
+    assert (bundle.degraded_reason or "").startswith("docling rejected")
+    codes = parser_service.degradation_codes(bundle.degraded_reason or "")
+    assert "docling_rejected" in codes
+    assert "docling_unavailable" not in codes
+
+
+def test_an_unreachable_docling_still_maps_to_docling_unavailable() -> None:
+    from app.parsing.docling_client import DoclingUnavailable
+    from app.services import parser_service
+
+    bundle = parser_service.parse_pdf(
+        _pdf_bytes(),
+        filename="a.pdf",
+        backend="docling",
+        converter=_always_raises(DoclingUnavailable("connection refused")),  # type: ignore[arg-type]
+    )
+    codes = parser_service.degradation_codes(bundle.degraded_reason or "")
+    assert "docling_unavailable" in codes
+    assert "docling_rejected" not in codes

@@ -148,7 +148,7 @@
 ```
 RECEIVED(0) --create_job--> ingestion_service.py:246-253
    |
-   | mark_queued（唯一允许 RECEIVED/QUEUED 之间转换的守卫）   ingestion_service.py:403-423
+   | mark_queued（唯一允许 RECEIVED/QUEUED 之间转换的守卫）   ingestion_service.py:403-452
    v
 QUEUED(0) --------------------------------------------------------+
    | _worker 取走，run_ingestion_job -> _process_job             |
@@ -198,7 +198,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
 | `INGEST_CONCURRENCY` | 2 | 同时运行的流水线数 = worker 协程数；`<=0` 启动即报错 | `core/config.py:144`（校验 L190-195）→ `queue.py:96-97`、`130-133` |
-| `INGEST_DOWNLOAD_TIMEOUT` | 120.0 | URL 下载超时（httpx） | `config.py:133` → `ingestion_service.py:476` |
+| `INGEST_DOWNLOAD_TIMEOUT` | 120.0 | URL 下载超时（httpx） | `config.py:133` → `ingestion_service.py:505` |
 | `INGEST_MAX_FILE_MB` | 100 | 单文件上限；`max_file_bytes()` 换算 | `config.py:134` → `ingestion_service.py:115-117`、`138-144` |
 | `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途**上传请求**数上限（`429 + Retry-After: 2`） | `config.py:146` → `upload_admission.py:71-79` |
 | `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 处理积压达到该深度时**只拒多文件**请求；0 关闭 | `config.py:150-152` → `upload_admission.py:128-136` |
@@ -228,8 +228,8 @@ COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
 ## 8. 未做 / 已知缺口
 
 - **无外部队列**：队列在进程内，横向扩 worker/多副本必须先换外部队列（当前明确不做）。`queue.py:20-24`；`README.md:135-137`；`docs/progress/project.md:583`。
-- **重启恢复只处理 `ingestion_jobs` 行，不做 MinIO/OpenSearch 对账**：`recover_jobs` 不检查"论文行有、对象缺失"这类不一致；对账仍是 `scripts/purge_deleted.py`。`ingestion_service.py:426-462`；`docs/progress/project.md:584`。
-- **`INTERRUPTED` 不会自动重跑**：恢复只是把作业标成 `FAILED`，重新驱动必须人工 `POST /api/jobs/{id}/retry`。`ingestion_service.py:452-458`、`api/jobs.py:53-59`。
+- **重启恢复只处理 `ingestion_jobs` 行，不做 MinIO/OpenSearch 对账**：`recover_jobs` 不检查"论文行有、对象缺失"这类不一致；对账仍是 `scripts/purge_deleted.py`。`ingestion_service.py:455-491`；`docs/progress/project.md:584`。
+- **`INTERRUPTED` 不会自动重跑**：恢复只是把作业标成 `FAILED`，重新驱动必须人工 `POST /api/jobs/{id}/retry`。`ingestion_service.py:481-487`、`api/jobs.py:53-59`。
 - **`run_reindex_job` 的"无 paper_id"失败不带错误码**：`mark_failed` 未传 `code`，于是 `stage=FAILED` 而 `error_code=NULL`，与其它失败不一致。`tasks.py:129-132`。
 - **没有取消接口**：`QUEUED` 作业无法取消，只能在跑完后删除论文；本文未发现相关端点或测试（未确认是否有意为之）。
 - **`progress` 的粒度**：`STORED → PARSING` 之间（下载+解析）没有中间反馈，大 PDF 会长时间停在 30/45；`PARSING` 内部无进度。

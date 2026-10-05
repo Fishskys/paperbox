@@ -124,7 +124,7 @@
 |---|---|---|---|
 | 启动 | `configure_logging(settings.log_level)` | `main.py:43` | 根 logger 只配置一次（`app/core/logging.py:87`） |
 | 启动 | `job_queue.start()` | `main.py:48` | 建 `INGEST_CONCURRENCY` 个 worker 协程（`app/workers/queue.py:119-137`） |
-| 启动 | `job_queue.recover()` | `main.py:49` | `RECEIVED/QUEUED` 且未结束的作业重新入队；中间态作业标 `FAILED` + `error_code='INTERRUPTED'`（`queue.py:240-259` → `app/services/ingestion_service.py:426-461`） |
+| 启动 | `job_queue.recover()` | `main.py:49` | `RECEIVED/QUEUED` 且未结束的作业重新入队；中间态作业标 `FAILED` + `error_code='INTERRUPTED'`（`queue.py:240-259` → `app/services/ingestion_service.py:455-490`） |
 | 启动 | `housekeeping.start()` | `main.py:52` | 起周期任务，**首轮立即执行**（`housekeeping.py:340-351`：先 `run_gc` 再 `sleep(interval)`） |
 | 关闭 | `await housekeeping.stop()` | `main.py:54` | cancel 周期任务 |
 | 关闭 | `await job_queue.stop()` | `main.py:55` | cancel worker 协程；**不等待**，线程内已开始的流水线跑到结束（`queue.py:139-154`） |

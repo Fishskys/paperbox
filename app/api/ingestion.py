@@ -205,7 +205,7 @@ async def stage_and_queue(
         await run_in_threadpool(_discard_staging, staging_key)
         return _rejected(filename, exc, size_bytes=size)
 
-    job_queue.submit(session, job.id, job_queue.KIND_INGEST, priority)
+    ingest.submit_or_fail(session, job.id, job_queue.KIND_INGEST, priority)
     return IngestFileResult(
         filename=filename,
         status=STATUS_ACCEPTED,
@@ -260,7 +260,7 @@ def ingest_url(
 
     job = ingest.create_job(session, source_type="url", source=source)
     session.commit()
-    queued = job_queue.submit(session, job.id, job_queue.KIND_INGEST) or job
+    queued = ingest.submit_or_fail(session, job.id, job_queue.KIND_INGEST) or job
     return IngestAccepted.model_validate(ingest.accepted_payload(queued))
 
 
@@ -488,7 +488,7 @@ def ingest_dir(
             else job_queue.PRIORITY_INTERACTIVE
         )
         for job_id in accepted_ids:
-            job_queue.submit(session, job_id, job_queue.KIND_INGEST, priority)
+            ingest.submit_or_fail(session, job_id, job_queue.KIND_INGEST, priority)
 
     logger.info(
         "ingest/dir request finished",
@@ -666,7 +666,7 @@ async def ingest_compressed(
 
     if accepted_ids:
         for job_id in accepted_ids:
-            job_queue.submit(
+            ingest.submit_or_fail(
                 session, job_id, job_queue.KIND_INGEST, job_queue.PRIORITY_BATCH
             )
 

@@ -155,7 +155,16 @@ def upsert_source(
     source_type = (source_type or "").strip().lower()
     existing = find_source(session, source_type, source_ref)
     if existing is not None:
-        if paper_id and not existing.paper_id:
+        # Re-point when the old owner is gone: a soft-deleted paper released
+        # its identifiers, so a re-imported PDF matches a NEW paper and the
+        # record must follow it instead of reporting "unchanged" forever
+        # (review 2026-10-05, P1-6 -- correction semantics, like
+        # ``replace_identifier``).
+        stale_owner = False
+        if existing.paper_id:
+            owner = existing.paper
+            stale_owner = owner is None or owner.deleted_at is not None
+        if paper_id and (not existing.paper_id or stale_owner):
             existing.paper_id = paper_id
         if raw and not existing.raw:
             existing.raw = raw
