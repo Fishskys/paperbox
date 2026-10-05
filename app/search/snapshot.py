@@ -41,8 +41,12 @@ def tag_names_by_kind(paper: Any) -> dict[str, list[str]]:
 
     IEEE index terms, author terms, dynamic index terms and source tags answer
     different questions, so the index keeps them in separate keyword fields (the
-    flat ``tags`` list stays for backward compatibility).
+    flat ``tags`` list stays for backward compatibility). Names are stored
+    **normalized** (``metadata_tags.normalize_tag``) so the filters match the
+    same keys ``GET /api/papers`` matches on (review 2026-10-05, P1-8).
     """
+    from app.services import metadata_tags
+
     grouped: dict[str, list[str]] = {}
     for link in getattr(paper, "tag_links", []) or []:
         tag = getattr(link, "tag", None)
@@ -52,7 +56,7 @@ def tag_names_by_kind(paper: Any) -> dict[str, list[str]]:
         field = TAG_KIND_FIELDS.get(kind)
         if field is None:
             continue
-        grouped.setdefault(field, []).append(str(tag.name))
+        grouped.setdefault(field, []).append(metadata_tags.normalize_tag(tag.name))
     return {field: sorted(set(names)) for field, names in grouped.items()}
 
 
@@ -71,16 +75,28 @@ def identifier_strings(paper: Any) -> list[str]:
     return sorted(values)
 
 
+def _normalized_venue_key(name: str) -> str:
+    """The same normalized key ``GET /api/papers`` matches venues on."""
+    from app.services.venue_service import normalize_venue_name
+
+    return normalize_venue_name(name)
+
+
 def paper_metadata_snapshot(paper: Any) -> dict[str, Any]:
     """The filter fields of one paper (see ``app/search/mappings.py``).
 
-    ``venue`` is the venue *name* and ``venue_year`` the year of the edition the
-    paper appeared in, so "the conference" and "the conference in a given year"
-    are two different filters. ``tags`` is the flat union kept for backward
-    compatibility; the per-kind lists are the precise ones.
+    ``venue`` is the venue *normalized key* and ``venue_year`` the year of the
+    edition the paper appeared in, so "the conference" and "the conference in a
+    given year" are two different filters. ``tags`` is the flat union kept for
+    backward compatibility; the per-kind lists are the precise ones. Both venue
+    and tag names are stored **normalized** so ``POST /api/search`` matches the
+    same keys ``GET /api/papers`` matches on (review 2026-10-05, P1-8) -- facet
+    buckets therefore show normalized names too.
     """
     snapshot: dict[str, Any] = {
-        "venue": paper.venue.name if paper.venue is not None else None,
+        "venue": (
+            _normalized_venue_key(paper.venue.name) if paper.venue is not None else None
+        ),
         "venue_year": paper.venue_year,
         "paper_type": paper.paper_type,
         "volume": paper.volume,
@@ -92,6 +108,7 @@ def paper_metadata_snapshot(paper: Any) -> dict[str, Any]:
     by_kind = tag_names_by_kind(paper)
     for field in TAG_KIND_FIELDS.values():
         snapshot[field] = by_kind.get(field, [])
+    snapshot["tags"] = sorted({name for names in by_kind.values() for name in names})
     return snapshot
 
 

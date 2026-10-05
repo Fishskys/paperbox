@@ -277,14 +277,14 @@ def test_the_script_sends_the_metadata_snapshot(monkeypatch, factory) -> None:  
 
     assert run_script(monkeypatch) == 0
     doc = client.actions[0]["doc"]
-    assert doc["venue"] == "ISSCC"
+    assert doc["venue"] == "isscc"  # P1-8: normalized key
     assert doc["venue_year"] == 2021
     assert doc["paper_type"] == "conference"
     assert doc["volume"] == "64"
     assert doc["pages"] == "412-419"
     assert doc["publication_date"] == "2021-03-01"
     assert doc["identifiers"] == ["ieee_article_number:7065247"]
-    assert doc["ieee_terms"] == ["Low Power SRAM"]
+    assert doc["ieee_terms"] == ["low power sram"]  # P1-8
     assert doc["source_tags"] == []
 
 

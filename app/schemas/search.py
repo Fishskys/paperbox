@@ -123,6 +123,87 @@ class SearchFilters(BaseModel):
                 )
         return value
 
+    @field_validator("identifier", mode="after")
+    @classmethod
+    def _normalize_identifiers(cls, value):
+        """Normalize every ``scheme:value`` the way the write side does.
+
+        The index stores ``scheme:normalized_value`` from
+        ``paper_identifiers`` (casefolded, version/hyphen-stripped...), so a
+        filter value that only passed the scheme check would silently match
+        nothing (review 2026-10-05, P1-8). Runs after the scheme check; a value
+        that does not survive normalization is a 422, not a quiet zero.
+        """
+        if not value:
+            return value
+        from app.services.metadata_identifiers import normalize_identifier
+
+        normalized: list[str] = []
+        for entry in value:
+            text = str(entry).strip()
+            scheme, _, raw = text.partition(":")
+            key = scheme.strip().lower()
+            usable = normalize_identifier(key, raw)
+            if usable is None:
+                raise ValueError(
+                    f"identifier {entry!r} has no usable value for scheme {key!r}"
+                )
+            normalized.append(f"{key}:{usable}")
+        return normalized
+
+    @field_validator("doi", mode="after")
+    @classmethod
+    def _normalize_doi(cls, value):
+        """Same normalization the mirror column received at write time."""
+        if not value:
+            return value
+        from app.services.paper_service import normalize_doi
+
+        return normalize_doi(value)
+
+    @field_validator("arxiv_id", mode="after")
+    @classmethod
+    def _normalize_arxiv_id(cls, value):
+        """Casefolded, version suffix stripped -- matching the indexed value."""
+        if not value:
+            return value
+        from app.services.paper_service import normalize_arxiv_id
+
+        return normalize_arxiv_id(value)
+
+    @field_validator("paper_type", mode="after")
+    @classmethod
+    def _lowercase_paper_types(cls, value):
+        """The column stores the lowercase vocabulary; accept any casing."""
+        if not value:
+            return value
+        return [str(item).strip().lower() for item in value if str(item).strip()]
+
+    @field_validator("venue", mode="after")
+    @classmethod
+    def _normalize_venues(cls, value):
+        """Match the normalized key the snapshot stores (P1-8)."""
+        if not value:
+            return value
+        from app.services.venue_service import normalize_venue_name
+
+        keys = [normalize_venue_name(str(item)) for item in value if str(item).strip()]
+        return keys or None
+
+    @field_validator(
+        "tag", "ieee_terms", "author_terms", "dynamic_index_terms", "source_tags",
+        mode="after",
+    )
+    @classmethod
+    def _normalize_tag_names(cls, value):
+        """Match the normalized keys the snapshot stores (P1-8)."""
+        if not value:
+            return value
+        from app.services.metadata_tags import normalize_tag
+
+        keys = [normalize_tag(str(item)) for item in value if str(item).strip()]
+        return keys or None
+
     def to_query_filters(self) -> dict:
         """Drop unset values so the query builder only sees real filters."""
         return self.model_dump(exclude_none=True, exclude_defaults=False)

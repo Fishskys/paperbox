@@ -20,8 +20,8 @@
 | 降级侧的几何重排与页眉页脚剔除（双栏：先左栏后右栏；**T5**） | `app/parsing/layout.py:651`、`:702` |
 | 两后端**共用**的 markdown 方言（页标记 / 标题层级 / 归一化；**T5**） | `app/parsing/markdown.py:175`、`:416`、`:441` |
 | 降级账本 sink（`parsing`/`chunking`/… 阶段词表；**T7.3**） | `app/services/degradation_service.py:81`、`:226` |
-| 段落感知切块 + token 估算 + 重叠窗口 | `app/parsing/chunking.py:550` |
-| 解析结果**反推**成 `PageText`+`Section`，把两后端收进同一条切块路（**§6.1**） | `app/parsing/markdown.py:272`、`:311`、`app/parsing/chunking.py:618` |
+| 段落感知切块 + token 估算 + 重叠窗口 | `app/parsing/chunking.py:581` |
+| 解析结果**反推**成 `PageText`+`Section`，把两后端收进同一条切块路（**§6.1**） | `app/parsing/markdown.py:272`、`:311`、`app/parsing/chunking.py:649` |
 | 读 PDF 内嵌元数据（Info 字典 + XMP，含 PRISM） | `app/parsing/pdf.py:404` |
 | 首页启发式元数据（标题/作者/摘要/年份/DOI/arXiv） | `app/services/metadata_service.py:342` |
 | 失败归因到稳定 `error_code` | `app/core/errors.py:127` |
@@ -29,7 +29,7 @@
 不做什么：
 
 - **不做 OCR**：文本层缺失没有兜底，`NO_TEXT_LAYER_HINT` 明确写 "OCR is required (not supported yet)"（`errors.py:66`）。
-- **不做「一个后端一套切块」**：两后端都把结果交给同一份 markdown 方言，`chunk_markdown`（`chunking.py:618`）反推出 sections 后走同一个 `chunk_document`（`:550`）。换 `PARSER_BACKEND` 换的是**文本来源**（顺序 / 标题 / 表格 / 公式），不是切块策略。
+- **不做「一个后端一套切块」**：两后端都把结果交给同一份 markdown 方言，`chunk_markdown`（`chunking.py:649`）反推出 sections 后走同一个 `chunk_document`（`:581`）。换 `PARSER_BACKEND` 换的是**文本来源**（顺序 / 标题 / 表格 / 公式），不是切块策略。
 - **版面能力分两侧**：**默认后端是 `docling`**（2026-09-30 起，远端版面模型给阅读顺序 / 标题层级 / 真表格 / 公式），降级侧 `pypdf` 不做版面分析 —— 只用 `Page.extract_text()` 的默认顺序（`pdf.py:55`），分栏靠 `layout.py` 的**几何重排**补救、表格只留占位。两条路都**不做 OCR**（`DOCLING_OCR` 默认关），**公式默认也不做**（`DOCLING_FORMULA_ENRICHMENT` 默认关，2026-09-30 起：它是最贵的一项，实测 5 页 5.9s→39.2s、最坏一篇 252s）。
 - **不做网络元数据**：发现分层 3-6 层（外部导入、DOI 内容协商、平台 API、模糊反查）不在本模块（`docs/architecture/metadata-architecture.md:157`）。
 - **不写库、不切索引、不算向量**：本模块只返回内存对象；落 `paper_chunks`、调 embedding、bulk 到 OpenSearch 都在 `app/workers/tasks.py`。
@@ -85,7 +85,7 @@
 | 语义常量 | 57-64 | `SEMANTIC_SIMILARITY_THRESHOLD=0.80`、`SEMANTIC_DIP_WINDOW=1`、`SEMANTIC_MIN_TOKENS=200`（T7.2） |
 | 降级词表 | 69-75 / 105-107 | `DEGRADE_STAGE="chunking"`、`DEGRADE_SEMANTIC_FALLBACK="semantic_fallback"`、**`DEGRADE_HEADING_TOO_LONG="section_title_too_long"`（2026-09-30）**、`DegradeSink = Callable[[str, str, dict], None]`（**T7.3**） |
 | `MAX_SECTION_TITLE_CHARS`（`:66`）/ `DEGRADE_HEADING_TOO_LONG`（`:68`）/ `_report_long_heading`（`:293`） | 66 / 68 / 293 | **2026-09-30**：`markdown.py` 里超过 200 字符的「标题」按正文处理（见不变量 20） |
-| `estimate_tokens` | 104-108 | `max(1, len(text)//4)`，**不是 tiktoken** |
+| `estimate_tokens` | 127-141（常量 110） | CJK 感知估算（2026-10-05 审查 P1-9）：拉丁 `len//4`，CJK 1.25 token/字（`_CJK_TOKENS_PER_CHAR`，取审查建议 1.0-1.5 带的中位）；混合文本两段相加。**不是 tiktoken** |
 | `split_sentences` | 115-161 | 句子切分（保留终止符；`et al.`/`Fig. 5`/`J. Smith`/`Eq. 3` 不误断；换行与 CJK `。！？` 独立成句） |
 | `cosine_similarity` / `similarity_dips` | 164-179 / 182-212 | 相邻句子余弦；**低于阈值且为邻域局部最小**才判为断点 |
 | `Chunk` / `_Piece` / `_Pending` | 215-228 / 231-242 / 245-249 | 见 §3；`_Piece.break_before` 标记「此处有语义低谷」 |
@@ -283,9 +283,9 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
    ├─ paper.parser_backend / .parser_version = bundle 戳  tasks.py:541-544（**混库可见**，§3 的列）
    ├─ degradations.resolve(STAGE_PARSING)                tasks.py:545（本次没报的 parsing 降级就此作废）
    ├─ chunk_markdown(bundle, …, embed_fn=None|embed_texts,
-   │                 on_degrade=degradations)            tasks.py:555-562 → chunking.py:618
+   │                 on_degrade=degradations)            tasks.py:555-562 → chunking.py:649
    │  └─ pages_and_sections_from_markdown(markdown.py:311) 反推 pages + sections
-   │     → merge_short_sections(structure.py:297) → chunk_document(chunking.py:550)
+   │     → merge_short_sections(structure.py:297) → chunk_document(chunking.py:581)
    │        → 逐节 _chunk_section(:448) → _semantic_pieces(:279) → _report_fallback(:262)
    │           → _split_oversized_piece(:376)/_overlap_suffix(:413)/_finalize(:427)
    │     chunks 为空 → raise IngestionError("parsing produced no chunks")  tasks.py:564
@@ -310,10 +310,10 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 
 ## 5. 不变量与踩过的坑
 
-1. **页码 1-based，chunk 页码是区内 span 的 min/max**（`chunking.py:431-433`）；空白页不产生 span（`_section_pieces` 只收非空段落，`:253-259`）。
-2. **chunk 绝不跨章节**：每节独立调 `_chunk_section`，`next_index=len(chunks)`（`chunking.py:610`），故 `chunk_index` 文档内全局递增有序。
-3. **硬上限 `MAX_TOKENS=450`**：`window_chars = max(1, min(target_chars, max_chars - overlap_chars))`（`chunking.py:468`），给 overlap 预留空间，否则超长段落永远带不上重叠。`tests/test_parsing.py:171`、`:216` 断言 `token_count <= MAX_TOKENS`。
-4. **参数校验**（`chunking.py:577-590`）：`target_tokens>0`、`overlap_tokens>=0` 且 `< target_tokens`、`max_tokens>=target_tokens`，否则 `ValueError`。
+1. **页码 1-based，chunk 页码是区内 span 的 min/max**（`chunking.py:462-464`）；空白页不产生 span（`_section_pieces` 只收非空段落，`:284-290`）。
+2. **chunk 绝不跨章节**：每节独立调 `_chunk_section`，`next_index=len(chunks)`（`chunking.py:641`），故 `chunk_index` 文档内全局递增有序。
+3. **硬上限 `MAX_TOKENS=450`**：`window_chars = max(1, min(target_chars, max_chars - overlap_chars))`（`chunking.py:499`），给 overlap 预留空间，否则超长段落永远带不上重叠。`tests/test_parsing.py:171`、`:247` 断言 `token_count <= MAX_TOKENS`。
+4. **参数校验**（`chunking.py:608-621`）：`target_tokens>0`、`overlap_tokens>=0` 且 `< target_tokens`、`max_tokens>=target_tokens`，否则 `ValueError`。
 5. **控制字符必须删**：PostgreSQL `text` 不接受 NUL，历史上整批 arXiv 作业因此失败；其余 C0 会污染发往 OpenSearch 的 JSON（`pdf.py:23-25`、`:72-75`）。
 6. **标题误判两处**：(a) running header——同一行在后续 3 行内复现即判页眉并入 `suppressed`，之后**同文本行被整篇跳过**（`structure.py:149-155`），正文里重复的短行也会被吞；(b) 全大写行当章节（`structure.py:120-121`，≤8 词、不以 `.` 结尾），`TABLE I ...` 这类表标题会被误判。
 8. **段落不跨页**：`pending` 每页开头重置（`structure.py:146`），跨页段落被切成两段，后一段记到后一页页码。
@@ -321,10 +321,10 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 10. **文本层缺失不报错**：`extract_pages` 返回全空白页 → `detect_sections` 出空 → `chunk_document` 返回 `[]` → `tasks.py:563-564` 抛 `IngestionError("parsing produced no chunks")` → `NO_TEXT_LAYER`（关键字 `errors.py:69-75`，判定 `:215-218`；端到端见 `tests/test_failure_classification.py:230-241`）。
 11. **加密**：先试空口令 `reader.decrypt("")`（`pdf.py:109-115`），失败抛 `PdfParseError("encrypted PDF: password required")` → `ENCRYPTED_PDF`（关键字 `("encrypted","password")` 见 `errors.py:68`，分支 `:171-177`）。**损坏**：`PdfReadError` / 其他构造异常 → `PdfParseError("invalid PDF: ...")` → `CORRUPT_PDF`（`errors.py:177`）。
 13. **空字节流 → `PdfParseError("empty PDF payload")`**（`pdf.py:100-101`）。它**不会**命中 `UNSUPPORTED_TYPE`：`_KEYWORDS_UNSUPPORTED` 里的字面量是 `"empty payload"`（`errors.py:81`），`"empty PDF payload"` 不包含它，故走 `CORRUPT_PDF` 分支。此条为按代码字符串匹配的推断，未见测试固定 —— 标**未确认**。
-14. **`chunk_document` docstring 与实现不符**：docstring 说"`sections` 可以不完整，剩余文本按 `Body` 切"（`chunking.py:564-565`），但代码只在 `sections` 为空或全无段落时才造 `Body`（`:592-600`）。传入部分覆盖的 `sections` 会丢文本；流水线里 `detect_sections` 覆盖全文，现网不触发 —— 隐性契约，标**未确认（无测试固定）**。
-15. **`token_count` 是字符估算**：`len(text)//4`（`chunking.py:105-109`），假设 4 字符/token。CJK 约 1 字/token，同一 `MAX_TOKENS=450` 对中文论文实际更松，而索引 `title/text/section_title` 用的正是 `cjk` 分词器（`AGENTS.md` §3.5/§3.6）。代码里没有 CJK 专用估算 —— 标**未确认（无 CJK 长度测试）**。
+14. **`chunk_document` docstring 与实现不符**：docstring 说"`sections` 可以不完整，剩余文本按 `Body` 切"（`chunking.py:595-596`），但代码只在 `sections` 为空或全无段落时才造 `Body`（`:623-631`）。传入部分覆盖的 `sections` 会丢文本；流水线里 `detect_sections` 覆盖全文，现网不触发 —— 隐性契约，标**未确认（无测试固定）**。
+15. **`token_count` 是字符估算**：2026-10-05 审查 P1-9 已修——CJK 字符按 1.25 token/字计权（`_CJK_TOKENS_PER_CHAR`，e5 实测约 1-2 token/字），拉丁仍 4:1，混合文本两段相加（`chunking.py` 的 `estimate_tokens`）。修复前中文块按 4 字符/token 低估 ≥4 倍，1800 字符的中文块实际 1800+ token，embedding 尾部被 512 上限静默截断；**存量 chunk 的 `token_count` 与切分边界只在重导入/reindex 后更新**。
 16. **没有客户端截断**：`embedding_service.embed_texts` 把 chunk 全文原样发服务端（`app/services/embedding_service.py:77-99`，payload 只有 `texts`/`model`），512 token 上限由服务端 + `MAX_TOKENS` 估算共同兜住。
-17. **降级必须留痕（T7.3）**：语义模式嵌入失败不再只写日志 —— 每节经 `_report_fallback`（`chunking.py:262-276`）调 `on_degrade("chunking", "semantic_fallback", {section, sentences, error})`，由 `degradation_service.Recorder`（`tasks.py:478-480`）落 `paper_degradations`；`Recorder` 吞掉记账自身的异常，**记账永远不会让作业失败**（`degradation_service.py:247-283`，单测 `tests/test_degradations.py`）。
+17. **降级必须留痕（T7.3）**：语义模式嵌入失败不再只写日志 —— 每节经 `_report_fallback`（`chunking.py:293-307`）调 `on_degrade("chunking", "semantic_fallback", {section, sentences, error})`，由 `degradation_service.Recorder`（`tasks.py:478-480`）落 `paper_degradations`；`Recorder` 吞掉记账自身的异常，**记账永远不会让作业失败**（`degradation_service.py:247-283`，单测 `tests/test_degradations.py`）。
 18. **降级行随本次运行自动作废**：chunks 落库后立刻 `degradations.resolve(STAGE_CHUNKING)`（`tasks.py:574`），本次没报的 code 被盖上 `resolved_at`；因此 `scripts/reindex.py --degraded` 选出来的永远是「现在仍然降级」的论文（真机验证见 `docs/progress/project.md` §21.7）。
 19. **未启用的 sink 不改变行为**：`on_degrade=None` 时 `_report_fallback` 立即返回，单元测试与既有调用方（`tests/test_chunking_semantic.py`）不加参数即保持原语义。
 
@@ -361,7 +361,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 | `CHARS_PER_TOKEN` | 4 | 字符→token 估算系数 | `chunking.py:40` |
 | `MIN_CHUNK_CHARS` | 1 | 小于此长度不出 chunk | `chunking.py:45` |
 | `SEMANTIC_*` / `DEGRADE_*` | 见 §2 | 语义分块与降级词表（T7.2 / T7.3） | `chunking.py:58-76` |
-| `merge_short_sections(target_chars=)` | 1200 | 小节合并阈值（字符） | `structure.py:297`；调用处 `chunking.py:648`（`chunk_markdown` 内）用默认 |
+| `merge_short_sections(target_chars=)` | 1200 | 小节合并阈值（字符） | `structure.py:297`；调用处 `chunking.py:679`（`chunk_markdown` 内）用默认 |
 | 标题三阈值 | 14 词 / 110 字符 / 回看 3 行 | 标题与页眉判定 | `structure.py:57-59` |
 | `detect_abstract(max_pages=)` | 2 | 摘要扫描页数 | `metadata_service.py:273`；调用 `:364` 用默认 |
 | `detect_year` 范围 | 前 2 页、最高频（同频取大年份） | 年份启发式 | `metadata_service.py:325-329` |
@@ -447,11 +447,11 @@ docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `READ
 |---|---|
 | **降级后端**（pypdf）无 OCR / 无版面分析（分栏靠 `layout.py` 几何重排、表格只留占位） | `errors.py:65-66` 仅提示；`pdf.py:55` 只走 `extract_text()` 默认顺序。docling 后端有版面顺序/表格/公式（`docs/progress/parser.md` §5.9：5 份输入真机对照，真表 1/3/4 张、公式 LaTeX 1/13/6 处、标题层级 11 vs pypdf 53） |
 | 全大写短行规则会误报章节 | `structure.py:120-121`（`TABLE I` 等） |
-| 死代码：`_ROMAN_TAIL`、`Chunk.is_overlap`（恒 `False`、无消费方） | `structure.py:26`；`chunking.py:201`、`:398`，全仓无其它引用 |
+| 死代码：`_ROMAN_TAIL`、`Chunk.is_overlap`（恒 `False`、无消费方） | `structure.py:26`；`chunking.py:232`、`:398`，全仓无其它引用 |
 | `_spans` 不进 `paper_chunks`/OpenSearch | 仅 `_finalize` 用来算页码 |
-| 部分覆盖的 `sections` 会丢文本 | `chunking.py:495-503` 与该函数 docstring（`:517-518`）矛盾 |
-| CJK token 估算偏差 + 512 上限无代码侧校验 | `chunking.py:79-83` 固定 4 字符/token；512 只在 `AGENTS.md` §3.7，`embedding_service.py` 无截断 |
-| 句内语义断点仍可能落在超长段的字符窗里 | `chunking.py:294-323` 对超 `target_chars` 的 `_Piece` 只能按字符窗硬切（长度模式必然如此） |
+| 部分覆盖的 `sections` 会丢文本 | `chunking.py:526-534` 与该函数 docstring（`:548-549`）矛盾 |
+| ~~CJK token 估算偏差~~ **已修（2026-10-05 审查 P1-9）**：`estimate_tokens` 对 CJK 按 1.25 token/字计权（`chunking.py` `_CJK_TOKENS_PER_CHAR`），中文块预算回落到 512 上限内；512 上限本身仍无 embedding 侧硬校验（靠预算正确性） |
+| 句内语义断点仍可能落在超长段的字符窗里 | `chunking.py:325-354` 对超 `target_chars` 的 `_Piece` 只能按字符窗硬切（长度模式必然如此） |
 | DOI/arXiv 规范化不在本模块 | `pdf.py:496`、`metadata_service.py:333` 原样返回，规范化在标识符层 |
 | XMP 只认 `dc`/`prism`/`xmp` 三命名空间 | `pdf.py:141-145`，其余 ns 元素被跳过（`:305-306`） |
 | **按阶段重跑尚未提供（T7.3 决策：暂不做）** —— 现在只能整篇 reindex（PARSING→INDEXING 全跑）；想要的「只补 embedding / 只补索引」需要复用 `_write_embeddings`/`_index_rows`/`_mark_indexed` 写一个 `--stage` 入口。数据模型已经支持断点：`paper_chunks.embedded_at`/`indexed_at` 可空，`GET /api/consistency` 能报出 `missing_index` | 留档见 `docs/progress/project.md` §21.7「后续优化方向」；`scripts/reindex.py` 的选谁参数已有 `--missing` / `--degraded[-stage/-code]` / `--parser-backend` |

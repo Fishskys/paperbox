@@ -179,3 +179,42 @@ def test_semantic_query_without_filters_has_no_filter_key() -> None:
 def test_semantic_query_rejects_non_numeric_vectors() -> None:
     with pytest.raises((TypeError, ValueError)):
         build_semantic_query(["nope"], None, k=1)
+
+# --------------------------------------------------------------------------- #
+# P1-8: filter values are normalized the way the write side normalized them
+# --------------------------------------------------------------------------- #
+from app.schemas.search import SearchFilters
+
+
+def _filters(**kwargs) -> dict:
+    return SearchFilters(**kwargs).to_query_filters()
+
+
+def test_doi_filter_is_normalized_like_the_mirror_column() -> None:
+    assert _filters(doi="HTTPS://DOI.org/10.1109/X ")["doi"] == "10.1109/x"
+
+
+def test_arxiv_filter_drops_the_version_suffix() -> None:
+    assert _filters(arxiv_id="1706.03762v2")["arxiv_id"] == "1706.03762"
+
+
+def test_identifier_filter_normalizes_scheme_and_value() -> None:
+    assert _filters(identifier=["DOI:10.1109/X"])["identifier"] == ["doi:10.1109/x"]
+    assert _filters(identifier=["isbn:978-1-4614-8162-9"])[
+        "identifier"
+    ] == ["isbn:9781461481629"]
+
+
+def test_identifier_filter_rejects_a_value_that_normalizes_to_nothing() -> None:
+    with pytest.raises(ValueError):
+        SearchFilters(identifier=["doi: "])
+
+
+def test_paper_type_filter_is_lowercased() -> None:
+    assert _filters(paper_type=["Conference"])["paper_type"] == ["conference"]
+
+
+def test_venue_and_tag_filters_use_the_normalized_keys() -> None:
+    venue = _filters(venue=["Nature  Communications"])["venue"]
+    assert venue == ["nature communications"]
+    assert _filters(tag=["SRAM Leakage"])["tag"] == ["sram leakage"]
