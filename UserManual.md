@@ -577,6 +577,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 降级码 | 含义 | 影响 |
 |---|---|---|
 | `docling_unavailable` | 指定的 docling 后端不可达，已用内置 pypdf 解析 | 双栏/表格论文的阅读顺序与结构可能不如 docling |
+| `docling_rejected` | docling 服务端以 4xx 拒绝请求（401/404/413、preset 未开等）——是**配置错误**而非宕机，已用内置 pypdf 解析 | 与 `docling_unavailable` 同，但排障方向不同：检查 `DOCLING_*` 配置与镜像能力，而不是网络 |
 | `formulas_as_text` | 公式未转 LaTeX（开关关闭，或服务端在公式上失败后自动去掉公式重试） | 正文里的公式以纯文本形式出现 |
 | `table_structure_lost` | 表格未能保持结构 | 表格内容仍在正文，但行列表格结构丢失 |
 | `reading_order_unverified` | 阅读顺序未经校验（降级解析侧） | 双栏论文可能出现段落顺序错乱 |

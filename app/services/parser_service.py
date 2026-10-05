@@ -36,6 +36,7 @@ from app.parsing.docling_client import (
     FORMULA_FALLBACK_REASON,
     DoclingError,
     DoclingResult,
+    is_client_error,
     version_from_server,
 )
 from app.parsing.markdown import ParseBundle
@@ -51,6 +52,8 @@ logger = get_logger(__name__)
 _docling_semaphore = threading.Semaphore(max(1, int(settings.parser_concurrency)))
 
 DOCLING_FALLBACK_PREFIX = "docling unavailable"
+#: ``degraded_reason`` fragment for client errors (4xx from docling-serve).
+DOCLING_REJECTED_PREFIX = "docling rejected"
 DOCLING_BACKEND = "docling"
 
 #: Bumped whenever the *meaning* of a stored artifact changes (markdown dialect,
@@ -67,6 +70,11 @@ PARSE_META_ARTIFACT = "parse-meta.json"
 DEGRADE_STAGE = "parsing"
 #: One code per cause a parse is thinner than docling alone would produce.
 CODE_DOCLING_UNAVAILABLE = "docling_unavailable"
+#: The docling service answered with a client error (401/404/413/preset 404):
+#: a *configuration* problem, not an outage. A separate code keeps "the backend
+#: is down" distinguishable from "the backend is misconfigured" in the ledger
+#: (review 2026-10-05, P1-13).
+CODE_DOCLING_REJECTED = "docling_rejected"
 CODE_FORMULAS_AS_TEXT = "formulas_as_text"
 CODE_TABLE_STRUCTURE = "table_structure_lost"
 CODE_READING_ORDER = "reading_order_unverified"
@@ -87,6 +95,7 @@ _REASON_CODES: tuple[tuple[str, str], ...] = (
     (markdown_dialect.DEGRADED_NO_FORMULA, CODE_FORMULAS_AS_TEXT),
     (markdown_dialect.DEGRADED_TABLE, CODE_TABLE_STRUCTURE),
     (markdown_dialect.DEGRADED_ORDER, CODE_READING_ORDER),
+    (DOCLING_REJECTED_PREFIX, CODE_DOCLING_REJECTED),
     (DOCLING_FALLBACK_PREFIX, CODE_DOCLING_UNAVAILABLE),
     (PAGES_LIMIT_PREFIX, CODE_PAGES_TRUNCATED),
 )
@@ -179,7 +188,15 @@ def parse_pdf(
             _report_degradation(bundle, on_degrade)
             return bundle
         except DoclingError as exc:
-            reason = f"{DOCLING_FALLBACK_PREFIX} {exc.__class__.__name__}: {exc}"
+            # A client error (401/404/413, preset 404) means the deployment is
+            # misconfigured, not that the service is down -- the ledger keeps
+            # the two apart (review 2026-10-05, P1-13).
+            prefix = (
+                DOCLING_REJECTED_PREFIX
+                if is_client_error(exc)
+                else DOCLING_FALLBACK_PREFIX
+            )
+            reason = f"{prefix} {exc.__class__.__name__}: {exc}"
             logger.warning(
                 "parser backend fell back to pypdf",
                 extra={"extra_fields": {"filename": filename, "reason": reason}},

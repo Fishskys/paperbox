@@ -373,6 +373,28 @@ def _split_keywords(value: object) -> list[str]:
     return [part.strip() for part in re.split(r"[,;]", text) if part.strip()]
 
 
+#: ``doi:`` / ``arXiv:`` prefixes accepted in front of a whole-value identifier
+#: declaration (producer conventions; see the identity comment in
+#: ``extract_embedded_metadata``).
+_DECLARATION_PREFIX = re.compile(r"^(?:doi|arxiv)\s*:\s*", re.IGNORECASE)
+
+
+def _declared_match(pattern: re.Pattern[str], *texts: str | None) -> str | None:
+    """Match a field whose ENTIRE value is the identifier (after an optional
+    ``doi:``/``arXiv:`` prefix). An id buried inside a longer text -- an
+    abstract citing another paper -- is never a declaration of identity
+    (review 2026-10-05, P1-10)."""
+    for text in texts:
+        if not text:
+            continue
+        candidate = _DECLARATION_PREFIX.sub("", text.strip(), count=1)
+        match = pattern.fullmatch(candidate)
+        if match is not None:
+            value = match.group(1) if match.groups() else match.group(0)
+            return value.strip().rstrip(".,;")
+    return None
+
+
 def _first_match(pattern: re.Pattern[str], *texts: str | None) -> str | None:
     """First match across ``texts``; a capture group wins over the whole match."""
     for text in texts:
@@ -493,14 +515,33 @@ def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
         title=title,
         authors=authors,
         abstract=abstract,
+        # Identity fields are read from structured XMP fields plus *declared*
+        # values only (review 2026-10-05, P1-10). The old fallback regex-
+        # scanned the joined Info/XMP blob and the title, so a DOI/arXiv id
+        # *mentioned* inside an abstract or keyword line (a citation to another
+        # paper) was claimed as this paper's identity with confidence 1.0 --
+        # fingerprinting and matching then trusted it. A field whose ENTIRE
+        # value is the identifier (optionally after a ``doi:`` / ``arXiv:``
+        # prefix) is a deliberate producer declaration and still accepted;
+        # corpus evidence (30 papers, 2026-10-06): no real stamp ever appeared
+        # as free text (arXiv stamps live on the page text, which the heuristic
+        # layer reads). ISSN scanning of free text stays (journal-level harm).
         doi=_first_match(
             _DOI_IN_TEXT,
             xmp_text("doi"),
             xmp_text("identifier"),
-            title,
-            searchable,
+        )
+        or _declared_match(
+            _DOI_IN_TEXT, *(str(v) for v in list(info.values()) + list(xmp_fields.values()) if v)
         ),
-        arxiv_id=_strip_version(_first_match(_ARXIV_IN_TEXT, searchable)),
+        arxiv_id=_strip_version(
+            _first_match(_ARXIV_IN_TEXT, xmp_text("arxiv_id"))
+            or _declared_match(
+                _ARXIV_IN_TEXT,
+                title,
+                *(str(v) for v in list(info.values()) + list(xmp_fields.values()) if v),
+            )
+        ),
         venue=xmp_text("publicationName"),
         volume=xmp_text("volume"),
         issue=xmp_text("number"),

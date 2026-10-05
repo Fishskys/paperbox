@@ -499,3 +499,25 @@ def test_a_manual_source_type_can_be_imported_as_well(db_session) -> None:
     source = sources.find_source(db_session, sources.SOURCE_TYPE_MANUAL, f"doi:{DOI.casefold()}")
     assert source is not None
     assert merge.is_structured(source.source_type) is True
+
+def test_reimport_after_soft_delete_repoints_the_record(db_session) -> None:
+    """P1-6: 删除即释放必须延伸到来源记录——软删论文的 (source_type, source_ref)
+    不能把同一份记录永远钉在 "unchanged" 上。"""
+    importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
+    original = db_session.query(Paper).first()
+
+    paper_service.soft_delete_paper(db_session, original)
+    db_session.flush()
+    # 模拟「删论文 → 重传 PDF」：身份已释放，新论文重新占用同一个 DOI。
+    replacement = paper_with_doi(db_session, title=original.title, year=original.year)
+
+    again = importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
+
+    assert again.unchanged == 0
+    assert again.matched == 1
+    rows = db_session.query(PaperSource).all()
+    assert len(rows) == 1, "the re-import must re-point, not create a second row"
+    assert rows[0].paper_id == replacement.id
+
+    third = importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
+    assert third.unchanged == 1  # idempotent again, now against the new paper

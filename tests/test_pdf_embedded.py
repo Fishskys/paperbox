@@ -66,8 +66,10 @@ def test_info_dictionary_is_read() -> None:
 
     assert metadata.title == "Low Power SRAM Leakage Reduction"
     assert metadata.authors == ["Alice Smith", "Bob Jones"]
-    assert metadata.doi == "10.1109/JSSC.2020.1234567"
     assert metadata.abstract.startswith("A study of leakage")
+    # P1-10: a DOI *mentioned* in the abstract is a citation to another paper,
+    # not this paper's identity -- free-text guessing is gone.
+    assert metadata.doi is None
     assert metadata.keywords == ["SRAM", "leakage", "low power"]
     assert metadata.year == 2015
     assert metadata.is_empty is False
@@ -136,7 +138,10 @@ def test_xmp_wins_over_the_info_dictionary() -> None:
     assert metadata.year == 2015
 
 
-def test_arxiv_id_is_found_in_the_embedded_text() -> None:
+def test_an_arxiv_id_in_the_keywords_is_not_claimed() -> None:
+    """P1-10: keywords/abstract mention OTHER papers' ids all the time; the
+    corpus scan (30 papers) found zero real stamps in Info/XMP free text --
+    arXiv identity comes from the page-text heuristic layer and file names."""
     data = build_pdf(
         {
             "/Title": "Attention Is All You Need",
@@ -146,7 +151,7 @@ def test_arxiv_id_is_found_in_the_embedded_text() -> None:
 
     metadata = extract_embedded_metadata(data)
 
-    assert metadata.arxiv_id == "1706.03762"
+    assert metadata.arxiv_id is None
 
 
 def test_a_pdf_without_any_metadata_is_empty_not_an_error() -> None:
