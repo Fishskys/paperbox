@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.core.security import require_api_key
+from app.core.security import require_api_key, require_write
 from app.db.session import get_db
 from app.schemas.metadata import (
     ApplyIn,
@@ -89,7 +89,7 @@ async def _payload_from_request(request: Request) -> Any:
     )
 
 
-@router.post("/import", response_model=ImportReportOut)
+@router.post("/import", response_model=ImportReportOut, dependencies=[Depends(require_write)])
 async def import_metadata(
     request: Request,
     dry_run: bool = Query(default=True, description="report only (the default)"),
@@ -161,7 +161,7 @@ def review_queue(
     )
 
 
-@router.post("/sources/{source_id}/attach", response_model=AttachOut)
+@router.post("/sources/{source_id}/attach", response_model=AttachOut, dependencies=[Depends(require_write)])
 def attach_source(
     source_id: str,
     body: AttachIn,
@@ -214,7 +214,7 @@ def _replay_source(session: Session, source, paper) -> list[str]:
     return [item.field for item in report.applied]
 
 
-@router.post("/apply", response_model=ApplyOut)
+@router.post("/apply", response_model=ApplyOut, dependencies=[Depends(require_write)])
 def apply_decisions(
     body: ApplyIn,
     session: Session = Depends(get_db),

@@ -53,13 +53,22 @@ def log_call(
     affected: dict[str, Any] | None = None,
     took_ms: int = 0,
 ) -> None:
-    """Write one ``mcp_call`` line (the only place agent identity is recorded)."""
+    """Write one ``mcp_call`` line (the only place agent identity is recorded).
+
+    ``key_prefix`` comes from the request's identity (``app.mcp.auth``), not from
+    the arguments: it answers "which credential did this" without ever carrying
+    key material (plan: 2026-10-05_145619-api-auth-keys-roles §7.6).
+    """
+    from app.mcp import auth
+
+    identity = auth.current_identity()
     logger.info(
         "mcp call",
         extra={
             "extra_fields": {
                 "event": "mcp_call",
                 "agent": agent,
+                "key_prefix": identity.prefix if identity else "-",
                 "tool": tool,
                 "args_digest": digest_args(arguments),
                 "outcome": outcome,

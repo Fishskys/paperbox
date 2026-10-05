@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.downloads import stream_original
 
 from app.core.logging import get_logger
-from app.core.security import require_api_key
+from app.core.security import require_admin, require_api_key, require_write
 from app.db.session import get_db
 from app.schemas.paper import (
     PaperChunkList,
@@ -191,7 +191,7 @@ def get_paper_metadata(
     return PaperMetadataOut.model_validate(metadata_manual.metadata_view(session, paper))
 
 
-@router.patch("/{paper_id}/metadata", response_model=MetadataPatchOut)
+@router.patch("/{paper_id}/metadata", response_model=MetadataPatchOut, dependencies=[Depends(require_write)])
 def patch_paper_metadata(
     paper_id: str,
     body: MetadataPatch,
@@ -211,7 +211,7 @@ def patch_paper_metadata(
     return MetadataPatchOut.model_validate(result.as_dict())
 
 
-@router.post("/{paper_id}/metadata/rollback", response_model=MetadataRollbackOut)
+@router.post("/{paper_id}/metadata/rollback", response_model=MetadataRollbackOut, dependencies=[Depends(require_write)])
 def rollback_paper_metadata(
     paper_id: str,
     body: MetadataRollbackIn,
@@ -237,7 +237,7 @@ def rollback_paper_metadata(
     )
 
 
-@router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
 def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
     """Delete a paper everywhere, following plan section 23.
 
@@ -263,7 +263,7 @@ def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/{paper_id}/reindex", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{paper_id}/reindex", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_write)])
 def reindex_paper_endpoint(
     paper_id: str,
     session: Session = Depends(get_db),

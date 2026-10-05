@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import require_api_key
+from app.core.security import require_api_key, require_write
 from app.db.session import get_db
 from app.schemas.job import JobListOut, JobOut, QueueOut
 from app.services import ingestion_service
@@ -45,6 +45,7 @@ def get_job(job_id: str, session: Session = Depends(get_db)) -> JobOut:
     "/{job_id}/retry",
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_write)],
 )
 def retry_job(
     job_id: str,

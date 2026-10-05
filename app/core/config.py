@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     paper_api_key: str = Field(default="change-me", alias="PAPER_API_KEY")
     paper_api_host: str = Field(default="0.0.0.0", alias="PAPER_API_HOST")
     paper_api_port: int = Field(default=8077, alias="PAPER_API_PORT")
+    #: Master auth switch, all-on/all-off (plan: 2026-10-05_145619-api-auth-keys-roles
+    #: §3 D1): governs REST ``/api/*`` and ``/mcp`` alike. Off (default) = every caller
+    #: is an anonymous admin; on = both surfaces require a bearer key from
+    #: ``api_keys`` (or the environment bootstrap keys). ``MCP_ENABLED`` still decides
+    #: whether ``/mcp`` exists at all.
+    auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
 
     # --- rerank (SPEC-P1 section D2) ---
     #: Whether the embedding service exposes ``/rerank`` (server capability).
@@ -481,10 +487,13 @@ class Settings(BaseSettings):
             raise ValueError("MCP_DOWNLOAD_TTL_SECONDS must be positive")
         if self.mcp_toolset not in MCP_TOOLSETS:
             raise ValueError(f"MCP_TOOLSET must be one of {sorted(MCP_TOOLSETS)}")
-        if self.mcp_enabled and not self.agent_keys and not self.paper_api_key:
+        if self.mcp_enabled and self.auth_enabled and not self.agent_keys and not (
+            self.paper_api_key and self.paper_api_key != "change-me"
+        ):
             raise ValueError(
-                "MCP_ENABLED=true needs a credential: set PAPER_API_KEYS (agent_name:key; "
-                "...) or PAPER_API_KEY, otherwise every /mcp request is a 401"
+                "MCP_ENABLED=true with AUTH_ENABLED=true needs a credential: set "
+                "PAPER_API_KEYS (agent_name:key; ...) or a real PAPER_API_KEY, "
+                "otherwise every /mcp request is a 401"
             )
         if self.mcp_enabled and not self.mcp_allowed_host_list:
             raise ValueError(
@@ -492,6 +501,25 @@ class Settings(BaseSettings):
                 "agents use (the LAN IP and the hostname, each as 'host' and "
                 "'host:*'); the SDK default accepts localhost only and answers "
                 "anything else with 421"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_auth(self) -> "Settings":
+        """The well-known default key must never guard an authenticated service.
+
+        With ``AUTH_ENABLED=true`` leaving ``PAPER_API_KEY=change-me`` means the
+        REST API answers to a public literal and the download-signing secret
+        (its fallback) is forgeable — so refuse to start. Keys created in the
+        database (``scripts/manage_keys.py``) do not lift this: the env value
+        would still be the signing-secret fallback. Set a real env key or an
+        ``MCP_DOWNLOAD_SECRET``.
+        """
+        if self.auth_enabled and self.paper_api_key == "change-me" and not self.agent_keys:
+            raise ValueError(
+                "AUTH_ENABLED=true refuses the default PAPER_API_KEY 'change-me': "
+                "set a real key (PAPER_API_KEY / PAPER_API_KEYS) or an "
+                "MCP_DOWNLOAD_SECRET before enabling auth"
             )
         return self
 

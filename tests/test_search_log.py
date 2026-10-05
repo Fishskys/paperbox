@@ -233,6 +233,32 @@ def test_log_search_persists_the_expected_row() -> None:
     assert row.results[0]["rank"] == 1
 
 
+def test_log_search_records_the_caller_key_prefix() -> None:
+    """The attribution prefix rides the logging context, never the signature."""
+    from app.core.logging import _key_prefix_var, bind_key_prefix
+
+    session = RecordingSession()
+    token = bind_key_prefix("hermes")
+    try:
+        call_log_search(session)
+        assert session.added[0].key_prefix == "hermes"
+    finally:
+        # tests share one thread; a real request task dies with its context
+        _key_prefix_var.reset(token)
+
+
+def test_log_search_records_no_prefix_outside_a_request() -> None:
+    from app.core.logging import _key_prefix_var
+
+    token = _key_prefix_var.set(None)  # neutralize any leak from an earlier test
+    session = RecordingSession()
+    try:
+        call_log_search(session)
+        assert session.added[0].key_prefix is None
+    finally:
+        _key_prefix_var.reset(token)
+
+
 def test_log_search_truncates_results_to_the_configured_limit(monkeypatch) -> None:
     monkeypatch.setattr(settings, "search_log_results_limit", 2)
     session = RecordingSession()

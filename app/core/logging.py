@@ -22,6 +22,10 @@ from app.core.config import settings
 REQUEST_ID_HEADER = "X-Request-ID"
 
 _request_id_var: ContextVar[str | None] = ContextVar("paperbox_request_id", default=None)
+#: Readable prefix of the credential serving the current request (plan:
+#: 2026-10-05_145619-api-auth-keys-roles §7.6). Never the full key — the prefix
+#: is the attribution key: ``anonymous`` when auth is off, ``-`` outside a request.
+_key_prefix_var: ContextVar[str | None] = ContextVar("paperbox_key_prefix", default=None)
 
 _CONFIGURED = False
 
@@ -37,12 +41,30 @@ def bind_request_id(request_id: str | None) -> None:
         _request_id_var.set(request_id)
 
 
+def bind_key_prefix(prefix: str | None) -> object | None:
+    """Attach the caller's key prefix to the current context.
+
+    Returns the ``ContextVar`` token so the caller can ``reset`` it in a
+    ``finally`` (mirrors ``current_agent.set``/``reset`` in the MCP middleware).
+    """
+    if not prefix:
+        return None
+    return _key_prefix_var.set(prefix)
+
+
+def get_key_prefix() -> str | None:
+    """Current caller's key prefix, or ``None`` outside of a request context."""
+    return _key_prefix_var.get()
+
+
 class RequestIdFilter(logging.Filter):
-    """Ensure every record exposes ``record.request_id``."""
+    """Ensure every record exposes ``record.request_id`` and ``record.key_prefix``."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not getattr(record, "request_id", None):
             record.request_id = get_request_id() or "-"
+        if not getattr(record, "key_prefix", None):
+            record.key_prefix = get_key_prefix() or "-"
         return True
 
 
@@ -53,6 +75,7 @@ class TextFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         record.request_id = getattr(record, "request_id", None) or get_request_id() or "-"
+        record.key_prefix = getattr(record, "key_prefix", None) or get_key_prefix() or "-"
         record.levelname = f"{record.levelname:<8}"
         base = super().format(record)
         extras = getattr(record, "extra_fields", None)
@@ -73,6 +96,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": getattr(record, "request_id", None) or get_request_id(),
+            "key_prefix": getattr(record, "key_prefix", None) or get_key_prefix() or "-",
             "module": record.module,
             "line": record.lineno,
         }
@@ -96,7 +120,7 @@ def configure_logging(level: str | None = None, *, json_output: bool = False) ->
     else:
         handler.setFormatter(
             TextFormatter(
-                fmt="%(asctime)s %(levelname)s %(name)s [req=%(request_id)s] %(message)s",
+                fmt="%(asctime)s %(levelname)s %(name)s [req=%(request_id)s] [key=%(key_prefix)s] %(message)s",
                 datefmt="%Y-%m-%dT%H:%M:%S%z",
             )
         )

@@ -42,6 +42,7 @@ def keys(monkeypatch):
         settings, "paper_api_keys", f"hermes:{HERMES_KEY};codex:{CODEX_KEY}"
     )
     monkeypatch.setattr(settings, "mcp_allowed_hosts", "testserver,testserver:*")
+    monkeypatch.setattr(settings, "auth_enabled", True)
     assert settings.agent_keys == {"hermes": HERMES_KEY, "codex": CODEX_KEY}
     return settings
 
@@ -88,15 +89,34 @@ def rpc(
 # configuration
 # --------------------------------------------------------------------------- #
 def test_enabling_mcp_without_any_credential_refuses_to_start() -> None:
-    """Fail fast: an unauthenticated MCP endpoint is not a deployment we support."""
+    """Fail fast: an authenticated MCP endpoint with no key is not deployable."""
     with pytest.raises(Exception) as failure:
         Settings(
             mcp_enabled=True,
+            auth_enabled=True,
             mcp_allowed_hosts="127.0.0.1",
             paper_api_key="",
             paper_api_keys="",
         )
     assert "credential" in str(failure.value)
+
+
+def test_enabling_auth_with_the_default_key_refuses_to_start() -> None:
+    """'change-me' is a public literal: it must never guard an authed service."""
+    with pytest.raises(Exception) as failure:
+        Settings(auth_enabled=True, paper_api_key="change-me", paper_api_keys="")
+    assert "change-me" in str(failure.value)
+
+
+def test_enabling_mcp_with_auth_off_needs_no_credential() -> None:
+    """AUTH_ENABLED is the master switch: off, MCP needs no key at all (D1)."""
+    Settings(
+        mcp_enabled=True,
+        auth_enabled=False,
+        mcp_allowed_hosts="127.0.0.1",
+        paper_api_key="",
+        paper_api_keys="",
+    )  # no raise
 
 
 def test_keys_are_parsed_into_agent_names(keys) -> None:
@@ -231,7 +251,86 @@ def test_rest_routes_keep_their_own_auth(monkeypatch) -> None:
     from app.main import app as paperbox_app
 
     monkeypatch.setattr(settings, "mcp_allowed_hosts", "testserver,testserver:*")
+    monkeypatch.setattr(settings, "auth_enabled", True)
     with TestClient(paperbox_app) as client:
         assert client.get("/health").status_code == 200
         # /api/* is still guarded by the REST dependency, whatever the MCP keys are.
         assert client.get("/api/papers").status_code in (401, 403)
+
+
+# --------------------------------------------------------------------------- #
+# the master switch, all-on/all-off (plan §3 D1)
+# --------------------------------------------------------------------------- #
+def test_auth_off_the_endpoint_answers_anonymously(monkeypatch, keys) -> None:
+    """AUTH_ENABLED=false: no credential, and the identity is anonymous admin."""
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    server = build_server()
+    app = FastAPI()
+
+    @asynccontextmanager
+    async def lifespan(_):
+        async with server.session_manager.run():
+            yield
+
+    app.router.lifespan_context = lifespan
+    app.add_middleware(auth.McpAuthMiddleware)
+    app.mount("/mcp", build_streamable_http_app(server))
+    with TestClient(app) as client:
+        response = rpc(client, "initialize", INITIALIZE_PARAMS, token=None)
+        assert response.status_code == 200
+    identity = auth.current_agent.get()
+    assert identity is None  # contextvar is request-scoped; nothing leaked
+
+
+def test_anonymous_identity_is_an_admin_with_the_anonymous_prefix() -> None:
+    from app.services import api_key_service
+
+    identity = api_key_service.anonymous()
+    assert identity.role == api_key_service.ROLE_ADMIN
+    assert identity.prefix == "anonymous"
+    assert identity.source == api_key_service.SOURCE_ANONYMOUS
+
+
+def test_a_database_key_authenticates_through_the_shared_service(
+    monkeypatch, session_factory
+) -> None:
+    """A key created in the table works on the MCP surface too (G4)."""
+    from app.services import api_key_service
+
+    monkeypatch.setattr(settings, "paper_api_key", "")
+    monkeypatch.setattr(settings, "paper_api_keys", "")
+    session = session_factory()
+    try:
+        _, full_key = api_key_service.create_key(
+            session, name="ci-agent", prefix="ciagent", role="read"
+        )
+        session.commit()
+        identity = api_key_service.authenticate(session, full_key)
+        assert identity is not None
+        assert identity.name == "ci-agent"
+        assert identity.prefix == "ciagent"
+        assert identity.role == "read"
+        assert identity.source == api_key_service.SOURCE_DB
+        # and through the MCP wrapper, with the session the middleware would pass
+        assert auth.resolve_agent(full_key, session).name == "ci-agent"
+    finally:
+        session.close()
+
+
+def test_a_revoked_database_key_stops_authenticating(monkeypatch, session_factory) -> None:
+    from app.services import api_key_service
+
+    monkeypatch.setattr(settings, "paper_api_key", "")
+    monkeypatch.setattr(settings, "paper_api_keys", "")
+    session = session_factory()
+    try:
+        _, full_key = api_key_service.create_key(
+            session, name="temp", prefix="temp", role="write"
+        )
+        session.commit()
+        assert api_key_service.authenticate(session, full_key) is not None
+        api_key_service.revoke_key(session, "temp")
+        session.commit()
+        assert api_key_service.authenticate(session, full_key) is None
+    finally:
+        session.close()

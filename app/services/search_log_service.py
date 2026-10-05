@@ -23,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.logging import get_logger
+from app.core.logging import get_key_prefix, get_logger
 from app.db.models import SearchQuery, new_uuid
 
 logger = get_logger(__name__)
@@ -134,6 +134,7 @@ def log_search(
             candidates=None if candidates is None else int(candidates),
             returned=int(returned),
             took_ms=None if took_ms is None else _whole_ms(took_ms),
+            key_prefix=get_key_prefix(),
             results=serialize_results(
                 results or [], settings.search_log_results_limit
             ),
@@ -167,6 +168,7 @@ def serialize_search_log(row: SearchQuery) -> dict[str, Any]:
     return {
         "id": row.id,
         "request_id": row.request_id,
+        "key_prefix": row.key_prefix,
         "created_at": created.isoformat() if isinstance(created, datetime) else created,
         "query": row.query,
         "rewritten_query": row.rewritten_query,
