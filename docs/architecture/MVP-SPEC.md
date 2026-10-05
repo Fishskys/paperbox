@@ -9,7 +9,7 @@
 > **当前实际状态一律以 `docs/progress/project.md` 为准**。
 
 ## 0. 全局约定
-- 所有 `/api/*` 路由除 `/health` 外都需要 `Authorization: Bearer <PAPER_API_KEY>`（`app/core/security.py` 已有实现）。
+- 鉴权（2026-10-05 起，plan `2026-10-05_145619-api-auth-keys-roles`）：`AUTH_ENABLED=false`（默认）时 `/api/*` 免鉴权（匿名=admin）；`=true` 时除 `/health` 外都要 `Authorization: Bearer <key>`，key 解析自 `api_keys` 表（`app/services/api_key_service.py`，REST 与 `/mcp` 共用），三档 `read < write < admin`（端点→档位表见 `UserManual.md` §2.1.1），缺凭证 401、key 不匹配 403、档位不足 403（`insufficient role`）。`GET /api/downloads/{paper_id}` 只认 HMAC 签名（免 Bearer）。
 - `paper_id` = UUID 字符串。论文状态：`PENDING / PROCESSING / INDEXED / FAILED / DELETED`（软删除用 `deleted_at`）。
 - 配置统一走 `app/core/config.py`（pydantic-settings），从根目录 `.env` 读取；禁止硬编码地址/密钥。
 - 依赖服务地址（Windows 宿主经 `127.0.0.1` 直连 WSL 端口，需在 WSL 的 ufw 白名单内；不要写 `localhost`，IPv6 回环不转发会每次多等 8 秒）：

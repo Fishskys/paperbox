@@ -87,7 +87,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 
 **问题**：`/embed` 是同步 `def`，Starlette 会把它丢进 anyio 线程池（默认 ~40 线程），每个请求各自跑一次 ONNX 推理；`INGEST_CONCURRENCY`(2) 的流水线、语义分块的 CHUNKING 段、查询侧精排又都打同一个容器。并发不会遭拒，只会互相抢 CPU/内存（历史上 uvicorn 被 oom-killer 杀掉就是这条路），延迟同时被拉长。
 
-**做法**：容器内部加一条 FIFO 队列 `InferenceQueue`（`server.py:66-140`）。`/embed`、`/v1/embeddings`、`/rerank` 三处都改成 `QUEUE.submit(fn)`：调用线程把 `(fn, args, future)` 入队，`INFERENCE_WORKERS`(默认 1) 个工作线程依次取出执行，调用线程在 `future.result()` 上等结果（异常原样透传，所以 500/503 语义不变）。
+**做法**：容器内部加一条 FIFO 队列 `InferenceQueue`（`server.py:66`）。`/embed`、`/v1/embeddings`、`/rerank` 三处都改成 `QUEUE.submit(fn)`：调用线程把 `(fn, args, future)` 入队，`INFERENCE_WORKERS`(默认 1) 个工作线程依次取出执行，调用线程在 `future.result()` 上等结果（异常原样透传，所以 500/503 语义不变）。
 
 - 积压长度由 `INFERENCE_QUEUE_DEPTH` 兜底：满了**立即**抛 `QueueFull` → `503` + `Retry-After: 5`（`server.py:124-128`、:145-151）。选择“拒绝而不是无限排队”：无界排队会把等待推到客户端超时之后，那时两边都拿不到可用的错误。
   - 定这个值的规矩：`depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT / 2`（应用侧默认 300s）。
@@ -121,7 +121,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 7 | `/v1/embeddings` 不受 `MAX_BATCH` 限制，且应用侧不使用它（应用只走 `/embed`）；它同样排在队列后面 | `server.py:211-214`、:318-322；`embedding_service.py:21`（`EMBED_PATH="/embed"`） |
 | 8 | 向量条数不匹配（第 8 跳）落 `IngestionError`，不在 `EmbeddingError` 分支 → `error_code=INTERNAL`，不是 `EMBEDDING_FAILED` | `tasks.py:518-539`；`errors.py:152-197`（`EmbeddingError` 分支 :182，尾部兜底 :200） |
 | 9 | 失败保留现场：`_advance_stage` 已 COMMIT，`EMBEDDING/80` 是可读的失败点；`_record_failure` 只改 job 与 paper.status。降级账本骑在同一个事务上：作业回滚则降级行一并回滚（不是漏记——那次运行没留下产物） | `tasks.py:194-210`、:1201-1220；`degradation_service.py:226-283` |
-| 9b | **T7.3 服务端队列**：`/embed`、`/v1/embeddings`、`/rerank` 共用一条 FIFO，由 `INFERENCE_WORKERS`(1) 个工作线程串行执行；积压 > `INFERENCE_QUEUE_DEPTH`（2026-10-01 起 512）直接 503，而不是无限排队（无界排队只会把等待推到客户端超时之后） | `server.py:56-59`、:66-140、:142 |
+| 9b | **T7.3 服务端队列**：`/embed`、`/v1/embeddings`、`/rerank` 共用一条 FIFO，由 `INFERENCE_WORKERS`(1) 个工作线程串行执行；积压 > `INFERENCE_QUEUE_DEPTH`（2026-10-01 起 512）直接 503，而不是无限排队（无界排队只会把等待推到客户端超时之后） | `server.py:56-59`、:66、:142 |
 | 10 | 模型惰性加载：首个请求才下载/加载（`/health` 在加载前也 200）；healthcheck 15s×30 次容错下载窗口；**首次加载发生在队列工作线程里**，所以冷启动期间其余请求都在排队等待 | `server.py:155-202`；`docker-compose.yml:110-114` |
 | 11 | `/info`、`/health` 的 `dimension` 是硬编码 1024，换模型不会自动修正 | `server.py:243`、:229 |
 | 12 | 容器单进程（`--workers 1`）：embedding 与 rerank 共用一个进程/ORT 线程池 | `Dockerfile:9` |

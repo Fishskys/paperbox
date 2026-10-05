@@ -144,17 +144,31 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 ### 4.1 鉴权
 
+> 2026-10-05 起按 plan `2026-10-05_145619-api-auth-keys-roles` 重写：MCP 与 REST **共用同一套密钥**
+> （`app/services/api_key_service.py` 是唯一认证来源），并受 `AUTH_ENABLED` 总开关（**全开全关**）控制。
+
 | 项 | 契约 |
 |---|---|
 | 唯一路径 | `Authorization: Bearer <key>` |
 | query-string key | **不支持**（v1 明确不做：key 进 URL 会落进代理/网关日志与浏览器历史） |
-| 凭证来源 | `PAPER_API_KEYS`（多 key）→ 命中则得 agent 名；否则回落到 `PAPER_API_KEY`（agent 名 = `default`）。`MCP_ENABLED=true` 而两者都空 → **启动报错**（不许静默全 401）|
-| 失败 | 缺凭证 → 401（带 `WWW-Authenticate: Bearer`）；凭证不匹配 → 403（与 REST 现有语义一致） |
+| 总开关 | `AUTH_ENABLED=false`（默认）→ `/mcp` 与 `/api/*` 都**不查凭证**，每个调用方是匿名 admin（agent=`anonymous`、前缀=`anonymous`）；`=true` → 两个表面都要求 key。`MCP_ENABLED` 仍只决定 `/mcp` 是否挂载 |
+| 凭证来源 | `api_keys` 表（`scripts/manage_keys.py` 创建，三档 `read < write < admin`，只存 sha256）→ **优先**环境引导 key（`PAPER_API_KEYS` 命名 + `PAPER_API_KEY` 共享，一律 admin；env 是恢复路径，同名同值时 env 赢）。`AUTH_ENABLED=true` 而 env 与库中一把 key 都没有 → **启动报错**；env 唯一可用密钥是 `change-me` → **启动报错** |
+| 档位 | 写工具要求 `write`（`paper_import`/`paper_reindex`/`paper_update_metadata`），`paper_delete` 要求 `admin`，且与 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 取 **AND**；档位不足 → `ToolFailure(FORBIDDEN, "insufficient role")`。读工具不检查档位 |
+| 失败 | 缺凭证 → 401（带 `WWW-Authenticate: Bearer`）；凭证不匹配 → 403（与 REST 语义一致） |
 | 实现 | `app/mcp/auth.py` + `app/main.py` 的 `McpAuthMiddleware`（**纯 ASGI**，不是 BaseHTTPMiddleware —— 端点会流式返回，缓冲型中间件会破坏它）。**不用 SDK 自带的 `AuthSettings`/`TokenVerifier`**：那套是 OAuth 资源服务器形态（强制 `issuer_url`/`resource_server_url`、宣告 RFC 9728 发现端点），静态 key 部署下客户端会去走一个永远走不通的 OAuth 流程 |
-| 与 421 的**顺序** | 鉴权在传输之前：**未鉴权的请求一律 401，即使 Host 不在白名单**（不让没通过鉴权的调用方探测本机接受哪些 Host 名）；白名单检查对**已鉴权**的请求照常生效（421，硬要求 2 的反面测试保留）。两种顺序都有测试钉住 |
-| 身份传播 | 中间件把 `AgentIdentity` 放进 contextvar，工具层用它填 `Envelope.meta.agent` 与审计行 `agent`（真机验证：`"agent": "hermes"`）|
+| 与 421 的**顺序** | 鉴权在传输之前：**未鉴权的请求一律 401，即使 Host 不在白名单**（不让没通过鉴权的调用方探测本机接受哪些 Host 名）；白名单检查对**已鉴权**的请求照常生效（421，硬要求 2 的反面测试保留）。两种顺序都有测试钉住（仅在 `AUTH_ENABLED=true` 下有意义） |
+| 身份传播 | 中间件把身份放进 contextvar，工具层用它填 `Envelope.meta.agent` 与审计行 `agent`/`key_prefix`（真机验证：`"agent": "hermes"`）|
 
 ### 4.2 多 key 格式
+
+**首选**（带档位、可吊销、日志可归因）：
+
+```bash
+uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role write
+# 完整密钥 pb_<prefix>_<32hex> 只打印这一次；库里只存 sha256
+```
+
+**环境引导**（启动时 upsert 成 admin 行，不可经脚本吊销——从 `.env` 移除并重启）：
 
 ```
 PAPER_API_KEYS=hermes:<key1>;codex:<key2>;claude-code:<key3>
@@ -162,19 +176,22 @@ PAPER_API_KEYS=hermes:<key1>;codex:<key2>;claude-code:<key3>
 
 `;` 分隔；每项 `名字:key`；名字限 `[A-Za-z0-9_-]`；key 内不得含 `:` 或 `;`。
 同一 key 同时出现在 `PAPER_API_KEYS` 与 `PAPER_API_KEY` 时，以 `PAPER_API_KEYS` 的名字为准并记 WARNING。
+env 引导行每次启动与 `.env` 重新同步：env 里删掉的名字，其 `source=env` 行会被删除（不留陈旧 admin）。
 
 ### 4.3 审计
 
 每次工具调用写一条结构化日志（**不落库**）：
 
 ```jsonc
-{"event":"mcp_call","agent":"hermes","tool":"paper_delete","paper_id":"...",
+{"event":"mcp_call","agent":"hermes","key_prefix":"hermes","tool":"paper_delete","paper_id":"...",
  "args_digest":{"dry_run":false},"outcome":"ok","code":null,
  "affected":{"chunks":37,"objects":2},"took_ms":412,"transport":"http"}
 ```
 
-- 脱敏：不记 key、不记正文全文（只记字符数/块数）；`query` 只记前 200 字符。
-- 检索类工具仍落 `search_queries`（现有表）；写工具**必须**记 `affected`。
+- 脱敏：只记密钥**前缀**（`key_prefix`），永不记完整 key；不记正文全文（只记字符数/块数）；`query` 只记前 200 字符。
+- 检索类工具仍落 `search_queries`（现有表，2026-10-05 起该表也带 `key_prefix` 列）；写工具**必须**记 `affected`。
+- 请求日志同理：应用日志行带 `[key=<前缀>]`（`AUTH_ENABLED=false` 时为 `anonymous`）。范围口径：前缀随**请求**日志走；
+  后台流水线日志没有请求上下文，靠 `job_id` 回链（plan §7.6，主人已确认够用）。
 
 ---
 

@@ -96,7 +96,7 @@ paperbox/
 > （检索 + 读正文 + 导入/维护，默认关闭，需配 `MCP_ENABLED` 与白名单）。接入片段与排障见
 > `UserManual.md` §1.7 与 `docs/architecture/11-mcp-agent-interface.md` §10。
 
-所有接口都在 `/api/**` 下，除 `/`、`/health`、`/docs` 外均需 `Authorization: Bearer <PAPER_API_KEY>`。
+所有接口都在 `/api/**` 下。鉴权由 `AUTH_ENABLED` 全开全关：默认关闭（匿名 admin）；开启时 `/api/*` 与 `/mcp` 都要 `Authorization: Bearer <key>`，密钥按 `read < write < admin` 三档区分（`scripts/manage_keys.py` 分发），日志记密钥前缀。详见 `UserManual.md` §1.3.7.1 与 §2.1。
 
 | 分组 | 方法 | 端点 | 说明 |
 |---|---|---|---|

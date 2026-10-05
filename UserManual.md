@@ -182,12 +182,29 @@ uv run python scripts/healthcheck.py
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
-| `PAPER_API_KEY` | API 鉴权密钥（Bearer） | `change-me` | **部署务必改掉**；改了要重启应用 |
-| `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1` |
+| `AUTH_ENABLED` | 鉴权总开关（**全开全关**） | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`）；`true` = `/api/*` 与 `/mcp` 都要求 Bearer key。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
+| `PAPER_API_KEY` | 引导管理员密钥（Bearer，agent 名 `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**（它同时是签名下载密钥的回落）；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
+| `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
 > **改完根 `.env` 必须重启应用**：配置在启动时读入，`--reload` 不会重读。
+
+#### 1.3.7.1 密钥分发（`AUTH_ENABLED=true` 时）
+
+密钥表 `api_keys` 只存 `sha256(完整密钥)`，完整密钥只在创建时打印一次。三档权限单调序
+`read < write < admin`：read 可读全部接口；write 增加导入/重试/reindex/元数据写入；
+admin 再增加删除。MCP 工具同一套档位（`paper_delete` 需 admin，其余写工具需 write，
+且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束）。每条请求日志、检索日志
+（`search_queries.key_prefix`）与 MCP 审计行都记录密钥**前缀**（归因用，永不落完整密钥）。
+
+```bash
+uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role write
+uv run python scripts/manage_keys.py list
+uv run python scripts/manage_keys.py revoke hermes --yes
+```
+
+注意：`source=env` 的引导行不可经脚本吊销（要从 `.env` 移除并重启）；吊销立即生效（下一次请求即 403）。
 
 ### 1.4 容器配置（`infra/.env`）
 
@@ -300,7 +317,7 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 |---|---|---|---|
 | `MCP_ENABLED` | 是否挂载 `/mcp` | `false` | 打开时**必须**同时给白名单，否则**启动报错** |
 | `MCP_ALLOWED_HOSTS` | 允许访问的 `Host` 白名单 | 空 | 逗号分隔；**每个 agent 访问用的 IP 与主机名都要写**，且各写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`） |
-| `PAPER_API_KEYS` | 多 key（`名字:key` 分号分隔） | 空 | 命中则审计日志里记该 agent 名；空则回落到 `PAPER_API_KEY`（agent 名 = `default`） |
+| `PAPER_API_KEYS` | 引导管理员多 key（`名字:key` 分号分隔） | 空 | 启动时 upsert 成 `api_keys` 表的 admin 行（agent 名 = 名字）；空则回落到 `PAPER_API_KEY`（agent 名 = `default`）。给 agent 分发**带档位**的 key 用 `scripts/manage_keys.py`（见 §1.3.7.1） |
 | `MCP_WRITE_ENABLED` | 写工具总闸 | `false` | 关闭时 4 个写工具**不存在**（不出现在工具列表，按名字也调不到） |
 | `MCP_ALLOW_DELETE` / `MCP_ALLOW_REINDEX` / `MCP_ALLOW_METADATA_WRITE` | 三个写工具分开关 | `false` | 受总闸约束；导入工具只受总闸管 |
 | `MCP_MAX_CHARS` / `MCP_MAX_CHARS_CEILING` | 单次正文预算 / 上限 | `8000` / `32000` | 超上限**报错不裁剪** |
@@ -336,7 +353,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 四个客户端的配置片段、以及 401/403/421 的排障速查，见 `docs/architecture/11-mcp-agent-interface.md` §10。
 **已真机验收通过：Hermes、codex**（codex 非交互跑要给 `--dangerously-bypass-approvals-and-sandbox`，
 因为 codex 对 MCP 调用走自己的审批策略）；Claude Code（本机未装）与自研 harness 的片段**未验证**。
-**想区分 agent 就各发一把 key**：`PAPER_API_KEYS` 按值认身份，共用一把 key 的 agent 在审计里会同名。
+**想区分 agent 就各发一把 key**：`AUTH_ENABLED=true` 时推荐 `scripts/manage_keys.py create --role <档位>`（MCP 与 REST 共用，审计记 key 前缀）；env 引导 key 按值认身份，共用一把 key 的 agent 在审计里会同名。
 自检：`hermes mcp test paperbox`（Hermes）或直接 `curl` 一次 `initialize` 握手。
 
 ---
@@ -348,13 +365,22 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 项 | 约定 |
 |---|---|
 | 基址 | `http://<host>:8077`（默认端口 8077） |
-| 鉴权 | 除 `/`、`/health`、`/docs` 外，所有接口都要 `Authorization: Bearer <PAPER_API_KEY>` |
+| 鉴权 | `AUTH_ENABLED=true` 时除 `/`、`/health`、`/docs` 外所有接口都要 `Authorization: Bearer <key>`；`false`（默认）时免鉴权（匿名=admin）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套；档位不足 403（detail 含 `insufficient role`） |
 | 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
 | 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 §1.7） |
 | 签名下载 | `GET /api/downloads/{paper_id}?exp=&sig=`（**免 Bearer**，签名即凭据，TTL 10–3600 s，过期或被改 403） |
 | 错误体 | `{"detail": "..."}`（422 校验错误为 FastAPI 默认结构，含 `loc`/`msg`/`type`） |
 | 幂等性 | 建索引、建快照、清理解包目录等运维接口可重复执行 |
 | 长任务 | 导入类接口返回 `202` + `job_id`，进度用作业接口轮询 |
+
+#### 2.1.1 端点 → 最低密钥档位（`AUTH_ENABLED=true` 时）
+
+| 档位 | 端点 |
+|---|---|
+| 免鉴权 | `GET /health`、`GET /`、`GET /docs`；`GET /api/downloads/{paper_id}`（只认签名） |
+| read | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review` |
+| write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/{id}/reindex`；`PATCH /api/papers/{id}/metadata`、rollback；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
+| admin | `DELETE /api/papers/{paper_id}` |
 
 ### 2.2 服务与自检
 
@@ -508,8 +534,8 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 200 | 成功 | — |
 | 202 | 已受理 | 导入/重试/重建索引类接口：返回的是作业，用 `/api/jobs/{job_id}` 轮询进度 |
 | 204 | 成功且无响应体 | `DELETE /api/papers/{paper_id}` |
-| 401 Unauthorized | 没带或带了格式不对的凭证 | 请求头缺 `Authorization: Bearer <key>`；响应带 `WWW-Authenticate: Bearer` |
-| 403 Forbidden | 凭证不对 | `PAPER_API_KEY` 不匹配；改了 `.env` 后忘了重启应用 |
+| 401 Unauthorized | 没带或带了格式不对的凭证（`AUTH_ENABLED=true`） | 请求头缺 `Authorization: Bearer <key>`；响应带 `WWW-Authenticate: Bearer` |
+| 403 Forbidden | 凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 §2.1.1 档位表）；改了 `.env` 后忘了重启应用也会 403 |
 | 404 Not Found | 路径不存在或功能未开启 | `/api/papers/ingest/dir` 在 `INGEST_LOCAL_ROOTS` 为空时**就是 404**（功能关闭，不是路径写错） |
 | 409 Conflict | 状态冲突 | 目前只有一处：重试一个**不是** `FAILED` 的作业（`only FAILED jobs can be retried`） |
 | 413 Request Entity Too Large | 单请求总字节超限 | 超 `INGEST_MAX_REQUEST_MB`（默认 200 MB）；拆分请求或调大该值 |
@@ -635,9 +661,12 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 启动日志会打印生效白名单，是排查 421 的第一手材料。注意这是**裸文本** 421，不是 JSON。
 
 **Q16 MCP 报 401 / 403？**
-401 = 没带 `Authorization: Bearer`；403 = key 不匹配（对齐 `PAPER_API_KEYS` 里那个 agent 的 key 或 `PAPER_API_KEY`，
-注意不要多空格）。**不支持 `?key=` 查询参数**。想区分是谁在调，就给每个 agent **各发一把 key**：
-`PAPER_API_KEYS` 按**值**认身份，两把相同的 key 在审计里会同名。
+先看 `AUTH_ENABLED`：`false` 时 `/mcp` 根本不查 key（匿名 admin），报 401/403 说明还有别的问题（如代理剥了头）。
+`true` 时：401 = 没带 `Authorization: Bearer`；403 = key 不匹配（对齐 `api_keys` 表里那把 key，
+或 env 引导 key `PAPER_API_KEY`/`PAPER_API_KEYS`，注意不要多空格）。MCP 工具另有一层
+**档位检查**：read key 调写工具报 `FORBIDDEN`（`insufficient role`），用 `scripts/manage_keys.py list` 看档位。
+**不支持 `?key=` 查询参数**。想区分是谁在调，就给每个 agent **各发一把 key**（`manage_keys.py create`）：
+审计按 key 的**值**认身份，两把相同的 key 在审计里会同名。
 
 **Q17 agent 的工具列表里没有写工具？**
 设计如此：`MCP_WRITE_ENABLED` 或对应的 `MCP_ALLOW_*` 关掉时，写工具**根本不注册**（不在 `tools/list`，
