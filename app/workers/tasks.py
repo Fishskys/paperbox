@@ -639,13 +639,19 @@ def _upgrade_fingerprint(
             return None
         return conflict
 
-    paper.fingerprint = upgraded
     try:
-        session.flush()
+        # Savepoint, not session.rollback(): the bare rollback discarded the
+        # whole uncommitted pipeline transaction (job stage advances, paper
+        # files, provenance written so far), not just the fingerprint flip.
+        # The savepoint rolls the flip back alone and leaves the caller's
+        # transaction usable (review 2026-10-05, P1-1).
+        with session.begin_nested():
+            paper.fingerprint = upgraded
+            session.flush()
     except IntegrityError:
         # Another ingest claimed the same DOI/arXiv between the lookup and the
         # flush; fall back to the duplicate path.
-        session.rollback()
+        paper.fingerprint = current
         conflict = _find_other_live_paper_by_fingerprint(session, upgraded, paper.id)
         if conflict is None:
             raise

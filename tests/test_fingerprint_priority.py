@@ -216,6 +216,27 @@ class UpgradeSession:
 
             raise IntegrityError("UPDATE papers", {}, Exception("duplicate key"))
 
+    def begin_nested(self):
+        """Savepoint double: an exception inside rolls the savepoint back.
+
+        The production code no longer calls ``session.rollback()`` on a lost
+        fingerprint race — it wraps the flip in a SAVEPOINT (review 2026-10-05,
+        P1-1). The double maps the savepoint's exception path onto the same
+        ``rollbacks`` counter the old assertions use.
+        """
+        session = self
+
+        class _Savepoint:
+            def __enter__(self):
+                return session
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc is not None:
+                    session.rollback()
+                return False
+
+        return _Savepoint()
+
     def rollback(self) -> None:
         self.rollbacks += 1
 

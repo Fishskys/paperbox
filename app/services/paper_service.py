@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -368,7 +369,17 @@ def purge_paper(session: Session, paper: Paper) -> PurgeOutcome:
 
 
 def get_paper(session: Session, paper_id: str) -> Paper | None:
-    """Fetch a live (not soft-deleted) paper with authors, venue and files."""
+    """Fetch a live (not soft-deleted) paper with authors, venue and files.
+
+    Paper ids are UUIDs, so a malformed id would otherwise reach PostgreSQL as a
+    string and come back as ``DataError`` -- a 500 on every endpoint that loads a
+    paper from the path. Same fix ``ingestion_service.get_job`` got (2026-10-04):
+    reject the id here so both surfaces answer 404 / NOT_FOUND.
+    """
+    try:
+        uuid.UUID(str(paper_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
     statement = _paper_query().where(Paper.id == paper_id, Paper.deleted_at.is_(None))
     return session.execute(statement).scalar_one_or_none()
 
@@ -577,13 +588,25 @@ def apply_primary_selection(
         if incoming is None or incoming.id == current.id:
             return PrimaryOutcome(action=PRIMARY_ACTION_PRIMARY, primary=current)
 
-    changed = False
+    # Two flushes, demote first (same shape as ``remove_file``): the partial
+    # unique index ``uq_paper_files_primary`` is checked row by row on
+    # PostgreSQL, and the UPDATE order inside one flush is unspecified (random
+    # UUID pk) -- promoting before demoting would transiently hold two primary
+    # rows and fail the whole import with an IntegrityError.
+    demoted = False
     for record in files:
-        wanted = record.id == winner.id
-        if bool(record.is_primary) != wanted:
-            record.is_primary = wanted
-            changed = True
-    if changed:
+        if record.id != winner.id and record.is_primary:
+            record.is_primary = False
+            demoted = True
+    if demoted:
+        session.flush()
+
+    promoted = False
+    for record in files:
+        if record.id == winner.id and not record.is_primary:
+            record.is_primary = True
+            promoted = True
+    if promoted:
         session.flush()
 
     if incoming is not None and incoming.id != winner.id:

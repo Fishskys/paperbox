@@ -55,6 +55,16 @@ STAGING_PREFIX = f"{object_storage.UPLOAD_PREFIX}/"
 #: housekeeping policy, not a deployment knob (``AGENTS.md`` section 3.4).
 STAGING_RETRY_GRACE_HOURS = 72
 
+#: Minimum age of a staging object before the collector may judge it. The owner
+#: snapshot (``load_job_refs``) is taken *before* the listing, so an object
+#: uploaded a moment ago can exist in MinIO while its job row is still waiting
+#: to commit (tens of ms normally, longer under DB jitter) -- deleting it then
+#: loses a ``file``-source upload forever (its retry re-reads the same key).
+#: Judging only objects old enough for any commit to have landed closes that
+#: TOCTOU (review 2026-10-05, P1-5). A code constant on purpose, like the grace
+#: hours above.
+STAGING_MIN_AGE_SECONDS = 600
+
 
 @dataclass
 class GcReport:
@@ -212,13 +222,20 @@ def run_gc(
 
     # ---- 1/2: staging objects ------------------------------------------- #
     try:
-        keys = [obj.object_name for obj in storage.list_objects(prefix=STAGING_PREFIX)]
+        staged = [
+            (obj.object_name, obj.last_modified)
+            for obj in storage.list_objects(prefix=STAGING_PREFIX)
+        ]
     except Exception as exc:  # noqa: BLE001
         logger.warning("housekeeping could not list staging objects: %s", exc)
         report.errors.append(f"list staging: {type(exc).__name__}: {exc}")
-        keys = []
+        staged = []
 
-    for key in keys:
+    for key, last_modified in staged:
+        if last_modified is not None and _aware(last_modified) > moment - timedelta(
+            seconds=STAGING_MIN_AGE_SECONDS
+        ):
+            continue  # too fresh to judge: the owner snapshot may predate its commit
         owners = staging_owners.get(key)
         if owners and any(_keeps_staging(owner, moment) for owner in owners):
             continue  # a waiting, running or retryable job still needs these bytes

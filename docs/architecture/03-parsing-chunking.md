@@ -110,8 +110,8 @@
 | `detect_year` / `_year_from_arxiv_id` | `metadata_service.py:313`、`:302` | arXiv 优先；否则首页 2 页最高频年份（同频取大年份 `:329`） |
 | `detect_doi` | `metadata_service.py:333-339` | 首页首个 DOI 形态 token，去尾 `.,;` |
 | `heuristic_claim_values` / `embedded_claim_values` | `metadata_service.py:379`、`:441` | 转成合并引擎吃的 `{provenance field: value}` |
-| `_backfill_metadata` | `tasks.py:916-981` | 层 1 → 层 2 顺序写 claim |
-| `_placeholder_title` / `_reset_placeholder_title` / `_restore_placeholder_title` | `tasks.py:888`、`:894`、`:910` | 文件名占位标题的清除与兜底 |
+| `_backfill_metadata` | `tasks.py:922-987` | 层 1 → 层 2 顺序写 claim |
+| `_placeholder_title` / `_reset_placeholder_title` / `_restore_placeholder_title` | `tasks.py:894`、`:900`、`:916` | 文件名占位标题的清除与兜底 |
 | `classify_failure` | `errors.py:127-197` | 异常 → `error_code`；两个解析码（`DoclingUnavailable`→`PARSE_BACKEND_UNAVAILABLE` :158、`DoclingFailed`→`PARSE_FAILED` :165）只在「明确要求 docling 且不许降级」时出现 |
 
 `app/parsing/docling_client.py`（T4，581 行 —— docling-serve 客户端）
@@ -226,7 +226,7 @@
 | `ParseBundle` | `markdown`、`page_count`、`spans`、`backend`、`parser_version`、`degraded_reason`、`timings`、`headings`、`raw_json`、`cache_hit` | 解析器统一返回（`markdown.py:93-111`）；**字段已冻结** |
 | `DoclingResult` | `markdown`、`page_count`、`parser_version`、`processing_time`、`raw_json`、`formula_fallback`、`notes` | 客户端层结果（`docling_client.py:116-134`）；`degraded_reason` 由 `formula_fallback` 推出 |
 
-落库映射（`tasks.py:1066-1098`；模型 `app/db/models.py:384-429`）：
+落库映射（`tasks.py:1072-1104`；模型 `app/db/models.py:384-429`）：
 
 | `Chunk` 字段 | `paper_chunks` 列 | 约束/索引 |
 |---|---|---|
@@ -235,9 +235,9 @@
 | `section` | `section` | `ix_paper_chunks_paper_section(paper_id, section)` |
 | `section_title` | `subsection`（仅当 `section_title != section` 才写，`:985-987`） | **`text`**（2026-09-30 起；原 `varchar(255)`，见不变量 20） |
 | `text`/`token_count`/`char_count` | 同名列 | `text` NOT NULL |
-| — | `embedding_model`/`embedding_dimension` | 取 `settings`（`tasks.py:1090-1091`） |
+| — | `embedding_model`/`embedding_dimension` | 取 `settings`（`tasks.py:1096-1097`） |
 
-OpenSearch 文档字段（`tasks.py:1135-1186`）：`chunk_id/paper_id/title/authors/year/venue/doi/arxiv_id/tags/section/section_title/page_start/page_end/chunk_index/text/embedding/embedding_model/embedding_dimension/**parser_backend/parser_version**`；其中 `section_title = row.subsection or row.section`（`:1161`）。注意过滤字段是索引时快照，改元数据后需 reindex 才生效（`AGENTS.md` §3.6）。
+OpenSearch 文档字段（`tasks.py:1141-1192`）：`chunk_id/paper_id/title/authors/year/venue/doi/arxiv_id/tags/section/section_title/page_start/page_end/chunk_index/text/embedding/embedding_model/embedding_dimension/**parser_backend/parser_version**`；其中 `section_title = row.subsection or row.section`（`:1167`）。注意过滤字段是索引时快照，改元数据后需 reindex 才生效（`AGENTS.md` §3.6）。
 
 ## 4. 调用链（从入口到落地，逐跳）
 
@@ -250,15 +250,15 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
    │  └─ PdfReader → 逐页 _page_text(pdf.py:52) → normalize_page_text(pdf.py:64)
    │     ← **只喂元数据启发式**（§6.1 决策②）：文档文本的真实来源是下面的解析后端
    ├─ (可选) _resolve_target_paper(...)                  tasks.py:493（非主版本就地结束 :500-501）
-   ├─ _reset_placeholder_title(...)                      tasks.py:503 → :894
-   ├─ _backfill_metadata(session, paper, pages, data)    tasks.py:500 → :916
+   ├─ _reset_placeholder_title(...)                      tasks.py:503 → :900
+   ├─ _backfill_metadata(session, paper, pages, data)    tasks.py:500 → :922
    │  ├─ extract_embedded_metadata(pdf_bytes)            pdf.py:404 → _xmp_packet(pdf.py:278)
-   │  ├─ embedded_claim_values(...)                      metadata_service.py:441 → merge_values(`tasks.py:960`, confidence 1.0)
+   │  ├─ embedded_claim_values(...)                      metadata_service.py:441 → merge_values(`tasks.py:966`, confidence 1.0)
    │  ├─ extract_metadata(pages, url, pdf_bytes)         metadata_service.py:342
    │  │  └─ extract_sized_lines(pdf.py:530) → detect_title(:120) → detect_authors(:189)
    │  │     → detect_abstract(:271) → detect_year(:311) → arxiv_id_from_url(:51)/_from_text(:64) → detect_doi(:331)
-   │  └─ heuristic_claim_values(...)                     metadata_service.py:379 → merge_values(`tasks.py:985`, confidence 0.5)
-   ├─ _restore_placeholder_title(...)                    tasks.py:505 → :910
+   │  └─ heuristic_claim_values(...)                     metadata_service.py:379 → merge_values(`tasks.py:991`, confidence 0.5)
+   ├─ _restore_placeholder_title(...)                    tasks.py:505 → :916
    ├─ _upgrade_fingerprint(..., discard_on_conflict=dedupe) tasks.py:511 → :590
    │  ← 解析**挪到这一步之后**：判成重复/非主版本的论文不再白付一次 docling（§6.1）
    ├─ degradation_service.Recorder(...)                  tasks.py:478（T7.3 降级 sink）
@@ -289,7 +289,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
    │        → 逐节 _chunk_section(:448) → _semantic_pieces(:279) → _report_fallback(:262)
    │           → _split_oversized_piece(:376)/_overlap_suffix(:413)/_finalize(:427)
    │     chunks 为空 → raise IngestionError("parsing produced no chunks")  tasks.py:555
-   ├─ _replace_chunks(...)                               tasks.py:556 → :1066
+   ├─ _replace_chunks(...)                               tasks.py:556 → :1072
    ├─ degradations.resolve(STAGE_CHUNKING)               tasks.py:559（本次没报的降级就此作废）
    └─ embed_texts(:563) → _write_embeddings(:569) → _index_rows(:575) → bulk_index_chunks(:576) → _mark_indexed(:581)
 ```
@@ -306,7 +306,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
   重新导入同一份 PDF               → 会被判成重复（指纹 = DOI/arXiv 身份，不是字节），**不会**换后端
 ````
 
-失败落库：任何异常由 `_record_failure`（`tasks.py:1201-1220`）在**新事务里** `classify_failure` → `mark_failed(code=...)`，并把 `paper.status` 置 `FAILED`。
+失败落库：任何异常由 `_record_failure`（`tasks.py:1207-1226`）在**新事务里** `classify_failure` → `mark_failed(code=...)`，并把 `paper.status` 置 `FAILED`。
 
 ## 5. 不变量与踩过的坑
 
@@ -317,7 +317,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 5. **控制字符必须删**：PostgreSQL `text` 不接受 NUL，历史上整批 arXiv 作业因此失败；其余 C0 会污染发往 OpenSearch 的 JSON（`pdf.py:23-25`、`:72-75`）。
 6. **标题误判两处**：(a) running header——同一行在后续 3 行内复现即判页眉并入 `suppressed`，之后**同文本行被整篇跳过**（`structure.py:149-155`），正文里重复的短行也会被吞；(b) 全大写行当章节（`structure.py:120-121`，≤8 词、不以 `.` 结尾），`TABLE I ...` 这类表标题会被误判。
 8. **段落不跨页**：`pending` 每页开头重置（`structure.py:146`），跨页段落被切成两段，后一段记到后一页页码。
-9. **占位标题**：新 ingest 先用文件名当标题，那不是 claim，所以解析前 `_reset_placeholder_title` 清空（仅当无 `title` claim 且当前标题等于占位名，`tasks.py:894-909`），解析后 `_restore_placeholder_title` 兜底为占位名或 `"untitled"`（`title` NOT NULL，`:883-890`）。
+9. **占位标题**：新 ingest 先用文件名当标题，那不是 claim，所以解析前 `_reset_placeholder_title` 清空（仅当无 `title` claim 且当前标题等于占位名，`tasks.py:900-915`），解析后 `_restore_placeholder_title` 兜底为占位名或 `"untitled"`（`title` NOT NULL，`:889-896`）。
 10. **文本层缺失不报错**：`extract_pages` 返回全空白页 → `detect_sections` 出空 → `chunk_document` 返回 `[]` → `tasks.py:554-555` 抛 `IngestionError("parsing produced no chunks")` → `NO_TEXT_LAYER`（关键字 `errors.py:69-75`，判定 `:215-218`；端到端见 `tests/test_failure_classification.py:230-241`）。
 11. **加密**：先试空口令 `reader.decrypt("")`（`pdf.py:109-115`），失败抛 `PdfParseError("encrypted PDF: password required")` → `ENCRYPTED_PDF`（关键字 `("encrypted","password")` 见 `errors.py:68`，分支 `:171-177`）。**损坏**：`PdfReadError` / 其他构造异常 → `PdfParseError("invalid PDF: ...")` → `CORRUPT_PDF`（`errors.py:177`）。
 13. **空字节流 → `PdfParseError("empty PDF payload")`**（`pdf.py:100-101`）。它**不会**命中 `UNSUPPORTED_TYPE`：`_KEYWORDS_UNSUPPORTED` 里的字面量是 `"empty payload"`（`errors.py:81`），`"empty PDF payload"` 不包含它，故走 `CORRUPT_PDF` 分支。此条为按代码字符串匹配的推断，未见测试固定 —— 标**未确认**。
@@ -370,7 +370,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 写进 chunk 与索引文档 | `config.py:80`；使用 `tasks.py:1090`、`:1089` |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 写进 chunk 与索引文档 | `config.py:80`；使用 `tasks.py:1096`、`:1089` |
 | `EMBEDDING_DIMENSION` | 1024 | 向量维度校验 + 落库 | `config.py:81`；`embedding_service.py:67-74` |
 | `EMBEDDING_BATCH_SIZE` | 32 | 单请求文本数 | `config.py:82`；`embedding_service.py:98-99` |
 | `EMBEDDING_URL` | `http://localhost:8090` | 服务地址（`/embed`） | `config.py:79`；`embedding_service.py:21` |

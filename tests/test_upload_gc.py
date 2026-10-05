@@ -44,11 +44,18 @@ class FakeStorage:
         self.deleted: list[str] = []
         self.fail_delete: set[str] = set()
         self.list_error: Exception | None = None
+        #: Per-key ``last_modified`` (absent key -> ``None`` -> no age check),
+        #: exercising the minimum-age guard (review 2026-10-05, P1-5).
+        self.last_modified: dict[str, datetime] = {}
 
     def list_objects(self, prefix: str = "", bucket: str | None = None):
         if self.list_error is not None:
             raise self.list_error
-        return [SimpleNamespace(object_name=key) for key in self.keys if key.startswith(prefix)]
+        return [
+            SimpleNamespace(object_name=key, last_modified=self.last_modified.get(key))
+            for key in self.keys
+            if key.startswith(prefix)
+        ]
 
     def delete_object(self, key: str, bucket: str | None = None) -> None:
         if key in self.fail_delete:
@@ -114,6 +121,30 @@ def test_orphan_staging_object_is_removed(factory, tmp_path):  # noqa: F811
     assert report.orphan_staging == ["uploads/req1/1-a.pdf"]
     assert storage.deleted == ["uploads/req1/1-a.pdf"]
     assert report.stale_staging == []
+
+
+def test_a_fresh_unowned_staging_object_is_spared(factory, tmp_path):  # noqa: F811
+    """TOCTOU guard: an object uploaded moments ago may be waiting for its job
+    row to commit — the collector must not judge it before it has any age."""
+    storage = FakeStorage(["uploads/fresh/1-a.pdf"])
+    storage.last_modified = {"uploads/fresh/1-a.pdf": datetime.now(timezone.utc)}
+
+    report = run(factory, storage, tmp_path)
+
+    assert storage.deleted == []
+    assert report.orphan_staging == []
+
+
+def test_an_old_unowned_staging_object_is_still_collected(factory, tmp_path):  # noqa: F811
+    storage = FakeStorage(["uploads/old/1-a.pdf"])
+    storage.last_modified = {
+        "uploads/old/1-a.pdf": datetime.now(timezone.utc) - timedelta(hours=1)
+    }
+
+    report = run(factory, storage, tmp_path)
+
+    assert report.orphan_staging == ["uploads/old/1-a.pdf"]
+    assert storage.deleted == ["uploads/old/1-a.pdf"]
 
 
 def test_staging_object_of_a_finished_job_is_removed(factory, tmp_path):  # noqa: F811
