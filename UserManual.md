@@ -138,6 +138,7 @@ uv run python scripts/healthcheck.py
 | `INGEST_DOWNLOAD_TIMEOUT` | URL 导入的下载超时（秒） | `120` | |
 | `INGEST_MAX_FILE_MB` | 单个 PDF 大小上限 | `100` | 超限 → 该文件 `rejected` / 单文件请求 422 |
 | `INGEST_CONCURRENCY` | 同时运行的导入流水线数 | `2` | `>0`；多出来的上传停在 `QUEUED`；embedding 是瓶颈，本机别调大 |
+| `INGEST_ALLOW_PRIVATE_HOSTS` | SSRF 闸的私网白名单（主机名或 CIDR，逗号分隔） | 空 | **空 = URL 导入只允许公网**；主机名条目整体信任（不校验其解析地址），CIDR 只放行命中网段的地址；命中闸 → 400 `SSRF_BLOCKED` |
 | `INGEST_UPLOAD_CONCURRENCY` | 在途上传请求上限 | `2` | 超出返回 `429 + Retry-After: 2` |
 | `INGEST_QUEUE_HIGH_WATERMARK` | 处理队列深度阈值 | `50` | 达到后**只拒多文件**请求（429）；`0` 关闭该限制 |
 | `INGEST_MAX_FILES_PER_REQUEST` | 单请求文件数上限 | `20` | 超出 422 |
@@ -322,6 +323,8 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 | `MCP_ALLOW_DELETE` / `MCP_ALLOW_REINDEX` / `MCP_ALLOW_METADATA_WRITE` | 三个写工具分开关 | `false` | 受总闸约束；导入工具只受总闸管 |
 | `MCP_MAX_CHARS` / `MCP_MAX_CHARS_CEILING` | 单次正文预算 / 上限 | `8000` / `32000` | 超上限**报错不裁剪** |
 | `MCP_WAIT_SECONDS` | 写工具等待作业完成的秒数 | `120` | 客户端 per-tool timeout 要 ≥ 它 |
+| `MCP_DOWNLOAD_TTL_SECONDS` 之外的下载密钥 `MCP_DOWNLOAD_SECRET` | 签名下载链接的 HMAC 密钥 | 空 | 空则回落 `PAPER_API_KEY`；轮换任一会使未过期链接全部失效（设计如此） |
+| `MCP_PUBLIC_BASE_URL` | 下载链接的对外基地址 | 空 | 仅 stdio 兜底用：正常情况下链接按 agent 实际访问的 host 拼 |
 | `MCP_DOWNLOAD_TTL_SECONDS` | `paper_get_file` 签名链接有效期 | `300` | 链接不含长期凭据，过期/篡改一律 403 |
 
 起服务（示例，把 `<IP>` 换成 agent 会访问的地址）：
@@ -534,6 +537,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 200 | 成功 | — |
 | 202 | 已受理 | 导入/重试/重建索引类接口：返回的是作业，用 `/api/jobs/{job_id}` 轮询进度 |
 | 204 | 成功且无响应体 | `DELETE /api/papers/{paper_id}` |
+| 400 Bad Request | 入站 URL 被安全闸拒绝 | URL 导入指向私网地址且未在 `INGEST_ALLOW_PRIVATE_HOSTS` 白名单内（`SSRF_BLOCKED`）；放行办法见 §1.3.4 该键说明 |
 | 401 Unauthorized | 没带或带了格式不对的凭证（`AUTH_ENABLED=true`） | 请求头缺 `Authorization: Bearer <key>`；响应带 `WWW-Authenticate: Bearer` |
 | 403 Forbidden | 凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 §2.1.1 档位表）；改了 `.env` 后忘了重启应用也会 403 |
 | 404 Not Found | 路径不存在或功能未开启 | `/api/papers/ingest/dir` 在 `INGEST_LOCAL_ROOTS` 为空时**就是 404**（功能关闭，不是路径写错） |

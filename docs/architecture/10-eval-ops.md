@@ -170,8 +170,8 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:198-199, 396-398` |
 | **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:83` |
 | `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md` §3.1 |
-| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:257-261` |
-| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:245` |
+| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:262-266` |
+| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:250` |
 | `Dockerfile` 的监听参数 | CMD 用 `sh -c exec` 展开 `PAPER_API_HOST/PORT`，此前写死导致 compose 传参**被静默忽略** | `Dockerfile:31-33`、`docs/progress/project.md:509` |
 | 评测脚本不硬编码 WSL | `_docker_argv` 按 `PAPERBOX_DOCKER_PREFIX` → `docker` → `wsl -e docker` 选择，Linux 上可用 | `build_eval_set.py:26-43`、`docs/progress/project.md:510` |
 | `--resume` 的键是**相对路径** | 报告里 `relative`（或退回 `path`）；`status=skipped` 的行不算已完成 | `bulk_ingest_dir.py:224-238` |
@@ -207,7 +207,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `EMBEDDING_MODELS_DIR` | `./data/embedding-models` | 模型缓存卷（`FASTEMBED_CACHE_PATH=/models`） | `infra/docker-compose.yml:113, 90` |
 | `PAPERBOX_BIND_IP` | `0.0.0.0` | 依赖端口绑定地址；服务器可设 `127.0.0.1` | `infra/docker-compose.yml:25, 52, 70-71, 102` |
 | `POSTGRES_PASSWORD` / `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | 必填 | 凭据 | `infra/.env.example:7-9` |
-| `EMBEDDING_MODEL` / `RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` / `ORT_THREADS` / `MAX_BATCH` | 见文件 | 模型与资源（本机 9GB WSL 实测安全值） | `infra/.env.example:25-43` |
+| `EMBEDDING_MODEL` / `RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` / `ORT_THREADS` / `MAX_BATCH` | 见文件 | 模型与资源（本机 9GB WSL 实测安全值） | `infra/.env.example:25-46` |
 | `OPENSEARCH_ADMIN_PASSWORD` | `ChangeMe-Initial-Admin-2026!` | 安全插件关闭时**不参与校验**，仅防明文进仓库 | `infra/docker-compose.yml:46` |
 
 **脚本级环境变量**

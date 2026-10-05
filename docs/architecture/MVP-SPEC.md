@@ -46,6 +46,10 @@ GET    /api/papers/{paper_id}/degradations 该论文的降级留痕（T7.3；?in
 DELETE /api/papers/{paper_id}       删除：先清 OpenSearch 文档与 MinIO 对象，再标记删除（204）；
                                     同时释放该论文占用的 paper_identifiers（标识符只属于一篇论文）
 POST   /api/papers/{paper_id}/reindex 重建单篇索引
+POST   /api/jobs/{job_id}/retry    重试一个 FAILED 作业（2026-09-19；按 paper_id 有无
+                                    自动在「重跑下载」与「reindex 续跑」间路由）
+GET    /api/search-logs            检索日志复盘（Bad Case 用；limit/offset/mode/since）
+GET    /api/downloads/{paper_id}   签名短链下载原件（免 Bearer，签名即凭据，过期 403）
 GET    /api/papers/{paper_id}/metadata      当前值 + 每字段来源与历史（2026-09-21）
 PATCH  /api/papers/{paper_id}/metadata      单篇手动改元数据（写 decided_by='manual' 的 provenance）
 POST   /api/papers/{paper_id}/metadata/rollback {"field","provenance_id"} 回滚某字段到历史主张

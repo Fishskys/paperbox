@@ -253,6 +253,21 @@ def test_estimate_tokens_matches_spec() -> None:
     assert estimate_tokens("a" * 400) == 100
 
 
+def test_estimate_tokens_matches_spec() -> None:
+    assert estimate_tokens("") == 0
+    assert estimate_tokens("abcd") == 1
+    assert estimate_tokens("a" * 400) == 100
+
+
+def test_estimate_tokens_counts_cjk_realistically() -> None:
+    """CJK is ~1-2 tokens per character on e5, not one quarter (P1-9)."""
+    # 纯中文：约 1.25 token/字，绝不再是 len//4
+    assert estimate_tokens("低功耗静态随机存取存储器" * 10) == 150  # 120 chars
+    # 混合文本 = 两个部分之和
+    mixed = "a" * 40 + "存储器" * 8  # 40 latin + 24 cjk -> 10 + 30
+    assert estimate_tokens(mixed) == 40
+
+
 def test_chunk_dataclass_defaults() -> None:
     chunk = Chunk(chunk_index=0, text="hello", page_start=1, page_end=1)
     assert chunk.token_count == 0

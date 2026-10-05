@@ -1244,13 +1244,13 @@ def _index_rows(
     reindexed (or ``scripts/refresh_index_metadata.py`` rewrites the snapshot).
     """
     authors = paper_service.paper_author_names(paper)
-    tags = [
-        link.tag.name
-        for link in getattr(paper, "tag_links", [])
-        if getattr(link, "tag", None) is not None
-    ]
-    venue = paper.venue.name if paper.venue is not None else None
+    # venue/tags come from the snapshot (normalized keys, review P1-8) so this
+    # path and scripts/refresh_index_metadata.py write the very same values --
+    # the docstring below promised exactly that; the inline copies used to
+    # diverge (display names here, normalized keys on refresh).
     metadata = snapshot.paper_metadata_snapshot(paper)
+    venue = metadata.get("venue")
+    tags = metadata.get("tags") or []
     documents: list[dict] = []
     for row, vector in zip(rows, vectors):
         document: dict = {

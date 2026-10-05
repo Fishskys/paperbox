@@ -227,7 +227,7 @@ def test_the_vector_field_is_still_a_dense_knn_vector() -> None:
 def test_index_rows_carry_the_metadata_snapshot(factory) -> None:  # noqa: F811
     paper_id, chunk_id = make_paper(factory)
     row = index_rows(factory, paper_id, chunk_id)[0]
-    assert row["venue"] == "ISSCC"
+    assert row["venue"] == "isscc"
     assert row["venue_year"] == 2021
     assert row["paper_type"] == "conference"
     assert row["volume"] == "64"
@@ -243,12 +243,12 @@ def test_index_rows_carry_the_metadata_snapshot(factory) -> None:  # noqa: F811
 def test_index_rows_keep_tag_kinds_apart_and_the_flat_union(factory) -> None:  # noqa: F811
     paper_id, chunk_id = make_paper(factory)
     row = index_rows(factory, paper_id, chunk_id)[0]
-    assert row["ieee_terms"] == ["Low Power SRAM"]
+    assert row["ieee_terms"] == ["low power sram"]
     assert row["source_tags"] == ["nlp"]
     assert row["author_terms"] == []
     assert row["dynamic_index_terms"] == []
     # The flat list keeps working for callers that do not care about the kind.
-    assert sorted(row["tags"]) == ["Low Power SRAM", "nlp"]
+    assert sorted(row["tags"]) == ["low power sram", "nlp"]
 
 
 def test_index_rows_survive_a_paper_without_metadata(factory) -> None:  # noqa: F811

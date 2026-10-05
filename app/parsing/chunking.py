@@ -102,11 +102,42 @@ _ABBREVIATIONS = frozenset(
 
 
 
+#: CJK characters cost far more than one quarter token on the multilingual e5
+#: tokenizer (~1-2 tokens per character); counting them at 0.25 systematically
+#: underestimated Chinese chunks by >=4x, so their embeddings were silently
+#: truncated at the 512-token model limit (review 2026-10-05, P1-9). The middle
+#: of the review's 1.0-1.5 band is used; Latin text keeps the historical 4:1.
+_CJK_TOKENS_PER_CHAR = 1.25
+_CJK_RANGES = (
+    (0x3040, 0x30FF),  # hiragana / katakana
+    (0x3400, 0x4DBF),  # CJK unified ideographs, extension A
+    (0x4E00, 0x9FFF),  # CJK unified ideographs
+    (0xAC00, 0xD7AF),  # hangul syllables
+    (0xF900, 0xFAFF),  # CJK compatibility ideographs
+    (0xFF00, 0xFFEF),  # fullwidth forms / CJK punctuation
+    (0x20000, 0x2FA1F),  # CJK extensions B..F
+)
+
+
+def _is_cjk(character: str) -> bool:
+    code = ord(character)
+    return any(low <= code <= high for low, high in _CJK_RANGES)
+
+
 def estimate_tokens(text: str) -> int:
-    """Estimate tokens as ``max(1, len(text) // 4)`` (MVP-SPEC section 6)."""
+    """Estimate e5 tokens, CJK-aware (review 2026-10-05, P1-9).
+
+    Latin-ish text keeps the historical ``len(text) // 4``; CJK characters
+    count at :data:`_CJK_TOKENS_PER_CHAR` each. A mixed string is the sum of
+    both parts, so a Chinese-dominant chunk now budgets realistically and the
+    chunker keeps it under the model's 512-token input limit.
+    """
     if not text:
         return 0
-    return max(1, len(text) // CHARS_PER_TOKEN)
+    cjk = sum(1 for character in text if _is_cjk(character))
+    other = len(text) - cjk
+    estimated = other / CHARS_PER_TOKEN + cjk * _CJK_TOKENS_PER_CHAR
+    return max(1, int(estimated))
 
 
 def _tokens_to_chars(tokens: int) -> int:
