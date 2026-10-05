@@ -499,6 +499,15 @@ def _run_pipeline(
         if resolution.decision == paper_service.PRIMARY_ACTION_NON_PRIMARY:
             _finish_non_primary(session, job, paper, resolution.previous_status)
             return
+        # Checkpoint (review 2026-10-05, P1-3): when this PDF joined an existing
+        # paper -- shell reuse or another version -- ``adopt_paper`` already
+        # moved the stored object in MinIO, an irreversible copy+delete, while
+        # the PG repoint was only flushed. A crash before the next stage commit
+        # left PG pointing at the old key with the bytes at the new one and the
+        # job permanently stuck (staging is gone; retry re-reads the old key).
+        # Committing pins the adopted state the moment it exists; the residual
+        # window is the move itself, which no ordering can make transactional.
+        session.commit()
 
     _reset_placeholder_title(session, paper, job)
     _backfill_metadata(session, paper, pages, data, filename=_source_filename(paper, job, file_record))
@@ -553,6 +562,12 @@ def _run_pipeline(
     )
     if not chunks:
         raise ingest.IngestionError("parsing produced no chunks")
+    # Snapshot the previous generation before it is deleted (review 2026-10-05,
+    # P1-4): once ``_advance_stage`` commits below, a failure in embedding or
+    # indexing would leave the new PG rows committed while the index still held
+    # the previous generation's documents -- evidence referencing chunk ids
+    # that no longer exist. The failure path restores the snapshot instead.
+    previous_chunks = _snapshot_chunks(session, paper)
     rows = _replace_chunks(session, paper, chunks)
     # The chunks just written are the artefact this stage is judged on: any
     # degradation it did not report this time is no longer true of them.
@@ -560,24 +575,33 @@ def _run_pipeline(
 
     _advance_stage(session, job, STAGE_EMBEDDING, PROGRESS_EMBEDDING)
 
-    vectors = embedding_service.embed_texts([chunk.text for chunk in chunks])
-    if len(vectors) != len(rows):
-        raise ingest.IngestionError(
-            f"embedding count mismatch: {len(vectors)} vectors for {len(rows)} chunks"
-        )
-    now = datetime.now(timezone.utc)
-    _write_embeddings(session, paper, rows, vectors, now)
+    try:
+        vectors = embedding_service.embed_texts([chunk.text for chunk in chunks])
+        if len(vectors) != len(rows):
+            raise ingest.IngestionError(
+                f"embedding count mismatch: {len(vectors)} vectors for {len(rows)} chunks"
+            )
+        now = datetime.now(timezone.utc)
+        _write_embeddings(session, paper, rows, vectors, now)
 
-    _advance_stage(session, job, STAGE_INDEXING, PROGRESS_INDEXING)
+        _advance_stage(session, job, STAGE_INDEXING, PROGRESS_INDEXING)
 
-    opensearch.ensure_index()
-    opensearch.delete_by_paper_id(paper.id)
-    rows_out = _index_rows(paper, rows, vectors)
-    result = opensearch.bulk_index_chunks(rows_out, refresh=True)
-    if result["failed"]:
-        raise ingest.IngestionError(
-            f"opensearch rejected {result['failed']} chunk documents"
-        )
+        opensearch.ensure_index()
+        opensearch.delete_by_paper_id(paper.id)
+        rows_out = _index_rows(paper, rows, vectors)
+        result = opensearch.bulk_index_chunks(rows_out, refresh=True)
+        if result["failed"]:
+            raise ingest.IngestionError(
+                f"opensearch rejected {result['failed']} chunk documents"
+            )
+    except Exception:
+        # Compensate back to the previous consistent state (PG rows restored,
+        # this paper's index documents cleared) before the failure is recorded;
+        # a retry then starts from a clean, old-generation baseline. Vectors
+        # are not stored in PostgreSQL, so "old index state" is unrecoverable
+        # by design -- the paper simply reads as unindexed until the retry.
+        _restore_chunks(session, paper, previous_chunks)
+        raise
     _mark_indexed(session, paper, rows, now)
 
     job.stage = ingest.STAGE_COMPLETED
@@ -1100,6 +1124,76 @@ def _replace_chunks(session: Session, paper: Paper, chunks) -> list[PaperChunk]:
         rows.append(row)
     session.flush()
     return rows
+
+
+#: Columns copied by :func:`_snapshot_chunks` / restored by :func:`_restore_chunks`.
+_CHUNK_SNAPSHOT_COLUMNS = (
+    "id",
+    "paper_id",
+    "chunk_index",
+    "page_start",
+    "page_end",
+    "section",
+    "subsection",
+    "text",
+    "token_count",
+    "char_count",
+    "embedding_model",
+    "embedding_dimension",
+    "embedded_at",
+    "indexed_at",
+    "doc_metadata",
+    "deleted_at",
+)
+
+
+def _snapshot_chunks(session: Session, paper: Paper) -> list[dict]:
+    """Plain-dict copies of the paper's current chunk rows (review P1-4).
+
+    Taken *before* ``_replace_chunks`` deletes them: the failure path of the
+    embedding/indexing stages re-inserts these to return PostgreSQL to the last
+    consistent state. Vectors live in OpenSearch only, so the snapshot cannot
+    restore the old index contents -- the restore reads as "unindexed" and the
+    retry re-embeds.
+    """
+    rows = (
+        session.execute(select(PaperChunk).where(PaperChunk.paper_id == paper.id))
+        .scalars()
+        .all()
+    )
+    return [{column: getattr(row, column) for column in _CHUNK_SNAPSHOT_COLUMNS} for row in rows]
+
+
+def _restore_chunks(session: Session, paper: Paper, snapshot: list[dict]) -> None:
+    """Best-effort return PostgreSQL to the pre-replace chunk state.
+
+    Runs in the failure path of embedding/indexing: the new generation is
+    removed, the snapshot re-inserted, committed, and the paper's index
+    documents cleared (a partial bulk may have written some). It never raises
+    -- the original failure must reach the caller unmasked -- but a broken
+    restore is logged loudly: it is the difference between "retry from a clean
+    old baseline" and "evidence referencing dead chunk ids".
+    """
+    try:
+        session.query(PaperChunk).filter(PaperChunk.paper_id == paper.id).delete(
+            synchronize_session=False
+        )
+        for data in snapshot:
+            session.add(PaperChunk(**data))
+        session.commit()
+        opensearch.delete_by_paper_id(paper.id)
+        logger.warning(
+            "reindex failure compensated: previous chunk generation restored",
+            extra={
+                "extra_fields": {"paper_id": paper.id, "chunks_restored": len(snapshot)}
+            },
+        )
+    except Exception:  # noqa: BLE001 - never mask the original failure
+        session.rollback()
+        logger.exception(
+            "reindex compensation failed: PG/index may be left drifted",
+            extra={"extra_fields": {"paper_id": paper.id}},
+        )
 
 
 def _write_embeddings(

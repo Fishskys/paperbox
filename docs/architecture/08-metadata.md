@@ -280,9 +280,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ### 4.5 摄取链：PDF → 归属哪篇论文 → 主版本 → 元数据回填
 
-1. `_run_pipeline`（`tasks.py:446`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`（`:744`）。
-2. `_match_existing_paper`（`:793`）：先读 PDF 内嵌元数据（Info / XMP）匹配，失败再跑首页启发式匹配；命中已有论文（含壳）→ `metadata_shell.adopt_paper`，把 `reused_paper_id` / `match_method` 写进 `job.payload`。
-3. `apply_primary_selection`（`paper_service.py:476`）判主版本；非主版本立刻 `_finish_non_primary`（`tasks.py:863`）结束。
+1. `_run_pipeline`（`tasks.py:446`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`（`:768`）。
+2. `_match_existing_paper`（`:817`）：先读 PDF 内嵌元数据（Info / XMP）匹配，失败再跑首页启发式匹配；命中已有论文（含壳）→ `metadata_shell.adopt_paper`，把 `reused_paper_id` / `match_method` 写进 `job.payload`。
+3. `apply_primary_selection`（`paper_service.py:476`）判主版本；非主版本立刻 `_finish_non_primary`（`tasks.py:887`）结束。
 4. 主版本继续：`_reset_placeholder_title`（`:866`）→ `_backfill_metadata`（`:869`）→ `_restore_placeholder_title`（`:859`）→ 指纹升级（`sha256` 撞车则丢弃本次论文）→ 切块 → 嵌入 → `delete_by_paper_id` + `bulk_index_chunks` → `INDEXED`。
 5. `_backfill_metadata` 按层写声明：第 1 层 `pdf_embedded`（结构化，confidence 1.0）→ 第 2 层 `pdf_heuristic`（confidence 0.5），每层各自 `upsert_source` 后 `merge_values`。
 
@@ -330,7 +330,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 - **索引快照**：`app/search/snapshot.py::paper_metadata_snapshot`（`:74`）把当前值写成 chunk 文档上的可过滤字段
   （`venue`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers`/四个 tag kind），INDEXING 阶段由
-  `_index_rows`（`tasks.py:1141`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`
+  `_index_rows`（`tasks.py:1235`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`
   （重算向量，≈1 chunk/s），要么 `uv run python scripts/refresh_index_metadata.py`（只改快照、秒级；2026-09-22
   真机 2883 文档全部更新、0 失败）。
 - **读接口**：`PaperOut`（`app/schemas/paper.py:24`）直接输出当前值列 `volume/issue/pages/publication_date/

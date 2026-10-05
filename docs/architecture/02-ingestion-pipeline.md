@@ -130,7 +130,7 @@
 
 **B. 流水线本体（`tasks.py:141 run_ingestion_job` → `210 _process_job` → `443 _run_pipeline`）**
 
-> INDEXING 阶段的 chunk 文档由 `_index_rows`（`tasks.py:1141`）构造；其中**元数据部分**来自
+> INDEXING 阶段的 chunk 文档由 `_index_rows`（`tasks.py:1235`）构造；其中**元数据部分**来自
 > `app/search/snapshot.py::paper_metadata_snapshot`（单一来源，`scripts/refresh_index_metadata.py` 复用同一函数）。
 
 1. `run_ingestion_job`：`SessionLocal()` → `ingest.get_job` → `_process_job`；异常路径 `session.rollback()` → `_record_failure`（L146-152）。
@@ -161,16 +161,16 @@ STORED(30)   直接赋值 + commit（不经过 _advance_stage） tasks.py:276-28
    v
 PARSING(45)   _advance_stage     tasks.py:482
    v
-CHUNKING(60)  _advance_stage     tasks.py:518
+CHUNKING(60)  _advance_stage     tasks.py:527
    v
-EMBEDDING(80) _advance_stage     tasks.py:561
+EMBEDDING(80) _advance_stage     tasks.py:576
    v
-INDEXING(95)  _advance_stage     tasks.py:543
+INDEXING(95)  _advance_stage     tasks.py:552
    v
-COMPLETED(100) 直接赋值 + commit tasks.py:550-555 → 轮询终止
+COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
 ```
 
-旁路终态（均为 `COMPLETED`，不经过后半段）：判重命中（`ingestion_service.py:328-348`）、解析后指纹冲突弃单（`tasks.py:690-725`）、非主版本（`tasks.py:831-859`）。唯一真失败的终态是 `FAILED`（`ingestion_service.py:364`），另外两条写入路径是 `recover_jobs` 的 `INTERRUPTED`（L452-458）和 `run_reindex_job` 的"无 paper_id"（`tasks.py:130`）。
+旁路终态（均为 `COMPLETED`，不经过后半段）：判重命中（`ingestion_service.py:328-348`）、解析后指纹冲突弃单（`tasks.py:714-749`）、非主版本（`tasks.py:855-883`）。唯一真失败的终态是 `FAILED`（`ingestion_service.py:364`），另外两条写入路径是 `recover_jobs` 的 `INTERRUPTED`（L452-458）和 `run_reindex_job` 的"无 paper_id"（`tasks.py:130`）。
 
 | 不变量 / 坑 | 代码证据 |
 |---|---|
@@ -185,7 +185,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:550-555 → 轮询终止
 | **`prepare_retry` 的 `rowcount == 1` 是重试并发闸门**：双击/并发调用只有一个能把作业翻出 `FAILED`，不会起两个 worker | `ingestion_service.py:384-400`；测试 `tests/test_job_retry.py:82-90` |
 | **`enqueue` 幂等**：已在 `_pending` 或 `_running` 中则返回 `False` 且不重复入队 | `queue.py:186-188`；测试 `tests/test_ingest_queue.py:167-189` |
 | **队列未启动时内联执行**（一次性脚本、单测），返回值 `False`；"绝不静默丢活" | `queue.py:195-200`、`340-346`；测试 `tests/test_ingest_queue.py:149-157` |
-| **重试路由看 `paper_id`，不看 `stage`**。`STORED` 之后失败必有 `paper_id`，故能复用 MinIO 原文与论文行 | `tasks.py:182-191`；测试 `tests/test_job_retry.py:114-175` |
+| **重试路由看 `paper_id`，不看 `stage`**。`STORED` 之后失败必有 `paper_id`，故能复用 MinIO 原文与论文行 | `tasks.py:182-191`；测试 `tests/test_job_retry.py:114-252` |
 | **`dedupe=False` 只用于 reindex**。若 reindex 也做指纹弃单，会把自己（已索引的存活论文）连 chunk 带索引文档一起清掉 | `tasks.py:114` 与 `_run_pipeline` docstring L452-466；`_upgrade_fingerprint` 的 `discard_on_conflict` L572-588、L601-608；测试 `tests/test_fingerprint_priority.py:338` |
 | `dedupe=False` 还顺带跳过 `_resolve_target_paper`（条件是 `dedupe and file_record is not None`，reindex 两者都不满足）→ reindex 不会走非主版本分支 | `tasks.py:482-482`；`reindex_paper` 未传 `file_record`（L111） |
 | **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:453-455` |
@@ -235,6 +235,6 @@ COMPLETED(100) 直接赋值 + commit tasks.py:550-555 → 轮询终止
 - **`progress` 的粒度**：`STORED → PARSING` 之间（下载+解析）没有中间反馈，大 PDF 会长时间停在 30/45；`PARSING` 内部无进度。
 - **`stage` 无枚举约束**：DB 层 `String(32)` 无 CHECK，写错值不会被拦住。`app/db/models.py:453-455`。
 - **阶段常量重复定义**：`tasks.py:56-63` 与 `ingestion_service.py:33-64` 各有一套 `DOWNLOADING`/`STORED` 常量（值相同、互不引用），后续改动有漏改风险。
-- **`payload.indexed` / `payload.reason` 不上 API**：非主版本作业只在 `payload` 里留痕，`serialize_job` 不暴露，客户端只能看到 `COMPLETED`。`tasks.py:839-842`、`ingestion_service.py:294-307`。
+- **`payload.indexed` / `payload.reason` 不上 API**：非主版本作业只在 `payload` 里留痕，`serialize_job` 不暴露，客户端只能看到 `COMPLETED`。`tasks.py:863-866`、`ingestion_service.py:294-307`。
 - **队列统计不做持久化**：`stats()` 是内存快照，重启后归零，没有历史/告警。`queue.py:274-291`。
 - **housekeeping 只删文件、不改作业状态**（明确的设计约束）：孤儿与终态作业的 staging 都删，`live` 的定义是 `finished_at IS NULL 且 stage 不在 (COMPLETED, FAILED)`。**例外（2026-09-22 修）**：`STORED` 之前失败（`stage=FAILED` 且 `paper_id IS NULL`）的行，其 staging 字节自 `finished_at` 起保留 `STAGING_RETRY_GRACE_HOURS=72` 小时——重试要重读 `payload["object_key"]`，原先 GC 在下一轮（默认 300s）就删掉，使上一行的"必须保留"落空（重启后留下的 `INTERRUPTED` 作业正是这种状态）。`housekeeping.py:193-277`（`run_gc`）、`:145`（`live`）、`:148`（`retryable`）、`:178-191`（`_keeps_staging`）；测试 `tests/test_upload_gc.py`（保留 / 超期回收 / 只有 FAILED 享受宽限三条）。

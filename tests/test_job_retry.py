@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.db.models import IngestionJob, Paper, new_uuid
+from app.db.models import IngestionJob, Paper, PaperChunk, new_uuid
 from app.search import opensearch
 from app.services import ingestion_service as ingest
 from app.services import paper_service
@@ -150,6 +150,83 @@ def test_retry_of_a_failing_pipeline_fails_again(factory, stubbed_pipeline, monk
     assert row.error_code == "INDEX_FAILED"
     assert "index still down" in row.error_message
     assert _get_paper_status(factory, paper_id) == paper_service.STATUS_FAILED
+
+
+def test_embedding_failure_restores_previous_chunks(factory, stubbed_pipeline, monkeypatch):
+    """P1-4: a failure after the chunk replacement must not leave the new chunk
+    generation committed while the index still holds the old one — the previous
+    generation is restored and the paper's index documents are cleared, so the
+    retry starts from a clean old-generation baseline."""
+    monkeypatch.setattr(tasks, "SessionLocal", factory)
+    paper_id = make_paper(factory)
+    job_id = make_job(factory, paper_id)
+    _fail_job(factory, job_id)
+
+    old_id = new_uuid()
+    session = factory()
+    try:
+        session.add(
+            PaperChunk(id=old_id, paper_id=paper_id, chunk_index=0, text="old text")
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    monkeypatch.setattr(
+        tasks.embedding_service, "embed_texts", lambda _texts: (_ for _ in ()).throw(
+            RuntimeError("embedding server down")
+        )
+    )
+
+    assert ingest.prepare_retry(factory(), job_id) is not None
+    tasks.run_retry_job(job_id)
+
+    assert read_stage(factory, job_id)[0] == "FAILED"
+    session = factory()
+    try:
+        rows = session.query(PaperChunk).filter_by(paper_id=paper_id).all()
+        assert [row.id for row in rows] == [old_id]
+        assert rows[0].text == "old text"
+        assert rows[0].embedded_at is None, "the restored generation was never embedded"
+    finally:
+        session.close()
+
+
+def test_index_failure_also_restores_previous_chunks(factory, stubbed_pipeline, monkeypatch):
+    """Same compensation for a failure that happens after the embeddings were
+    written: the snapshot restore wins over the partially written state."""
+    monkeypatch.setattr(tasks, "SessionLocal", factory)
+    paper_id = make_paper(factory)
+    job_id = make_job(factory, paper_id)
+    _fail_job(factory, job_id)
+
+    old_id = new_uuid()
+    session = factory()
+    try:
+        session.add(
+            PaperChunk(id=old_id, paper_id=paper_id, chunk_index=0, text="old text")
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    def explode_bulk(_rows, refresh=True):
+        raise opensearch.SearchIndexError("bulk rejected every document")
+
+    monkeypatch.setattr(tasks.opensearch, "bulk_index_chunks", explode_bulk)
+
+    assert ingest.prepare_retry(factory(), job_id) is not None
+    tasks.run_retry_job(job_id)
+
+    assert read_stage(factory, job_id)[0] == "FAILED"
+    row = _get_job_row(factory, job_id)
+    assert row.error_code == "INDEX_FAILED"
+    session = factory()
+    try:
+        rows = session.query(PaperChunk).filter_by(paper_id=paper_id).all()
+        assert [row_.id for row_ in rows] == [old_id]
+    finally:
+        session.close()
 
 
 def test_retry_reingests_when_nothing_was_stored(factory, stubbed_pipeline, monkeypatch):
