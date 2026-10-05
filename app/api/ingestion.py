@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import settings
 from app.core.errors import classify_failure
 from app.core.logging import get_logger
-from app.core.security import require_api_key
+from app.core.security import require_write
 from app.db.session import get_db
 from app.schemas.ingestion import (
     STATUS_ACCEPTED,
@@ -60,7 +60,7 @@ logger = get_logger(__name__)
 router = APIRouter(
     prefix="/api/papers",
     tags=["ingestion"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_write)],
 )
 
 

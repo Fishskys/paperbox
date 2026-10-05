@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import __version__
 from app.api import ingestion as ingestion_api
@@ -29,25 +30,60 @@ from app.api import search_logs as search_logs_api
 from app.core.config import settings
 from app.core.logging import (
     REQUEST_ID_HEADER,
+    bind_key_prefix,
     bind_request_id,
     configure_logging,
     get_logger,
 )
+from app.db.session import SessionLocal
+from app.services import api_key_service
+from app.services.api_key_service import AuthIdentity
 from app.workers import housekeeping
 from mcp.server import MCPServer
 
 from app.mcp.auth import McpAuthMiddleware, warn_about_shared_keys
 from app.mcp.server import McpMountPathMiddleware
 from app.mcp.server import build_server, build_streamable_http_app
+from app.core.security import extract_api_key
 from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
+
+#: Hosts where an unauthenticated API is still "local" enough not to warn about.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging(settings.log_level)
     logger.info("paperbox %s starting (env=%s)", __version__, settings.app_env)
+    # Auth bootstrap runs before the queue starts: with AUTH_ENABLED=true a
+    # failure must stop the process while no worker thread exists yet.
+    api_key_service.startup_bootstrap()
+    if settings.auth_enabled:
+        session = SessionLocal()
+        try:
+            usable_keys = api_key_service.live_key_count(session)
+        finally:
+            session.close()
+        if usable_keys == 0:
+            raise RuntimeError(
+                "AUTH_ENABLED=true but no API key exists: the environment "
+                "bootstrap found none and the api_keys table is empty. Create "
+                "one with scripts/manage_keys.py create"
+            )
+    else:
+        if settings.paper_api_host not in _LOOPBACK_HOSTS:
+            logger.warning(
+                "auth is disabled and the API listens on %s — every /api and /mcp "
+                "request is served as an anonymous admin",
+                settings.paper_api_host,
+            )
+        if not (settings.mcp_download_secret or settings.paper_api_key):
+            logger.warning(
+                "no download-signing secret (set MCP_DOWNLOAD_SECRET or "
+                "PAPER_API_KEY): signed download links will fail at creation"
+            )
     # The ingestion queue owns every pipeline run: start the workers, then
     # reconcile whatever a previous process left behind (re-queue jobs that never
     # started, fail the ones that were mid-pipeline with INTERRUPTED).
@@ -97,6 +133,48 @@ async def request_id_middleware(
 app.add_middleware(McpAuthMiddleware)
 # Serving /mcp without a trailing slash is in-process, not a 307 (see the class).
 app.add_middleware(McpMountPathMiddleware)
+
+
+class AuthContextMiddleware:
+    """Resolve the caller's key once per ``/api`` request; publish it twice.
+
+    Pure ASGI and *silent* — it never rejects (the role dependencies do that).
+    It exists because (a) the log prefix must be bound in async context: a
+    threadpool dependency cannot propagate a contextvar back to the request's
+    logging context, and (b) the database probe must happen exactly once, not
+    once per dependency. ``/mcp`` has its own middleware with the same rules
+    (:mod:`app.mcp.auth`); ``AUTH_ENABLED=false`` resolves everyone to the
+    anonymous admin identity without touching the database.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not str(scope.get("path", "")).startswith("/api"):
+            await self.app(scope, receive, send)
+            return
+        token = extract_api_key(Request(scope))
+        identity: AuthIdentity | None = None
+        if not settings.auth_enabled:
+            identity = api_key_service.anonymous()
+        elif token:
+            session = SessionLocal()
+            try:
+                identity = api_key_service.authenticate(session, token)
+            finally:
+                session.close()
+        state = scope.setdefault("state", {})
+        state["auth_identity"] = identity
+        state["auth_token_present"] = bool(token)
+        if identity is not None:
+            bind_key_prefix(identity.prefix)
+        await self.app(scope, receive, send)
+
+
+# Outermost: every /api request gets its identity resolved (and its log prefix
+# bound) before any dependency or handler runs.
+app.add_middleware(AuthContextMiddleware)
 
 app.include_router(health_api.router)
 app.include_router(consistency_api.router)

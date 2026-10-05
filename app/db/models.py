@@ -795,6 +795,9 @@ class SearchQuery(Base):
     returned: Mapped[int] = mapped_column(Integer, nullable=False)
     took_ms: Mapped[int | None] = mapped_column(Integer)
     results: Mapped[list | None] = mapped_column(JSONB)
+    #: Which credential asked for this search — the key's readable prefix, never
+    #: the full key (plan: api-auth-keys-roles §7.6). ``NULL`` on pre-2026-10 rows.
+    key_prefix: Mapped[str | None] = mapped_column(String(16))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -804,7 +807,49 @@ class SearchQuery(Base):
         return f"<SearchQuery id={self.id} mode={self.mode} query={self.query!r}>"
 
 
+# --------------------------------------------------------------------------- #
+# api_keys (plan: 2026-10-05_145619-api-auth-keys-roles)
+# --------------------------------------------------------------------------- #
+class ApiKey(TimestampMixin, Base):
+    """One distributable credential for the REST and MCP surfaces.
+
+    Only the ``sha256`` of the full key is stored — the secret itself exists
+    exactly once, printed by ``scripts/manage_keys.py create``. ``prefix`` is the
+    public half (it appears in every log line for attribution), so it carries its
+    own unique constraint; ``key_hash`` is what authentication looks up.
+    ``source='env'`` rows are the bootstrap admins derived from
+    ``PAPER_API_KEY``/``PAPER_API_KEYS``: they are re-synced from the environment
+    on every startup and cannot be revoked while the environment references them.
+    """
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_api_keys_name"),
+        UniqueConstraint("prefix", name="uq_api_keys_prefix"),
+        UniqueConstraint("key_hash", name="uq_api_keys_key_hash"),
+        CheckConstraint(
+            "role IN ('read', 'write', 'admin')", name="ck_api_keys_role"
+        ),
+        CheckConstraint("source IN ('env', 'db')", name="ck_api_keys_source"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=new_uuid
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<ApiKey prefix={self.prefix} role={self.role} source={self.source}>"
+
+
 __all__ = [
+    "ApiKey",
     "Base",
     "Author",
     "IngestionJob",

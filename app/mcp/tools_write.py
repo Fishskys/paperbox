@@ -49,6 +49,7 @@ from app.services import (
     net_guard,
     paper_service,
 )
+from app.services.api_key_service import ROLE_ADMIN, ROLE_WRITE, role_at_least
 
 #: Switch that must be on for every writing tool (contract section 1.1).
 MASTER_SWITCH = "MCP_WRITE_ENABLED"
@@ -93,6 +94,19 @@ def require(variable: str, tool: str) -> None:
     """
     if not enabled(variable):
         raise errors.write_disabled(variable, tool)
+
+
+def require_role(tool: str, minimum: str) -> None:
+    """Call-time tier check (plan §4.3): the key's role must reach ``minimum``.
+
+    Registration cannot do this -- which tools a key may call depends on the
+    key, not the build. With ``AUTH_ENABLED=false`` every caller is the
+    anonymous admin, so the switch gates (``require`` above) remain the only
+    guards, exactly as before.
+    """
+    identity = auth.current_identity()
+    if identity is None or not role_at_least(identity.role, minimum):
+        raise errors.forbidden_role(tool, minimum)
 
 
 def _meta(tool: str, took_ms: int) -> ToolMeta:
@@ -194,6 +208,7 @@ def register(server: MCPServer) -> None:
         dry_run: bool = False,
     ) -> Envelope[ImportPreviewData | JobRefData]:
         started = time.perf_counter()
+        require_role("paper_import", ROLE_WRITE)
         if not settings.mcp_write_enabled:
             raise errors.write_disabled(MASTER_SWITCH, "paper_import")
         known = settings.mcp_wait_seconds if wait_seconds is None else wait_seconds
@@ -313,6 +328,7 @@ def register(server: MCPServer) -> None:
         ) -> Envelope[ReindexPreviewData | JobRefData]:
             started = time.perf_counter()
             require(ALLOW_REINDEX, "paper_reindex")
+            require_role("paper_reindex", ROLE_WRITE)
             bound = jobs.check_wait(
                 settings.mcp_wait_seconds if wait_seconds is None else wait_seconds
             )
@@ -398,6 +414,7 @@ def register(server: MCPServer) -> None:
         async def paper_delete(paper_id: str, dry_run: bool = True) -> Envelope[DeletePreviewData]:
             started = time.perf_counter()
             require(ALLOW_DELETE, "paper_delete")
+            require_role("paper_delete", ROLE_ADMIN)
             with _Session() as session:
                 paper = _load_live_paper(session, paper_id)
                 preview = paper_service.delete_preview(session, paper)
@@ -462,6 +479,7 @@ def register(server: MCPServer) -> None:
         ) -> Envelope[MetadataPatchData]:
             started = time.perf_counter()
             require(ALLOW_METADATA, "paper_update_metadata")
+            require_role("paper_update_metadata", ROLE_WRITE)
             payload = fields.model_dump(exclude_unset=True)
             if not payload:
                 raise errors.invalid_argument("fields must contain at least one key")

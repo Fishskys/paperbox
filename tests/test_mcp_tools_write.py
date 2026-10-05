@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
 from app.core.config import settings
+from app.mcp import auth as mcp_auth
 from app.mcp import jobs
 from app.mcp import server as mcp_server_module
 from app.mcp import tools_write
@@ -63,6 +64,10 @@ def mounted(*, write: bool, delete: bool = False, reindex: bool = False, metadat
             yield
 
     app.router.lifespan_context = lifespan
+    # Production composition: the auth middleware wraps the mount and publishes
+    # the identity (anonymous admin while AUTH_ENABLED is off) that require_role
+    # in the writing tools reads.
+    app.add_middleware(mcp_auth.McpAuthMiddleware)
     app.mount("/mcp", build_streamable_http_app(server))
     try:
         with TestClient(app) as client:

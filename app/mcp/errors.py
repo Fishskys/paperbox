@@ -114,6 +114,20 @@ def write_disabled(variable: str, tool: str) -> ToolFailure:
     )
 
 
+def forbidden_role(tool: str, minimum: str) -> ToolFailure:
+    """The key authenticated, but its role tier is too low for this tool.
+
+    Distinct from a 403 at the transport (unknown key): the credential is fine,
+    it just may not touch this tool (plan: 2026-10-05_145619-api-auth-keys-roles
+    §4.3).
+    """
+    return ToolFailure(
+        code=FORBIDDEN,
+        message=f"the presenting key has an insufficient role for {tool}",
+        hint=f"ask the operator for a key with {minimum!r} role or higher",
+    )
+
+
 def not_found(what: str, value: str) -> ToolFailure:
     return ToolFailure(code=NOT_FOUND, message=f"{what} {value!r} does not exist")
 
