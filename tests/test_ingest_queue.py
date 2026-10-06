@@ -300,6 +300,11 @@ def test_queue_recover_enqueues_the_waiting_jobs(factory, monkeypatch):  # noqa:
     stats = asyncio.run(_main())
 
     assert stats["queued_job_ids"] == [waiting]
+    # Recovered jobs queue as BATCH (review 2026-10-05, P2-6a): the original
+    # interactive/batch decision died with the request, and a restart is an
+    # operator event -- recovered work must not jump the queue.
+    assert stats.get("queued_high", 0) == 0
+    assert stats.get("queued_low", 0) == 1
 
 
 def test_interrupted_is_a_known_failure_code():

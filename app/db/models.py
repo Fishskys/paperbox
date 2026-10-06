@@ -172,7 +172,15 @@ class Paper(TimestampMixin, Base):
         back_populates="paper", cascade="all, delete-orphan"
     )
     ingestion_jobs: Mapped[list["IngestionJob"]] = relationship(
-        back_populates="paper", cascade="all, delete-orphan"
+        back_populates="paper",
+        # No ``delete-orphan`` on purpose (review 2026-10-05, P2-3): the FK is
+        # ``ON DELETE SET NULL`` -- a job must survive its paper (it is the
+        # only handle ``GET /api/jobs/{id}`` has). The ORM cascade used to
+        # delete the very rows the database would have kept, so an ORM-level
+        # paper delete and a SQL-level one disagreed. The shell-adopt path
+        # re-points jobs explicitly before deleting the temporary paper; every
+        # other delete goes through the purge script (bulk, no ORM cascade).
+        cascade="save-update, merge",
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper

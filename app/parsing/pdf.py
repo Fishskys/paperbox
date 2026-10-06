@@ -288,6 +288,12 @@ def _xmp_packet(xmp) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
         raw = xmp.stream.get_data()
     except Exception:  # noqa: BLE001 - no stream, nothing to read
         return {}, {}
+    if raw and b"<!DOCTYPE" in bytes(raw[:2048]).upper():
+        # XMP packets never carry a DTD; entity declarations are the
+        # billion-laughs vector and xml.etree cannot disable them
+        # (review 2026-10-05, P2-19). Refuse before parsing.
+        logger.debug("refusing an XMP packet that carries a DTD")
+        return {}, {}
     try:
         root = ElementTree.fromstring(raw)
     except Exception as exc:  # noqa: BLE001 - malformed packet

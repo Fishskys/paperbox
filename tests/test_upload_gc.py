@@ -28,8 +28,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.db.models import IngestionJob, new_uuid
+from app.db.models import IngestionJob, PaperFile, new_uuid
 from app.workers import housekeeping
+from tests.test_job_progress import make_paper  # noqa: F401 - fixture
 from tests.test_local_source import factory  # noqa: F401 - fixture
 
 
@@ -113,13 +114,26 @@ def run(session_factory, storage, tmp_dir, **kwargs):
 # --------------------------------------------------------------------------- #
 # staging objects
 # --------------------------------------------------------------------------- #
+def _any_paper_id(factory) -> str:
+    session = factory()
+    try:
+        from app.db.models import Paper
+
+        return session.query(Paper).first().id
+    finally:
+        session.close()
+
+
 def test_orphan_staging_object_is_removed(factory, tmp_path):  # noqa: F811
     storage = FakeStorage(["uploads/req1/1-a.pdf", "papers/x/original.pdf"])
 
     report = run(factory, storage, tmp_path)
 
     assert report.orphan_staging == ["uploads/req1/1-a.pdf"]
-    assert storage.deleted == ["uploads/req1/1-a.pdf"]
+    # "papers/x/original.pdf" has no paper_files row either: the P2-20 section
+    # collects it as an orphan original.
+    assert storage.deleted == ["uploads/req1/1-a.pdf", "papers/x/original.pdf"]
+    assert report.orphan_originals == ["papers/x/original.pdf"]
     assert report.stale_staging == []
 
 
@@ -392,6 +406,7 @@ def test_report_serializes_for_logging(factory, tmp_path):  # noqa: F811
         "removed": 1,
         "orphan_staging": 1,
         "stale_staging": 0,
+        "orphan_originals": 0,
         "expired_dirs": 0,
         "expired_archives": 0,
         "errors": 0,
@@ -467,3 +482,50 @@ def test_collect_once_delegates_to_run_gc(factory, tmp_path):  # noqa: F811
 
     assert isinstance(report, housekeeping.GcReport)
     assert report.removed == 0
+
+# --------------------------------------------------------------------------- #
+# orphan original PDFs (review 2026-10-05, P2-20)
+# --------------------------------------------------------------------------- #
+def test_an_owned_original_is_never_collected(factory, tmp_path):  # noqa: F811
+    """A stored file row owns its object, whatever the paper's delete state."""
+    paper_id = make_paper(factory)  # also creates the stored-file record
+    session = factory()
+    try:
+        object_key = (
+            session.query(PaperFile.object_key)
+            .filter(PaperFile.paper_id == paper_id)
+            .first()[0]
+        )
+    finally:
+        session.close()
+    storage = FakeStorage([object_key])
+
+    report = run(factory, storage, tmp_path)
+
+    assert report.orphan_originals == []
+    assert storage.deleted == []
+
+
+def test_an_unowned_old_original_is_collected(factory, tmp_path):  # noqa: F811
+    storage = FakeStorage(["papers/orphan-id/original.pdf"])
+    storage.last_modified = {
+        "papers/orphan-id/original.pdf": datetime.now(timezone.utc) - timedelta(hours=48)
+    }
+
+    report = run(factory, storage, tmp_path)
+
+    assert report.orphan_originals == ["papers/orphan-id/original.pdf"]
+    assert storage.deleted == ["papers/orphan-id/original.pdf"]
+
+
+def test_a_fresh_unowned_original_is_spared(factory, tmp_path):  # noqa: F811
+    """The object may predate its own paper_files row's commit (TOCTOU)."""
+    storage = FakeStorage(["papers/fresh-id/original.pdf"])
+    storage.last_modified = {
+        "papers/fresh-id/original.pdf": datetime.now(timezone.utc)
+    }
+
+    report = run(factory, storage, tmp_path)
+
+    assert report.orphan_originals == []
+    assert storage.deleted == []

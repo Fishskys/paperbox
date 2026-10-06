@@ -213,7 +213,10 @@ async def run_search(request: SearchRequest) -> SearchResponse:
         facets=outcome.facets,
         took_ms=took_ms,
     )
-    log_search(
+    # The logging write commits on its own session -- on the event loop that
+    # commit blocked every concurrent request (review 2026-10-05, P2-10).
+    await asyncio.to_thread(
+        log_search,
         request=request,
         filters=filters,
         candidates=outcome.candidates,

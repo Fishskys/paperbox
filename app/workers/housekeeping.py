@@ -31,6 +31,7 @@ documented retry of a pre-``STORED`` failure impossible -- a restart left behind
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 from collections.abc import Callable, Iterable
 from contextlib import suppress
@@ -65,6 +66,11 @@ STAGING_RETRY_GRACE_HOURS = 72
 #: hours above.
 STAGING_MIN_AGE_SECONDS = 600
 
+#: How old an unowned ``papers/<id>/original.pdf`` object must be before the
+#: collector deletes it (review 2026-10-05, P2-20). A code constant on purpose,
+#: like the other housekeeping policies above.
+ORIGINAL_ORPHAN_MIN_AGE_SECONDS = 24 * 3600
+
 
 @dataclass
 class GcReport:
@@ -72,6 +78,7 @@ class GcReport:
 
     orphan_staging: list[str] = field(default_factory=list)
     stale_staging: list[str] = field(default_factory=list)
+    orphan_originals: list[str] = field(default_factory=list)
     expired_dirs: list[str] = field(default_factory=list)
     expired_archives: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -81,6 +88,7 @@ class GcReport:
         return (
             len(self.orphan_staging)
             + len(self.stale_staging)
+            + len(self.orphan_originals)
             + len(self.expired_dirs)
             + len(self.expired_archives)
         )
@@ -90,6 +98,7 @@ class GcReport:
             "removed": self.removed,
             "orphan_staging": len(self.orphan_staging),
             "stale_staging": len(self.stale_staging),
+            "orphan_originals": len(self.orphan_originals),
             "expired_dirs": len(self.expired_dirs),
             "expired_archives": len(self.expired_archives),
             "errors": len(self.errors),
@@ -250,6 +259,17 @@ def run_gc(
         owners = [ref for ref in refs if ref.local_path and _is_under(ref.local_path, str(directory))]
         if any(owner.live for owner in owners):
             continue
+        if any(
+            owner.retryable
+            and owner.finished_at is not None
+            and _aware(owner.finished_at) > moment - timedelta(hours=STAGING_RETRY_GRACE_HOURS)
+            for owner in owners
+        ):
+            # A retryable job may still re-read the unpacked files: the same
+            # 72h grace the staging bytes get, instead of the plain 24h TTL
+            # that made late retries fail with LocalSourceUnavailable
+            # (review 2026-10-05, P2-11).
+            continue
         if _mtime(directory) > cutoff:
             continue  # give the jobs a grace period to finish
         archive_service.cleanup_dir(directory)
@@ -269,6 +289,48 @@ def run_gc(
         archive_service.remove_file(entry)
         report.expired_archives.append(str(entry))
 
+    # ---- 4: orphan original PDFs (review 2026-10-05, P2-20) -------------- #
+    # A crash between the MinIO upload and the PG commit leaves
+    # ``papers/<uuid>/original.pdf`` with no paper row (and every retry makes a
+    # NEW id, so the old object never comes back into use). Ownership is judged
+    # against ALL paper_files rows -- a soft-deleted paper keeps its object
+    # deliberately -- and the same freshness guard as staging applies: the
+    # object may predate its own row's commit.
+    try:
+        owned = load_owned_object_keys(session_factory)
+    except Exception as exc:  # noqa: BLE001 - the collector never raises
+        logger.warning("housekeeping could not read paper_files: %s", exc)
+        report.errors.append(f"paper_files: {type(exc).__name__}: {exc}")
+        owned = None
+    if owned is not None:
+        try:
+            originals = [
+                (obj.object_name, obj.last_modified)
+                for obj in storage.list_objects(
+                    prefix=f"{object_storage.ORIGINAL_PREFIX}/"
+                )
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("housekeeping could not list originals: %s", exc)
+            report.errors.append(f"list originals: {type(exc).__name__}: {exc}")
+            originals = []
+        original_shape = re.compile(
+            rf"^{re.escape(object_storage.ORIGINAL_PREFIX)}/[^/]+/"
+            rf"{re.escape(object_storage.ORIGINAL_FILENAME)}$"
+        )
+        for key, last_modified in originals:
+            if not original_shape.fullmatch(key):
+                continue  # extracted/ cache and other shapes are not ours
+            if key in owned:
+                continue
+            if last_modified is not None and _aware(last_modified) > moment - timedelta(
+                seconds=ORIGINAL_ORPHAN_MIN_AGE_SECONDS
+            ):
+                continue
+            if not _delete(storage, key, report):
+                continue
+            report.orphan_originals.append(key)
+
     logger.info(
         "housekeeping pass finished",
         extra={"extra_fields": report.as_dict()},
@@ -284,6 +346,23 @@ def _delete(storage, key: str, report: GcReport) -> bool:
         report.errors.append(f"delete {key}: {type(exc).__name__}: {exc}")
         return False
     return True
+
+
+def load_owned_object_keys(session_factory: Callable[[], object]) -> set[str]:
+    """Every ``object_key`` any ``paper_files`` row holds (any delete state).
+
+    A soft-deleted paper keeps its stored object on purpose (that is what makes
+    a hard purge possible and a restore conceivable), so ownership here is not
+    restricted to live papers.
+    """
+    from app.db.models import PaperFile
+
+    session = session_factory()
+    try:
+        rows = session.execute(select(PaperFile.object_key)).all()
+        return {row[0] for row in rows if row[0]}
+    finally:
+        session.close()
 
 
 def _mtime(path: Path) -> datetime:

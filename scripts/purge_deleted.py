@@ -37,6 +37,7 @@ from app.db.models import (  # noqa: E402
     Paper,
     PaperAuthor,
     PaperChunk,
+    PaperDegradation,
     PaperFieldProvenance,
     PaperFile,
     PaperIdentifier,
@@ -56,6 +57,7 @@ HARD_PURGE_MODELS: tuple[type, ...] = (
     PaperAuthor,
     PapersTag,
     PaperSource,
+    PaperDegradation,
     IngestionJob,
 )
 

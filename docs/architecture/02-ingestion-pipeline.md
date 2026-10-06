@@ -121,16 +121,16 @@
 
 **A. 新建作业（以 `/ingest/files` 单文件为例）**
 
-1. `api/ingestion.py:262 ingest_files` → `stage_and_queue`（L133）。
+1. `api/ingestion.py:281 ingest_files` → `stage_and_queue`（L133）。
 2. `stage_and_queue`：`is_pdf`/`ensure_size`（L154-157）→ `_stage_upload` 落 staging 并算 sha256（L161-165）→ `find_existing_paper` 判重（L171，命中则 `_discard_staging` 立即删 staging 并 `resolve_duplicate` 返回 `duplicate`）→ `create_job(source_type="file", payload={"object_key": ...})`（L193-200）→ `session.commit()`（L201）。
 3. `job_queue.submit(session, job.id, KIND_INGEST, priority)`（L207）。
 4. `queue.py:218 submit` → `ingest.mark_queued`（L230）：`UPDATE ... WHERE stage IN ('RECEIVED','QUEUED')` + `commit`（`ingestion_service.py` L411-422）→ `enqueue`（L234）。
 5. `queue.py:165 enqueue`：去重检查（L186-188）→ 取 `seq`（L192-193）→ 同线程直接 `_hand_off`，跨线程 `loop.call_soon_threadsafe`（L202-207）→ `PriorityQueue.put_nowait`（L338）。
-6. `queue.py:296 _worker` 取到元组 → `asyncio.to_thread(runner, job_id)`（L318），runner 来自 `DEFAULT_RUNNERS`（L63-67）。
+6. `queue.py:301 _worker` 取到元组 → `asyncio.to_thread(runner, job_id)`（L318），runner 来自 `DEFAULT_RUNNERS`（L63-67）。
 
 **B. 流水线本体（`tasks.py:141 run_ingestion_job` → `210 _process_job` → `443 _run_pipeline`）**
 
-> INDEXING 阶段的 chunk 文档由 `_index_rows`（`tasks.py:1235`）构造；其中**元数据部分**来自
+> INDEXING 阶段的 chunk 文档由 `_index_rows`（`tasks.py:1253`）构造；其中**元数据部分**来自
 > `app/search/snapshot.py::paper_metadata_snapshot`（单一来源，`scripts/refresh_index_metadata.py` 复用同一函数）。
 
 1. `run_ingestion_job`：`SessionLocal()` → `ingest.get_job` → `_process_job`；异常路径 `session.rollback()` → `_record_failure`（L146-152）。
@@ -139,7 +139,7 @@
 
 **C. 重试**：`api/jobs.py:44 retry_job` → `prepare_retry`（`FAILED → RECEIVED`，`rowcount` 闸门）→ `job_queue.submit(..., KIND_RETRY)`（L71）→ `tasks.run_retry_job`（L167）：读 `job.paper_id` 有值 → `run_reindex_job`；无值 → `run_ingestion_job`。
 **D. 重建索引**：`api/papers.py:296` → `create_job(source_type="reindex")` + `job.paper_id = paper.id`（L290-299）→ `submit(..., KIND_REINDEX)`（L300）→ `run_reindex_job` → `reindex_paper` → `_run_pipeline(..., dedupe=False)`（`tasks.py` L111）。
-**E. 重启恢复**：`main.py:48-52` → `job_queue.start()` → `job_queue.recover()`（`queue.py` L240）→ `ingest.recover_jobs`（L426-462）→ 重入队 / 标 `INTERRUPTED` → `housekeeping.start()`（启动即跑一次）。
+**E. 重启恢复**：`main.py:49-53` → `job_queue.start()` → `job_queue.recover()`（`queue.py` L240）→ `ingest.recover_jobs`（L426-462）→ 重入队 / 标 `INTERRUPTED` → `housekeeping.start()`（启动即跑一次）。
 
 ## 5. 不变量与踩过的坑
 
@@ -156,30 +156,30 @@ QUEUED(0) --------------------------------------------------------+
 DOWNLOADING(10)  _advance_stage，commit   tasks.py:229-231         |
    |                                                              |
    v                                                              |
-STORED(30)   直接赋值 + commit（不经过 _advance_stage） tasks.py:276-283
+STORED(30)   直接赋值 + commit（不经过 _advance_stage） tasks.py:294-301
    |
    v
-PARSING(45)   _advance_stage     tasks.py:482
+PARSING(45)   _advance_stage     tasks.py:500
    v
-CHUNKING(60)  _advance_stage     tasks.py:527
+CHUNKING(60)  _advance_stage     tasks.py:545
    v
-EMBEDDING(80) _advance_stage     tasks.py:576
+EMBEDDING(80) _advance_stage     tasks.py:594
    v
-INDEXING(95)  _advance_stage     tasks.py:552
+INDEXING(95)  _advance_stage     tasks.py:570
    v
-COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
+COMPLETED(100) 直接赋值 + commit tasks.py:577-582 → 轮询终止
 ```
 
-旁路终态（均为 `COMPLETED`，不经过后半段）：判重命中（`ingestion_service.py:328-348`）、解析后指纹冲突弃单（`tasks.py:714-749`）、非主版本（`tasks.py:855-883`）。唯一真失败的终态是 `FAILED`（`ingestion_service.py:364`），另外两条写入路径是 `recover_jobs` 的 `INTERRUPTED`（L452-458）和 `run_reindex_job` 的"无 paper_id"（`tasks.py:130`）。
+旁路终态（均为 `COMPLETED`，不经过后半段）：判重命中（`ingestion_service.py:328-348`）、解析后指纹冲突弃单（`tasks.py:732-767`）、非主版本（`tasks.py:873-901`）。唯一真失败的终态是 `FAILED`（`ingestion_service.py:364`），另外两条写入路径是 `recover_jobs` 的 `INTERRUPTED`（L452-458）和 `run_reindex_job` 的"无 paper_id"（`tasks.py:130`）。
 
 | 不变量 / 坑 | 代码证据 |
 |---|---|
 | **每个阶段边界必须 `commit`，不能只 `flush`**。否则轮询（另一个 session/连接）在整个流水线期间只能看到 `RECEIVED` 和最终值 | `_advance_stage` 的 docstring 与实现 L191-207；回归测试 `tests/test_job_progress.py:259`（独立 session 读到的中间态）、`:333`（引擎日志里每阶段一个 `COMMIT`）、`:392` |
-| **但钩子覆盖不到 `DOWNLOADING` 之外的两处**：`STORED` 和 `COMPLETED` 是"直接赋值 + `session.commit()`"，不经 `_advance_stage`，因此 `stage_commit_hook` 只看到 4 个阶段（PARSING/CHUNKING/EMBEDDING/INDEXING） | `tasks.py:276-283`、`532-536` 对比 `226-228`；断言见 `tests/test_job_progress.py:318-323` |
+| **但钩子覆盖不到 `DOWNLOADING` 之外的两处**：`STORED` 和 `COMPLETED` 是"直接赋值 + `session.commit()`"，不经 `_advance_stage`，因此 `stage_commit_hook` 只看到 4 个阶段（PARSING/CHUNKING/EMBEDDING/INDEXING） | `tasks.py:294-301`、`532-536` 对比 `226-228`；断言见 `tests/test_job_progress.py:318-323` |
 | **`STORED` 是唯一分水岭**：之前失败 → `run_ingestion_job` 回滚，`paper_id` 为空、论文行与 `paper_files` 行都不落库，staging 对象**必须保留**（重试唯一的输入）；之后失败 → 论文行、原文对象已提交，staging 已删，重试走 reindex 语义 | `tasks.py:151-155`（回滚）、`273-280`（提交点）、`284`（提交后才删源）；测试 `tests/test_stored_cleanup.py:206-222`（STORAGE_FAILED 时 `deleted == []`）与 `:228-246`（STORED 后失败时 staging 已删、`paper_id` 仍在）；**兜底 GC 也遵守这条**：`STORED` 之前失败的行（`paper_id IS NULL`）其 staging 保留 `STAGING_RETRY_GRACE_HOURS=72` 小时（2026-09-22 修，见 §5） |
-| **删源一律在 `commit` 之后**。顺序颠倒会让失败的作业失去唯一输入 | `tasks.py:283`（commit）→ `284`（`_cleanup_source`） |
-| **判重命中立即删**，三处：流水线内判重、`/ingest/files` 暂存后判重、压缩包解包后判重。暂存副本唯一的用途（算 sha256）已经用完 | `tasks.py:247`；`api/ingestion.py:175-176`；`api/ingestion.py:716-717` |
-| `_cleanup_source` 只删两类东西：`payload["object_key"]`（staging）与 `cleanup_after=true` 的本地文件；其余本地文件（`/ingest/dir` 导入的原始 PDF）**永不删** | `tasks.py:403-421`、`346-372`；测试 `tests/test_local_source.py:195` |
+| **删源一律在 `commit` 之后**。顺序颠倒会让失败的作业失去唯一输入 | `tasks.py:301`（commit）→ `284`（`_cleanup_source`） |
+| **判重命中立即删**，三处：流水线内判重、`/ingest/files` 暂存后判重、压缩包解包后判重。暂存副本唯一的用途（算 sha256）已经用完 | `tasks.py:247`；`api/ingestion.py:179`；`api/ingestion.py:744-745` |
+| `_cleanup_source` 只删两类东西：`payload["object_key"]`（staging）与 `cleanup_after=true` 的本地文件；其余本地文件（`/ingest/dir` 导入的原始 PDF）**永不删** | `tasks.py:421-439`、`346-372`；测试 `tests/test_local_source.py:195` |
 | **`mark_failed` 的 docstring 与代码不符**：docstring（L359-363）称"`stage`/`progress` 保留失败发生的阶段"，代码 L364 实际把 `stage` 写成 `FAILED`，只有 `progress` 保留 | 代码 `ingestion_service.py:364`；测试 `tests/test_job_progress.py:447-449`（`stage == "FAILED"` 且 `progress == PROGRESS_EMBEDDING`）。`README.md:299` 的同一说法同样不准 → 以代码为准 |
 | **`mark_queued` 是单向闸门**：只接受 `RECEIVED`/`QUEUED`，运行中的作业绝不会被倒回 `QUEUED` | `ingestion_service.py:411-418`；测试 `tests/test_ingest_queue.py:214-227` |
 | **`prepare_retry` 的 `rowcount == 1` 是重试并发闸门**：双击/并发调用只有一个能把作业翻出 `FAILED`，不会起两个 worker | `ingestion_service.py:384-400`；测试 `tests/test_job_retry.py:82-90` |
@@ -187,8 +187,8 @@ COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
 | **队列未启动时内联执行**（一次性脚本、单测），返回值 `False`；"绝不静默丢活" | `queue.py:195-200`、`340-346`；测试 `tests/test_ingest_queue.py:149-157` |
 | **重试路由看 `paper_id`，不看 `stage`**。`STORED` 之后失败必有 `paper_id`，故能复用 MinIO 原文与论文行 | `tasks.py:182-191`；测试 `tests/test_job_retry.py:114-252` |
 | **`dedupe=False` 只用于 reindex**。若 reindex 也做指纹弃单，会把自己（已索引的存活论文）连 chunk 带索引文档一起清掉 | `tasks.py:114` 与 `_run_pipeline` docstring L452-466；`_upgrade_fingerprint` 的 `discard_on_conflict` L572-588、L601-608；测试 `tests/test_fingerprint_priority.py:338` |
-| `dedupe=False` 还顺带跳过 `_resolve_target_paper`（条件是 `dedupe and file_record is not None`，reindex 两者都不满足）→ reindex 不会走非主版本分支 | `tasks.py:482-482`；`reindex_paper` 未传 `file_record`（L111） |
-| **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:453-455` |
+| `dedupe=False` 还顺带跳过 `_resolve_target_paper`（条件是 `dedupe and file_record is not None`，reindex 两者都不满足）→ reindex 不会走非主版本分支 | `tasks.py:500-500`；`reindex_paper` 未传 `file_record`（L111） |
+| **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:461-463` |
 | **同名常量两处定义**：`tasks.py:56-63` 定义了自己的 `STAGE_DOWNLOADING`/`STAGE_STORED`/`PROGRESS_DOWNLOADING`/`PROGRESS_STORED`，但这两阶段实际用的是 `ingest.*`（L227、L274-275）；两处值相同，暂无行为差异，但改一处会漏另一处 | `tasks.py:56-63` vs `226-228`、`273-275` |
 | 队列是**进程内**的：只有 `--workers 1` 的前提下成立 | `queue.py:20-24`；`README.md:135-137` |
 | `stop()` 不会杀线程里的流水线；该作业行停在中间态，下次启动被 `recover` 标 `INTERRUPTED` | `queue.py:139-154` |
@@ -202,14 +202,14 @@ COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
 | `INGEST_MAX_FILE_MB` | 100 | 单文件上限；`max_file_bytes()` 换算 | `config.py:134` → `ingestion_service.py:115-117`、`138-144` |
 | `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途**上传请求**数上限（`429 + Retry-After: 2`） | `config.py:146` → `upload_admission.py:71-79` |
 | `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 处理积压达到该深度时**只拒多文件**请求；0 关闭 | `config.py:150-152` → `upload_admission.py:128-136` |
-| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数（超出 `422`） | `config.py:154-156` → `api/ingestion.py:286-294` |
-| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节（超出 `413`） | `config.py:158` → `api/ingestion.py:296-309` |
+| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数（超出 `422`） | `config.py:154-156` → `api/ingestion.py:305-313` |
+| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节（超出 `413`） | `config.py:158` → `api/ingestion.py:315-328` |
 | `INGEST_LOCAL_ROOTS` | `""` | `/ingest/dir` 白名单；空 = 端点 404 | `config.py:164` |
 | `INGEST_ARCHIVE_*` | `500 MB` / `2000` / `5000 MB` / `100` / `""` / `24h` | zip 大小、条目数、解压总量、压缩比、解包目录、TTL | `config.py:168-180` |
-| `INGEST_GC_INTERVAL_S` | 300 | housekeeping 周期；启动另跑一次 | `config.py:184` → `housekeeping.py:324`、`:353-364`、`main.py:52` |
-| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `BAAI/bge-m3` / 1024 | 写入 chunk 行、论文行与索引文档 | `config.py:76-77` → `tasks.py:279-280`、`959-960`、`1025-1026` |
+| `INGEST_GC_INTERVAL_S` | 300 | housekeeping 周期；启动另跑一次 | `config.py:184` → `housekeeping.py:403`、`:353-364`、`main.py:53` |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `BAAI/bge-m3` / 1024 | 写入 chunk 行、论文行与索引文档 | `config.py:76-77` → `tasks.py:297-298`、`959-960`、`1025-1026` |
 
-优先级阈值（`1 文件=交互、≥2=批`）**没有配置项**，是入口函数里的硬编码判断：`api/ingestion.py:311-314`（files）、`475-479`（dir）、`657-661`（compressed）、`539`（单文件固定交互）。重试与 reindex 共用同一个 `INGEST_CONCURRENCY` 上限，重试走 `KIND_RETRY`（`api/jobs.py:71`），reindex 走 `KIND_REINDEX`，优先级取默认值 `PRIORITY_INTERACTIVE`（`queue.py:59`）。
+优先级阈值（`1 文件=交互、≥2=批`）**没有配置项**，是入口函数里的硬编码判断：`api/ingestion.py:330-333`（files）、`475-479`（dir）、`657-661`（compressed）、`539`（单文件固定交互）。重试与 reindex 共用同一个 `INGEST_CONCURRENCY` 上限，重试走 `KIND_RETRY`（`api/jobs.py:71`），reindex 走 `KIND_REINDEX`，优先级取默认值 `PRIORITY_INTERACTIVE`（`queue.py:59`）。
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 
@@ -233,8 +233,8 @@ COMPLETED(100) 直接赋值 + commit tasks.py:559-564 → 轮询终止
 - **`run_reindex_job` 的"无 paper_id"失败不带错误码**：`mark_failed` 未传 `code`，于是 `stage=FAILED` 而 `error_code=NULL`，与其它失败不一致。`tasks.py:129-132`。
 - **没有取消接口**：`QUEUED` 作业无法取消，只能在跑完后删除论文；本文未发现相关端点或测试（未确认是否有意为之）。
 - **`progress` 的粒度**：`STORED → PARSING` 之间（下载+解析）没有中间反馈，大 PDF 会长时间停在 30/45；`PARSING` 内部无进度。
-- **`stage` 无枚举约束**：DB 层 `String(32)` 无 CHECK，写错值不会被拦住。`app/db/models.py:453-455`。
+- **`stage` 无枚举约束**：DB 层 `String(32)` 无 CHECK，写错值不会被拦住。`app/db/models.py:461-463`。
 - **阶段常量重复定义**：`tasks.py:56-63` 与 `ingestion_service.py:33-64` 各有一套 `DOWNLOADING`/`STORED` 常量（值相同、互不引用），后续改动有漏改风险。
-- **`payload.indexed` / `payload.reason` 不上 API**：非主版本作业只在 `payload` 里留痕，`serialize_job` 不暴露，客户端只能看到 `COMPLETED`。`tasks.py:863-866`、`ingestion_service.py:294-307`。
-- **队列统计不做持久化**：`stats()` 是内存快照，重启后归零，没有历史/告警。`queue.py:274-291`。
-- **housekeeping 只删文件、不改作业状态**（明确的设计约束）：孤儿与终态作业的 staging 都删，`live` 的定义是 `finished_at IS NULL 且 stage 不在 (COMPLETED, FAILED)`。**例外（2026-09-22 修）**：`STORED` 之前失败（`stage=FAILED` 且 `paper_id IS NULL`）的行，其 staging 字节自 `finished_at` 起保留 `STAGING_RETRY_GRACE_HOURS=72` 小时——重试要重读 `payload["object_key"]`，原先 GC 在下一轮（默认 300s）就删掉，使上一行的"必须保留"落空（重启后留下的 `INTERRUPTED` 作业正是这种状态）。`housekeeping.py:193-277`（`run_gc`）、`:145`（`live`）、`:148`（`retryable`）、`:178-191`（`_keeps_staging`）；测试 `tests/test_upload_gc.py`（保留 / 超期回收 / 只有 FAILED 享受宽限三条）。
+- **`payload.indexed` / `payload.reason` 不上 API**：非主版本作业只在 `payload` 里留痕，`serialize_job` 不暴露，客户端只能看到 `COMPLETED`。`tasks.py:881-884`、`ingestion_service.py:294-307`。
+- **队列统计不做持久化**：`stats()` 是内存快照，重启后归零，没有历史/告警。`queue.py:279-296`。
+- **housekeeping 只删文件、不改作业状态**（明确的设计约束）：孤儿与终态作业的 staging 都删，`live` 的定义是 `finished_at IS NULL 且 stage 不在 (COMPLETED, FAILED)`。**例外（2026-09-22 修）**：`STORED` 之前失败（`stage=FAILED` 且 `paper_id IS NULL`）的行，其 staging 字节自 `finished_at` 起保留 `STAGING_RETRY_GRACE_HOURS=72` 小时——重试要重读 `payload["object_key"]`，原先 GC 在下一轮（默认 300s）就删掉，使上一行的"必须保留"落空（重启后留下的 `INTERRUPTED` 作业正是这种状态）。`housekeeping.py:202-339`（`run_gc`）、`:154`（`live`）、`:157`（`retryable`）、`:187-200`（`_keeps_staging`）；测试 `tests/test_upload_gc.py`（保留 / 超期回收 / 只有 FAILED 享受宽限三条）。

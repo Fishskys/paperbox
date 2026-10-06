@@ -270,8 +270,15 @@ def _parse_with_docling(
     wall_s = round(time.perf_counter() - started, 4)
 
     prepared = markdown_dialect.prepare_docling_markdown(result.markdown)
-    marker_count, spans = markdown_dialect.page_spans_from_markdown(prepared)
-    page_count = max(marker_count or result.page_count, 0)
+    marker_pages, spans = markdown_dialect.page_spans_from_markdown(prepared)
+    # ``page_spans_from_markdown`` returns >= 1 for any non-empty markdown, so
+    # the old ``marker_pages or result.page_count`` never let docling's own
+    # page count through (review 2026-10-05, P2-5): a document whose page
+    # markers were dropped came out as one giant "page 1". The marker
+    # structure is authoritative only when it actually shows pages; a single
+    # span defers to the backend's own count.
+    page_count = marker_pages if marker_pages > 1 else (result.page_count or marker_pages)
+    page_count = max(page_count, 0)
 
     timings: dict[str, float] = {"docling_s": wall_s}
     if result.processing_time is not None:

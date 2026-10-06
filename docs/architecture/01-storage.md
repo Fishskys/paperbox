@@ -31,7 +31,7 @@
 | | `Paper` …`SearchQuery` 14 个类 | 14 张表定义，见第 3 节 |
 | `app/db/session.py` | `get_engine` | 懒建引擎，`pool_pre_ping=True, pool_size=5, max_overflow=10, pool_recycle=1800`（:22-34） |
 | | `session_scope` / `get_db` | 脚本事务上下文（:56-67）/ FastAPI 请求级依赖（:70-76） |
-| `migrations/env.py` | `get_url` / `include_object` | DSN 只来自 `settings.database_url`（:31-37）；`include_object` 恒返回 True（:40-42） |
+| `migrations/env.py` | `get_url` / `include_object` | DSN 只来自 `settings.database_url`（:31）；`include_object` 恒返回 True（:43-45） |
 | `app/search/mappings.py` | `build_mapping` | 返回 chunk 索引的 settings+mappings（:104-174），`dynamic: "strict"` |
 | `app/search/opensearch.py` | `ensure_index` | 幂等建索引并把别名指过去（:69-110） |
 | | `build_alias_swap_body` / `alias_swap_is_safe` | 原子换别名（带 `is_write_index`，:122-133）；只在两侧文档数相等时允许切换（:136-138） |
@@ -40,15 +40,15 @@
 | `app/services/object_storage.py` | `build_object_key` / `build_staging_key` | `papers/<id>/original.pdf`（:109-111）/ `uploads/<req>/<i>-<name>.pdf`（:262-273） |
 | | `upload_stream_hashed` / `_HashingReader` | 边传边算 SHA256，不二次读流（:276-326、:72-106） |
 | | `delete_prefix` / `move_object` / `safe_filename` | 按前缀删（:426-434）/ 重定位对象（:389-423）/ 净化文件名（:245-259） |
-| `app/services/paper_service.py` | `soft_delete_paper` | 标记论文与文件删除，并物理删除 `paper_identifiers`（:657-679） |
+| `app/services/paper_service.py` | `soft_delete_paper` | 标记论文与文件删除，并物理删除 `paper_identifiers`（:670-692） |
 | `app/services/archive_service.py` | `extraction_root` / `archive_path` | `<tmp>/paperbox-<request_id>/` 与 `<tmp>/paperbox-<request_id>.zip`（:132-140） |
-| `app/workers/tasks.py` | `_store_source` / `_cleanup_source` / `remove_local_file` | 落到 `papers/<id>/original.pdf`（:378-400）；STORED 后删 staging 与解包文件（:403-421）；删文件并修剪空目录（:424-442） |
-| `app/workers/housekeeping.py` | `run_gc` | 回收孤儿/过期 staging 与超过 TTL 的解包目录（:146-222） |
+| `app/workers/tasks.py` | `_store_source` / `_cleanup_source` / `remove_local_file` | 落到 `papers/<id>/original.pdf`（:396-418）；STORED 后删 staging 与解包文件（:421-439）；删文件并修剪空目录（:442-460） |
+| `app/workers/housekeeping.py` | `run_gc` | 回收孤儿/过期 staging 与超过 TTL 的解包目录（:155-231） |
 | `scripts/create_index.py` | `verify` / `wait_for_task` / `migrate` | 幂等建索引并报告（:91-118）／轮询 `GET _tasks/<id>`（:120-142）／`_reindex` 后原子切别名（:145-247） |
 
 ## 3. 数据结构（表/字段/索引）
 
-`models.py` 文档字符串写的是"9 + 4 = 13 张"（`app/db/models.py:3-14`），实际定义 **14** 张：第 14 张是后加的 `search_queries`（`app/db/models.py:763-804`）。下表按 14 张全列。
+`models.py` 文档字符串写的是"9 + 4 = 13 张"（`app/db/models.py:3-14`），实际定义 **14** 张：第 14 张是后加的 `search_queries`（`app/db/models.py:771-812`）。下表按 14 张全列。
 
 | 表 | 列（类型 / 可空 / 默认） | 索引与约束 |
 |---|---|---|
@@ -71,10 +71,10 @@
 
 | 索引（定义处） | 谓词 | 不变量 |
 |---|---|---|
-| `uq_papers_fingerprint_live`（`app/db/models.py:88-93`；迁移 `7359b44a3938:24-25`） | `WHERE deleted_at IS NULL` | 只有"活"论文占用指纹；删除后释放，同一文档可重新导入（`app/services/paper_service.py:657-671` 只置 `deleted_at`，行保留供审计） |
-| `uq_paper_identifiers_scheme_value`（`models.py:544-550`；迁移 `7a2f4c9d51be:107-113`） | `WHERE paper_id IS NOT NULL` | 一个 `(scheme, normalized_value)` 至多属于一篇论文，两个来源引用同一 DOI 不会落成两行。**注意谓词实际恒真**：`paper_id` 列本身 `NOT NULL`（`models.py:557-559`、迁移 `:80`），所以它等价于全表唯一；删除论文时 `paper_identifiers` 行被物理删除以释放 DOI（`paper_service.py:675-677`） |
-| `uq_paper_field_provenance_current`（`models.py:598-604`；迁移 `7a2f4c9d51be:152-158`） | `WHERE is_current` | 每个 `(paper_id, field)` 只有一条 current 记录；历史行 `is_current=false` 可无限追加，这是回滚能力的基础（`models.py:589-594`） |
-| `uq_paper_files_primary`（`models.py:333-338`；迁移 `7a2f4c9d51be:214-220`） | `WHERE is_primary AND deleted_at IS NULL` | 每篇活论文至多一个主版本文件（唯一键只有 `paper_id`，谓词已含 `is_primary`）；"至少一个"不受约束，实际允许 0 个 |
+| `uq_papers_fingerprint_live`（`app/db/models.py:88-93`；迁移 `7359b44a3938:24-25`） | `WHERE deleted_at IS NULL` | 只有"活"论文占用指纹；删除后释放，同一文档可重新导入（`app/services/paper_service.py:670-684` 只置 `deleted_at`，行保留供审计） |
+| `uq_paper_identifiers_scheme_value`（`models.py:552-558`；迁移 `7a2f4c9d51be:107-113`） | `WHERE paper_id IS NOT NULL` | 一个 `(scheme, normalized_value)` 至多属于一篇论文，两个来源引用同一 DOI 不会落成两行。**注意谓词实际恒真**：`paper_id` 列本身 `NOT NULL`（`models.py:565-567`、迁移 `:80`），所以它等价于全表唯一；删除论文时 `paper_identifiers` 行被物理删除以释放 DOI（`paper_service.py:688-690`） |
+| `uq_paper_field_provenance_current`（`models.py:606-612`；迁移 `7a2f4c9d51be:152-158`） | `WHERE is_current` | 每个 `(paper_id, field)` 只有一条 current 记录；历史行 `is_current=false` 可无限追加，这是回滚能力的基础（`models.py:597-602`） |
+| `uq_paper_files_primary`（`models.py:341-346`；迁移 `7a2f4c9d51be:214-220`） | `WHERE is_primary AND deleted_at IS NULL` | 每篇活论文至多一个主版本文件（唯一键只有 `paper_id`，谓词已含 `is_primary`）；"至少一个"不受约束，实际允许 0 个 |
 
 ### ER 关系图（FK 与删除行为）
 
@@ -97,7 +97,7 @@ venues ──CASCADE──> venue_editions
 ```
 
 - 论文之下**级联删除**（DB `ON DELETE CASCADE`，ORM 亦 `cascade="all, delete-orphan"`）：`paper_authors`、`papers_tags`、`paper_files`、`paper_chunks`、`paper_sources`、`paper_identifiers`、`paper_field_provenance`（`models.py:144-172`）。
-- `Paper.ingestion_jobs` 同样声明 `cascade="all, delete-orphan"`（`models.py:172-172`），但 FK 是 `ON DELETE SET NULL`（`models.py:438-440`）——两者语义不同：ORM 删除论文会删掉作业行，直接 SQL 删论文只会把 `ingestion_jobs.paper_id` 置空。
+- `Paper.ingestion_jobs` 同样声明 `cascade="all, delete-orphan"`（`models.py:172-172`），但 FK 是 `ON DELETE SET NULL`（`models.py:446-448`）——两者语义不同：ORM 删除论文会删掉作业行，直接 SQL 删论文只会把 `ingestion_jobs.paper_id` 置空。
 - 同理 `paper_files.source_id`、`paper_identifiers.first_source_id`、`paper_field_provenance.source_id/identifier_id` 都是 SET NULL：来源行消失不会连带删证据行。
 
 ## 4. 调用链（从入口到落地，逐跳，带函数名）
@@ -105,10 +105,10 @@ venues ──CASCADE──> venue_editions
 写入（上传一个 PDF）：
 
 1. `POST /api/papers/ingest/files` → `app/api/ingestion.py:161` `object_storage.build_staging_key(request_id, index, filename)` → `uploads/<req>/<i>-<name>.pdf`；
-2. `object_storage.upload_stream_hashed`（`:276-326`）经 `_HashingReader`（`:72-106`）落盘并得到 `sha256`，用于内容去重；
-3. worker `_store_source`（`app/workers/tasks.py:378-400`）→ `object_storage.build_object_key(paper_id)` → `papers/<paper_id>/original.pdf`；
-4. `paper_service.register_original_file`（`app/services/paper_service.py:614-654`）写 `paper_files` 行（`bucket`、`object_key`、`sha256`、`is_primary`）；
-5. `_cleanup_source`（`tasks.py:403-421`）删 staging 对象（失败交给 housekeeping），有 `cleanup_after` 时 `remove_local_file`（`:424-442`）删解包文件并修剪空目录；
+2. `object_storage.upload_stream_hashed`（`:295-345`）经 `_HashingReader`（`:72-106`）落盘并得到 `sha256`，用于内容去重；
+3. worker `_store_source`（`app/workers/tasks.py:396-418`）→ `object_storage.build_object_key(paper_id)` → `papers/<paper_id>/original.pdf`；
+4. `paper_service.register_original_file`（`app/services/paper_service.py:627-667`）写 `paper_files` 行（`bucket`、`object_key`、`sha256`、`is_primary`）；
+5. `_cleanup_source`（`tasks.py:421-439`）删 staging 对象（失败交给 housekeeping），有 `cleanup_after` 时 `remove_local_file`（`:442-460`）删解包文件并修剪空目录；
 6. 解析/embedding 后 `opensearch.bulk_index_chunks`（`app/search/opensearch.py:302-361`）写别名 `paper_chunks_current`，文档 `_id = chunk_id`。
 
 删除（`DELETE /api/papers/{id}`，`app/api/papers.py:302-342`）：
@@ -124,21 +124,21 @@ venues ──CASCADE──> venue_editions
 ## 5. 不变量与踩过的坑
 
 - 指纹优先序 `DOI > arXiv > 标题+首作者+年份 > sha256`（`app/services/paper_service.py:3-5`、`build_fingerprint:127-140`），指纹唯一性是**部分**索引，删除即释放（见第 3 节）。
-- `papers.status` 的 DB 默认值是小写 `'pending'`（`models.py:126-128`），而应用写的是大写常量 `STATUS_PENDING = "PENDING"`（`paper_service.py:41-45`），且筛选时 `.strip().upper()`（`:332`）——绕过 ORM 插入的行会是小写。
-- `ingestion_jobs.stage` 默认 `'received'`（`models.py:445-447`），而 housekeeping 用大写判断终态 `("COMPLETED","FAILED")`（`app/workers/housekeeping.py:145`）；`finished_at IS NULL` 才是"活着"的统一判据。
+- `papers.status` 的 DB 默认值是小写 `'pending'`（`models.py:126-128`），而应用写的是大写常量 `STATUS_PENDING = "PENDING"`（`paper_service.py:41-45`），且筛选时 `.strip().upper()`（`:340`）——绕过 ORM 插入的行会是小写。
+- `ingestion_jobs.stage` 默认 `'received'`（`models.py:453-455`），而 housekeeping 用大写判断终态 `("COMPLETED","FAILED")`（`app/workers/housekeeping.py:154`）；`finished_at IS NULL` 才是"活着"的统一判据。
 - `knn_vector` 映射无法原地修改：`ensure_index` 从不在已存在的索引上重写 mapping（`app/search/opensearch.py:69-82`），换分词器/维度只能新建索引 + `_reindex`（`scripts/create_index.py:1-27`）。
 - **但给活索引「加」新字段是允许的**：`opensearch.update_mapping()`（`opensearch.py:113`）走 `PUT _mapping`，只补 `build_mapping()` 里新增的 properties；存量文档用 `scripts/refresh_index_metadata.py`（→ `bulk_update_documents`，`opensearch.py:145`）批量 partial update，不重算向量。**必须赶在第一个带该字段的文档之前**，否则 `dynamic: true` 会先把它映成 `text`（`pages`/`paper_type` 这类要按 keyword 过滤的字段就废了）；改**已有**字段的类型仍然只能新建索引。
 - 别名切换有闸门：只有新旧索引文档数完全相等才允许切（`opensearch.py:231-233`，`create_index.py` 第 3 步），失败时不动别名。
 - 单节点 OpenSearch 无副本（`number_of_replicas: 0`，`mappings.py:160`）且安全插件关闭（`infra/docker-compose.yml:42`）。
 - MinIO 的 `move_object` 是"拷贝+删除"，best effort；失败时调用方保留旧 key，只有路径异常（`object_storage.py:389-423`）——shell 论文场景下意味着对象可能不在 `papers/<paper_id>/`，`delete_prefix` 会漏删。
-- 解包目录 TTL 24h、GC 每 300s 一次且启动即跑（`housekeeping.py:208`、`:248-266`、`:340-351`）；staging 对象只要被"活"作业引用就绝不删（`:240`）。
+- 解包目录 TTL 24h、GC 每 300s 一次且启动即跑（`housekeeping.py:217`、`:257-286`、`:419-430`）；staging 对象只要被"活"作业引用就绝不删（`:249`）。
 - `_HashingReader` 只拦截 `read`/`readinto`，其余属性透传（`object_storage.py:72-106`）。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处）
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `POSTGRES_DSN` | `postgresql+psycopg://postgres:postgres@localhost:5432/paperbox` | 唯一 DSN 来源，Alembic 也用它 | `app/core/config.py:50-53`；`migrations/env.py:31-37`；`alembic.ini:5-7` 留空 |
+| `POSTGRES_DSN` | `postgresql+psycopg://postgres:postgres@localhost:5432/paperbox` | 唯一 DSN 来源，Alembic 也用它 | `app/core/config.py:50-53`；`migrations/env.py:31`；`alembic.ini:5-7` 留空 |
 | 连接池 | `pool_size=5` / `max_overflow=10` / `pool_recycle=1800` / `pool_pre_ping=True` | 引擎行为（非环境变量） | `app/db/session.py:26-33` |
 | `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名 | `app/core/config.py:62`；`.env.example:17` 与实测 `.env` 均为 `paper_chunks_v3` |
 | `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名 | `app/core/config.py:63`；`app/search/opensearch.py:24-27` |
@@ -149,7 +149,7 @@ venues ──CASCADE──> venue_editions
 | `BULK_BATCH_SIZE` | `200` | 批量索引批大小 | `app/search/opensearch.py:30` |
 | `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:186`、`:250-254`；`.env.example:182` |
 | `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:188` |
-| `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:192`；`app/workers/housekeeping.py:340-351` |
+| `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:192`；`app/workers/housekeeping.py:419-430` |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:41` |
 | `OPENSEARCH_BACKUP_DIR` | `./data/opensearch-backups` | 快照仓库落点（挂到容器 `/mnt/backups`，与 `-Epath.repo` 成对） | `infra/docker-compose.yml:60-65`；`infra/.env:15` |
 | 快照策略 | `paperbox-daily`（`30 3 * * *` Asia/Shanghai，留 14 份/30 天） | SM 定时快照：`paper_chunks_*,search-relevance-*` | `scripts/setup_snapshots.py:41-56`；真机 `_plugins/_sm/policies` |

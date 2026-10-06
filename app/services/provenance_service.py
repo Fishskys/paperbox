@@ -477,7 +477,11 @@ def _restore_identifier(session: Session, paper: Paper, scheme: str, value: Any)
     """Rollback path for ``identifier:<scheme>``: re-point the mirror column."""
     attribute = "doi" if scheme == identifiers.SCHEME_DOI else "arxiv_id" if scheme == identifiers.SCHEME_ARXIV else None
     if attribute is not None and value:
-        setattr(paper, attribute, identifiers.normalize_identifier(scheme, str(value)))
+        normalized = identifiers.normalize_identifier(scheme, str(value))
+        # A historical claim value that no longer normalizes must not blank the
+        # mirror column (review 2026-10-05, P2-16): keep what is there.
+        if normalized is not None:
+            setattr(paper, attribute, normalized)
     _write_identifier(session, paper, scheme, value, replace=True)
 
 

@@ -12,7 +12,7 @@
 
 - 把 HTTP 请求翻译成服务层调用：路由声明、请求体解析、Bearer 鉴权、错误码映射、响应模型序列化。
 - 拥有进程级生命周期：`lifespan` 启动/停止摄取队列（`app/workers/queue.py`）与 housekeeping GC（`app/workers/housekeeping.py`），见 §2.4。
-- 拥有请求级横切：`X-Request-ID` 中间件（`app/main.py:70-79`）、请求级 DB session（`app/db/session.py:70-76`）。
+- 拥有请求级横切：`X-Request-ID` 中间件（`app/main.py:71-80`）、请求级 DB session（`app/db/session.py:70-76`）。
 
 不做什么：
 
@@ -31,12 +31,12 @@
 |---|---|---|---|---|---|
 | GET | `/health` | 四个依赖的轻量探针 | 免 | — | `app/api/health.py:79` |
 | GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch） | 是 | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py:38` |
-| GET | `/` | landing（`include_in_schema=False`） | 免 | — | `app/main.py:92` |
-| POST | `/api/papers/ingest` | URL 摄取 | 是 | — | `app/api/ingestion.py:238` |
-| POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | 是 | — | `app/api/ingestion.py:257` |
-| POST | `/api/papers/ingest/dir` | 服务端目录导入（零传输） | 是 | — | `app/api/ingestion.py:356` |
-| POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | 是 | — | `app/api/ingestion.py:513` |
-| POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | 是 | — | `app/api/ingestion.py:567` |
+| GET | `/` | landing（`include_in_schema=False`） | 免 | — | `app/main.py:93` |
+| POST | `/api/papers/ingest` | URL 摄取 | 是 | — | `app/api/ingestion.py:255` |
+| POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | 是 | — | `app/api/ingestion.py:274` |
+| POST | `/api/papers/ingest/dir` | 服务端目录导入（零传输） | 是 | — | `app/api/ingestion.py:375` |
+| POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | 是 | — | `app/api/ingestion.py:532` |
+| POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | 是 | — | `app/api/ingestion.py:586` |
 | GET | `/api/jobs/queue` | 队列深度快照 | 是 | — | `app/api/jobs.py:21` |
 | GET | `/api/jobs/{job_id}` | 单作业阶段/进度 | 是 | — | `app/api/jobs.py:33` |
 | POST | `/api/jobs/{job_id}/retry` | 重驱动 FAILED 作业（202） | 是 | — | `app/api/jobs.py:44` |
@@ -52,14 +52,14 @@
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张 | 是 | — | `app/api/papers.py:276` |
 | DELETE | `/api/papers/{paper_id}` | 删除（204） | 是 | — | `app/api/papers.py:302` |
 | POST | `/api/papers/{paper_id}/reindex` | 重建索引（202） | 是 | — | `app/api/papers.py:345` |
-| POST | `/api/metadata/import` | 外部元数据导入 | 是 | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py:92-102` |
-| GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py:147-151` |
-| POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py:164` |
-| POST | `/api/metadata/apply` | 按报告批量应用人工决定 | 是 | — | `app/api/metadata.py:217` |
+| POST | `/api/metadata/import` | 外部元数据导入 | 是 | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py:93-103` |
+| GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py:151-155` |
+| POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py:168` |
+| POST | `/api/metadata/apply` | 按报告批量应用人工决定 | 是 | — | `app/api/metadata.py:221` |
 | POST | `/api/search` | 论文级混合检索 | 是 | — | `app/api/search.py:49` |
 | GET | `/api/search-logs` | 检索日志（只读） | 是 | `limit`、`since`、`mode` | `app/api/search_logs.py:27-32` |
 
-`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:59-67` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:199`。
+`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:60-68` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:199`。
 
 ### 2.2 鉴权实现（2026-10-05 起按 plan `2026-10-05_145619-api-auth-keys-roles` 重写）
 
@@ -86,25 +86,25 @@
 两个互不相干的机制：
 
 1. **HTTP 错误** = 各 endpoint 内手写 `raise HTTPException(...)`。没有统一异常处理器，也没有业务异常基类到状态的集中映射；FastAPI 默认处理器输出字符串 `detail`，与 `docs/architecture/MVP-SPEC.md:112`「统一 `{"detail": "…"}`」一致。
-2. **作业失败归因** = `app/core/errors.py:127 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:449`、`app/workers/tasks.py:1302`。
+2. **作业失败归因** = `app/core/errors.py:144 classify_failure()` 把流水线异常映射成 14 个稳定 code（`errors.py:48-63`）：`NO_TEXT_LAYER`、`ENCRYPTED_PDF`、`CORRUPT_PDF`、`DOWNLOAD_FAILED`、`OVERSIZED`、`UNSUPPORTED_TYPE`、`DUPLICATE_FINGERPRINT`、`PARSE_BACKEND_UNAVAILABLE`、`PARSE_FAILED`、`EMBEDDING_FAILED`、`INDEX_FAILED`、`STORAGE_FAILED`、`INTERRUPTED`、`INTERNAL`（后两个解析码只在「明确要求 docling 且不许降级」时出现 —— 正常流水线降级到 pypdf 并记 `degraded_reason`/`paper_degradations`，见 `03-parsing-chunking.md`）。它写进作业行，经 `GET /api/jobs/{job_id}` 的 `error_code` 暴露（`app/schemas/job.py:20-23`）。调用点：`app/api/ingestion.py:79`、`app/api/ingestion.py:468`、`app/workers/tasks.py:1320`。
 
 业务异常 → HTTP 状态映射（全部为端点内显式 raise）：
 
 | 触发 | 状态 | 出处 |
 |---|---|---|
-| URL 非法（`ingest.UnsupportedSource`） | 422 | `app/api/ingestion.py:246-249` |
-| `local_scan.ScanUnavailable`（白名单为空 = 端点关闭） | 404 | `app/api/ingestion.py:379-380` |
-| `local_scan.RootNotAllowed`（越界/`..`/链接逃逸） | 403 | `app/api/ingestion.py:381-382` |
-| `local_scan.RootMissing` | 404 | `app/api/ingestion.py:383-384` |
-| `/files`：0 个文件或超 `INGEST_MAX_FILES_PER_REQUEST` | 422 | `app/api/ingestion.py:280-294` |
-| `/files`：声明总字节超 `INGEST_MAX_REQUEST_MB` | 413 | `app/api/ingestion.py:302-309` |
-| `/files`：批请求 + 队列积压 ≥ 水位 | 429 + `Retry-After` | `app/api/ingestion.py:316-317`, `:66-72` |
-| `upload_admission.AdmissionRejected`（在途上传超限） | 429 + `Retry-After` | `app/api/ingestion.py:332-333`；`:541-542`；`:626-628` |
-| `/compressed`：非 zip 魔数 | 415 | `app/api/ingestion.py:595-602` |
-| `/compressed`：`ArchiveError`（gzip-bomb/zip-slip 等上限） | 422 | `app/api/ingestion.py:629-634` |
-| `/compressed`：解包其它异常 | 500 | `app/api/ingestion.py:635-641` |
-| `/file`：单文件被判 rejected | 422 | `app/api/ingestion.py:544-548` |
-| `/file`：staging 后作业行消失 | 503 | `app/api/ingestion.py:552-555` |
+| URL 非法（`ingest.UnsupportedSource`） | 422 | `app/api/ingestion.py:263-266` |
+| `local_scan.ScanUnavailable`（白名单为空 = 端点关闭） | 404 | `app/api/ingestion.py:398-399` |
+| `local_scan.RootNotAllowed`（越界/`..`/链接逃逸） | 403 | `app/api/ingestion.py:400-401` |
+| `local_scan.RootMissing` | 404 | `app/api/ingestion.py:402-403` |
+| `/files`：0 个文件或超 `INGEST_MAX_FILES_PER_REQUEST` | 422 | `app/api/ingestion.py:299-313` |
+| `/files`：声明总字节超 `INGEST_MAX_REQUEST_MB` | 413 | `app/api/ingestion.py:321-328` |
+| `/files`：批请求 + 队列积压 ≥ 水位 | 429 + `Retry-After` | `app/api/ingestion.py:335-336`, `:66-72` |
+| `upload_admission.AdmissionRejected`（在途上传超限） | 429 + `Retry-After` | `app/api/ingestion.py:351-352`；`:560-561`；`:645-647` |
+| `/compressed`：非 zip 魔数 | 415 | `app/api/ingestion.py:614-621` |
+| `/compressed`：`ArchiveError`（gzip-bomb/zip-slip 等上限） | 422 | `app/api/ingestion.py:648-653` |
+| `/compressed`：解包其它异常 | 500 | `app/api/ingestion.py:654-660` |
+| `/file`：单文件被判 rejected | 422 | `app/api/ingestion.py:563-567` |
+| `/file`：staging 后作业行消失 | 503 | `app/api/ingestion.py:571-574` |
 | `GET /api/jobs/{id}` / `POST .../retry`：作业不存在 | 404 | `app/api/jobs.py:38-40`, `:61-64` |
 | `POST /api/jobs/{id}/retry`：非 FAILED | 409 | `app/api/jobs.py:66-70` |
 | `papers` 路由：论文不存在（含软删） | 404 | `app/api/papers.py:59-61` |
@@ -112,31 +112,31 @@
 | `ObjectStorageError`（读文件） | 503 | `app/api/papers.py:134-138` |
 | rollback 的 `provenance_id` 不属该论文/字段 | 404 | `app/api/papers.py:288-291` |
 | DELETE：`SearchIndexError` / `ObjectStorageError` | 503（不标记删除，可重试） | `app/api/papers.py:316-320`, `:275-279` |
-| `POST /api/metadata/import`：Content-Type 既非 multipart 也非 JSON | 415 | `app/api/metadata.py:87-89` |
-| 同上：multipart 缺 `file` part / JSON 解析失败 / 未知 `source_type` / `importer` 抛 `ValueError` | 422 | `app/api/metadata.py:66-70`, `:74-78`, `:82-86`, `:112-116`, `:126-129` |
-| `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py:54-57`, `:178-179`, `:241-249` |
+| `POST /api/metadata/import`：Content-Type 既非 multipart 也非 JSON | 415 | `app/api/metadata.py:88-90` |
+| 同上：multipart 缺 `file` part / JSON 解析失败 / 未知 `source_type` / `importer` 抛 `ValueError` | 422 | `app/api/metadata.py:67-71`, `:75-79`, `:83-87`, `:113-117`, `:130-133` |
+| `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py:55-58`, `:182-183`, `:245-253` |
 | `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:89-94`, `:95-98` |
 | `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py:38-56` |
 
-### 2.4 lifespan 启停序列（`app/main.py:41-56`）
+### 2.4 lifespan 启停序列（`app/main.py:42-57`）
 
 | 时点 | 调用 | 行号 | 实际行为 |
 |---|---|---|---|
-| 启动 | `configure_logging(settings.log_level)` | `main.py:43` | 根 logger 只配置一次（`app/core/logging.py:87`） |
-| 启动 | `job_queue.start()` | `main.py:48` | 建 `INGEST_CONCURRENCY` 个 worker 协程（`app/workers/queue.py:119-137`） |
-| 启动 | `job_queue.recover()` | `main.py:49` | `RECEIVED/QUEUED` 且未结束的作业重新入队；中间态作业标 `FAILED` + `error_code='INTERRUPTED'`（`queue.py:240-259` → `app/services/ingestion_service.py:455-490`） |
-| 启动 | `housekeeping.start()` | `main.py:52` | 起周期任务，**首轮立即执行**（`housekeeping.py:340-351`：先 `run_gc` 再 `sleep(interval)`） |
-| 关闭 | `await housekeeping.stop()` | `main.py:54` | cancel 周期任务 |
-| 关闭 | `await job_queue.stop()` | `main.py:55` | cancel worker 协程；**不等待**，线程内已开始的流水线跑到结束（`queue.py:139-154`） |
-| 关闭 | `logger.info("paperbox stopping")` | `main.py:56` | 无 DB/索引收尾：未调用 `job_queue.join()`（存在，`queue.py:156-160`），未调用 `dispose_engine()`（存在，`app/db/session.py:79`） |
-| 启动 | `await mcp_server.session_manager.run()`（**仅当 `MCP_ENABLED=true`**） | `main.py:60` 附近 | 挂载的子应用**不会**执行自己的 lifespan，所以 MCP 会话管理器必须由宿主 lifespan 进入；漏掉 = `/mcp` 路由在、**首个请求 500**（有回归测试） |
+| 启动 | `configure_logging(settings.log_level)` | `main.py:44` | 根 logger 只配置一次（`app/core/logging.py:87`） |
+| 启动 | `job_queue.start()` | `main.py:49` | 建 `INGEST_CONCURRENCY` 个 worker 协程（`app/workers/queue.py:119-137`） |
+| 启动 | `job_queue.recover()` | `main.py:50` | `RECEIVED/QUEUED` 且未结束的作业重新入队；中间态作业标 `FAILED` + `error_code='INTERRUPTED'`（`queue.py:240-264` → `app/services/ingestion_service.py:455-490`） |
+| 启动 | `housekeeping.start()` | `main.py:53` | 起周期任务，**首轮立即执行**（`housekeeping.py:419-430`：先 `run_gc` 再 `sleep(interval)`） |
+| 关闭 | `await housekeeping.stop()` | `main.py:55` | cancel 周期任务 |
+| 关闭 | `await job_queue.stop()` | `main.py:56` | cancel worker 协程；**不等待**，线程内已开始的流水线跑到结束（`queue.py:139-154`） |
+| 关闭 | `logger.info("paperbox stopping")` | `main.py:57` | 无 DB/索引收尾：未调用 `job_queue.join()`（存在，`queue.py:156-160`），未调用 `dispose_engine()`（存在，`app/db/session.py:79`） |
+| 启动 | `await mcp_server.session_manager.run()`（**仅当 `MCP_ENABLED=true`**） | `main.py:61` 附近 | 挂载的子应用**不会**执行自己的 lifespan，所以 MCP 会话管理器必须由宿主 lifespan 进入；漏掉 = `/mcp` 路由在、**首个请求 500**（有回归测试） |
 | 启动 | `mcp.auth.warn_about_shared_keys()` | `main.py` | 多 agent 共用同一把 key 时启动告警（审计里无法区分 agent） |
 
-启动**不**做 OpenSearch 索引存在性检查：`main.py:19-36` 的 import 列表不含 `app.search.opensearch`，lifespan 内亦无相关调用。
+启动**不**做 OpenSearch 索引存在性检查：`main.py:20-37` 的 import 列表不含 `app.search.opensearch`，lifespan 内亦无相关调用。
 
 ### 2.5 MCP 端点（挂载，不在 OpenAPI 里）
 
-`/mcp` 是一个 **Mount**（`main.py:119` 附近 `app.mount("/mcp", build_streamable_http_app(...))`），
+`/mcp` 是一个 **Mount**（`main.py:120` 附近 `app.mount("/mcp", build_streamable_http_app(...))`），
 所以它**不出现在 `/openapi.json`** 与 `/docs` 里；契约与工具清单见
 `docs/architecture/11-mcp-agent-interface.md`。要点：
 
@@ -160,9 +160,9 @@
 | `ingestion.py` | `IngestRequest`(`:15`)、`IngestAccepted`(`:40`)、`IngestFileResult`(`:54`)、`IngestFilesAccepted`(`:75`)、`IngestDirRequest`(`:93`)、`IngestDirJob`(`:113`)、`IngestDirAccepted`(`:135`)、`IngestCompressedAccepted`(`:158`)、状态常量 `accepted/duplicate/rejected`(`:10-12`) | 五个摄取端点的请求/响应 |
 | `job.py` | `JobOut`(`:10`)、`JobListOut`(`:29`)、`QueueOut`(`:38`) | 作业状态与队列快照 |
 | `paper.py` | `PaperOut`(`:22`)、`PaperFileOut`(`:10`)、`PaperListOut`(`:52`)、`PaperChunkOut`(`:63`)、`PaperChunkList`(`:79`) | 论文读接口 |
-| `metadata.py` | `PaperMetadataOut`(`:55`)、`SourceOut`(`:11`)、`IdentifierOut`(`:29`)、`ProvenanceEntry`(`:41`)、`MetadataPatch`(`:70`)、`MetadataPatchOut`(`:97`)、`MetadataRollbackIn/Out`(`:108`/`:115`)、`ImportReportOut`(`:127`)、`ConflictOut`(`:144`)、`ReviewOut`(`:157`)、`AttachIn/Out`(`:167`/`:173`)、`ApplyEntryIn/ApplyIn/ApplyOut`(`:186`/`:194`/`:202`) | 元数据读写与导入报告 |
-| `app/schemas/search.py`（**写全路径：裸 `search.py` 会与 `app/api/search.py` 串表**） | `SearchFilters`(`:61`)、`MIN_TOP_K/MAX_TOP_K`(`:42-43`)、`SearchRequest`(`:130`，含 **`facets`** `:146`)、`SearchEvidence`(`:176`)、`SearchResult`(`:187`)、`SearchRerankInfo`(`:215`)、`SearchRewriteInfo`(`:228`)、**`FacetBucket`(`:243`)、`SearchFacets`(`:254`)**、`SearchResponse`(`:268`，含 `facets` `:288`) | 检索请求/响应（**2026-09-30 加 facets**） |
-| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:26`)、`ConsistencyTotalsOut`(`:30`)、**`ParserBackendsOut`(`:47`)**（`:58` `papers`/`documents` 计数、`:62` `paper_ids` + `:65` `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、`ConsistencyOut`(`:65`，含 `parser_backends` `:75`) |
+| `metadata.py` | `PaperMetadataOut`(`:56`)、`SourceOut`(`:11`)、`IdentifierOut`(`:30`)、`ProvenanceEntry`(`:42`)、`MetadataPatch`(`:71`)、`MetadataPatchOut`(`:98`)、`MetadataRollbackIn/Out`(`:109`/`:116`)、`ImportReportOut`(`:131`)、`ConflictOut`(`:148`)、`ReviewOut`(`:161`)、`AttachIn/Out`(`:171`/`:177`)、`ApplyEntryIn/ApplyIn/ApplyOut`(`:190`/`:198`/`:206`) | 元数据读写与导入报告 |
+| `app/schemas/search.py`（**写全路径：裸 `search.py` 会与 `app/api/search.py` 串表**） | `SearchFilters`(`:62`)、`MIN_TOP_K/MAX_TOP_K`(`:43-44`)、`SearchRequest`(`:134`，含 **`facets`** `:150`)、`SearchEvidence`(`:180`)、`SearchResult`(`:191`)、`SearchRerankInfo`(`:219`)、`SearchRewriteInfo`(`:232`)、**`FacetBucket`(`:247`)、`SearchFacets`(`:258`)**、`SearchResponse`(`:272`，含 `facets` `:292`) | 检索请求/响应（**2026-09-30 加 facets**） |
+| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(`:8`，含 `parser_backend` `:27`)、`ConsistencyTotalsOut`(`:31`)、**`ParserBackendsOut`(`:48`)**（`:59` `papers`/`documents` 计数、`:63` `paper_ids` + `:66` `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、`ConsistencyOut`(`:66`，含 `parser_backends` `:76`) |
 | `search_log.py` | `SearchLogOut`(`:11`)、`SearchLogListOut`(`:32`) | 检索日志读接口 |
 | `__init__.py` | — | 仍是占位（1 行 docstring），无重导出；导入一律走子模块 |
 
@@ -174,7 +174,7 @@
 | 配置统一走 `app/core/config.py`，禁止硬编码 | 基本遵守；唯一硬编码是 429 的 `Retry-After: 2`（非配置键） | `app/services/upload_admission.py:36` |
 | `paper_id` 为 UUID 字符串 | 遵守（schema 层是 `str`，未做 UUID 格式校验） | `app/schemas/paper.py:29` |
 | 错误体统一 `{"detail": "…"}` | 手写 `HTTPException` 处遵守；框架请求体校验失败时 `detail` 是**列表** | `docs/architecture/MVP-SPEC.md:112`；代码未注册处理器（§2.3） |
-| 列表响应带总数 | 遵守：`{total, items/papers/jobs/chunks/logs}` | `job.py:34`、`paper.py:55`、`paper.py:81`、`search_log.py:37`、`metadata.py:162` |
+| 列表响应带总数 | 遵守：`{total, items/papers/jobs/chunks/logs}` | `job.py:34`、`paper.py:55`、`paper.py:81`、`search_log.py:37`、`metadata.py:166` |
 
 未使用统一的泛型分页模型：每个列表各自定义字段名（`papers` / `jobs` / `chunks` / `logs` / `items`）。
 
@@ -184,15 +184,15 @@
 |---|---|---|
 | `IngestQueue` | `asyncio.PriorityQueue[tuple[int,int,_Item]]`（`(priority, seq, item)`）、`_pending: dict[job_id,(kind,priority)]`、`_running: dict[job_id,kind]`、`_seq` | `app/workers/queue.py:99-108`, `:201` |
 | `UploadAdmission` | `_in_flight: int` + `threading.Lock`、`limit`、`high_watermark` | `app/services/upload_admission.py:79-84` |
-| `Housekeeping` | `_task: asyncio.Task`、`interval`、`passes`、`last` | `app/workers/housekeeping.py:305-311` |
+| `Housekeeping` | `_task: asyncio.Task`、`interval`、`passes`、`last` | `app/workers/housekeeping.py:384-390` |
 | 请求 id | `ContextVar("paperbox_request_id")` | `app/core/logging.py:24` |
 
 ## 4. 调用链（逐跳）
 
-**启动**：uvicorn → `app.main:lifespan`(`main.py:42`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → 请求可服务。
+**启动**：uvicorn → `app.main:lifespan`(`main.py:43`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → 请求可服务。
 
-**`POST /api/papers/ingest/files`**（`ingestion.py:262`）：
-`request_id_middleware`(`main.py:70`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:286-309`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:133`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:95` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:242-250`) → `job_queue.submit`(`:256` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:296`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:318`) → 返回 `summarize()` 的 202 响应(`:345`)。
+**`POST /api/papers/ingest/files`**（`ingestion.py:281`）：
+`request_id_middleware`(`main.py:71`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:305-328`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:134`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:96` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:247-255`) → `job_queue.submit`(`:261` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:301`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:323`) → 返回 `summarize()` 的 202 响应(`:345`)。
 
 **`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:212`) → `_maybe_rewrite`(`search.py:167`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:150`) → 逐结果构造 `SearchResult`(`:181`) → `_log_search` 另开 `SessionLocal()` 写日志(`:210`, `:208`) → `SearchResponse`(`:223`)。
 
@@ -200,17 +200,17 @@
 
 ## 5. 不变量与踩过的坑
 
-1. **路由注册顺序有两处硬约束**：`GET /api/jobs/queue` 必须声明在 `GET /api/jobs/{job_id}` 之前，否则被路径参数吞掉（`app/api/jobs.py:26-28` 注释）；`/api/papers` 前缀被 ingestion 与 papers 两个 router 共用（`main.py:84` vs `:86`），靠方法与字面量路径区分，新增 `/{something}` 形式的 GET/POST 前必须确认不遮挡 `/ingest*`。
-2. **新路由必须手工 `include_router`**（`main.py:82-89`），没有自动发现；漏加 = 404 且 `/openapi.json` 里也看不到。
-3. **单文件与多文件的错误契约相反**：`/ingest/file` 单文件失败 → 请求级 422（`ingestion.py:544-548`）；`/ingest/files` 同一种失败 → 逐文件 `rejected` 行 + 整体 202（`ingestion.py:75-92`, `:270-277`）。
-4. **413 只在 multipart 声明了 size 时触发**：`declared_total` 只累加 `upload.size` 为正整数的部分（`ingestion.py:297-301`）；未声明长度时该门形同不存在，超限由 per-file 的 `ingest.ensure_size` 兜底（归因 `OVERSIZED`，`errors.py:149-150`）。
+1. **路由注册顺序有两处硬约束**：`GET /api/jobs/queue` 必须声明在 `GET /api/jobs/{job_id}` 之前，否则被路径参数吞掉（`app/api/jobs.py:26-28` 注释）；`/api/papers` 前缀被 ingestion 与 papers 两个 router 共用（`main.py:85` vs `:86`），靠方法与字面量路径区分，新增 `/{something}` 形式的 GET/POST 前必须确认不遮挡 `/ingest*`。
+2. **新路由必须手工 `include_router`**（`main.py:83-90`），没有自动发现；漏加 = 404 且 `/openapi.json` 里也看不到。
+3. **单文件与多文件的错误契约相反**：`/ingest/file` 单文件失败 → 请求级 422（`ingestion.py:563-567`）；`/ingest/files` 同一种失败 → 逐文件 `rejected` 行 + 整体 202（`ingestion.py:75-92`, `:289-296`）。
+4. **413 只在 multipart 声明了 size 时触发**：`declared_total` 只累加 `upload.size` 为正整数的部分（`ingestion.py:316-320`）；未声明长度时该门形同不存在，超限由 per-file 的 `ingest.ensure_size` 兜底（归因 `OVERSIZED`，`errors.py:172-173`）。
 5. **429 的判定在服务端**（客户端无并发参数）：`INGEST_UPLOAD_CONCURRENCY` 管在途请求，`INGEST_QUEUE_HIGH_WATERMARK` 只管多文件请求（`upload_admission.py:128-136`），单文件永远放行。`Retry-After` 值硬编码 2 秒。
-6. **`X-Request-ID` 总是回显**：带了沿用，没带生成 `uuid4().hex`（`main.py:75`），响应头无条件写入（`main.py:78`）；日志侧靠 ContextVar（`logging.py:34`）。
-7. **关闭不排空**：`job_queue.stop()` 只 cancel 协程，线程内流水线继续跑；作业行停在中间态，靠下次启动的 `recover()` 标 `INTERRUPTED`（`queue.py:139-154`, `:240-259`）。想让在途作业跑完必须显式 `job_queue.join()`，lifespan 目前不调用。
+6. **`X-Request-ID` 总是回显**：带了沿用，没带生成 `uuid4().hex`（`main.py:76`），响应头无条件写入（`main.py:79`）；日志侧靠 ContextVar（`logging.py:34`）。
+7. **关闭不排空**：`job_queue.stop()` 只 cancel 协程，线程内流水线继续跑；作业行停在中间态，靠下次启动的 `recover()` 标 `INTERRUPTED`（`queue.py:139-154`, `:240-264`）。想让在途作业跑完必须显式 `job_queue.join()`，lifespan 目前不调用。
 8. **`GET /health` 恒 200**（`health.py:88-97`）：任一依赖挂掉只是该字段变 `"error"`，`status` 永远是 `"ok"`；用 200 判依赖健康会误判，必须看 `services.*`。
-9. **分页参数不一致**：`chunks` 夹取 1..200（`papers.py:162`）、`review` 有 `ge=1, le=200`（`metadata.py:150`）、`search-logs` 依赖服务常量（`search_logs.py:29`），但 `GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无任何上下界（`jobs.py:77`, `papers.py:50-51`）。
+9. **分页参数不一致**：`chunks` 夹取 1..200（`papers.py:162`）、`review` 有 `ge=1, le=200`（`metadata.py:154`）、`search-logs` 依赖服务常量（`search_logs.py:29`），但 `GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无任何上下界（`jobs.py:77`, `papers.py:50-51`）。
 10. **DELETE 的补偿语义**：先清 OpenSearch、再清 MinIO、最后才标记软删（`papers.py:242-242`），任一步 503 时论文仍可见且可原样重试——不要把顺序调换。
-11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py:65`）；`source_type` 只来自 query（`metadata.py:98-101`）。README §3.4 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
+11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py:66`）；`source_type` 只来自 query（`metadata.py:99-102`）。README §3.4 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
 12. **无 CORS 中间件**：全仓 grep `CORS` 0 命中，浏览器跨源调用会失败；Hermes/脚本这类非浏览器客户端不受影响。
 13. **`/mcp` 不能有重定向**：客户端（如 Hermes）在 307 后**不会重放 `Authorization`**，所以 `/mcp` 必须在服务端内部补斜杠一次命中；断言这件事必须 `follow_redirects=False`，否则 TestClient 会自动跟随、测试等于没测。
 14. **MCP 写工具"关 = 不注册"**：`MCP_WRITE_ENABLED` 与三个 `MCP_ALLOW_*` 决定工具是否注册，不是运行时才拒绝；想确认当下能力请看 `tools/list`，不要看文档。
@@ -253,7 +253,7 @@
 | `tests/test_ingest_files.py` | `/ingest/files`：逐 part 失败隔离、422、413、429+`Retry-After`、水位放行单文件 | `TestClient` `:126`；依赖覆盖 `:124`；413 `:325-333`；429 `:359-391` |
 | `tests/test_ingest_file.py` | `/ingest/file` 旧契约回归、429 | `:136-142` |
 | `tests/test_ingest_dir.py` | `/ingest/dir`：白名单 403、`..`/链接逃逸、dry_run | `:298-326` |
-| `tests/test_ingest_compressed.py` | `/ingest/compressed`：非 zip 415、429、临时目录清理 | `:314-333`, `:346` |
+| `tests/test_ingest_compressed.py` | `/ingest/compressed`：非 zip 415、429、临时目录清理 | `:315-334`, `:347` |
 | `tests/test_metadata_api.py` | `/api/metadata/import`（dry_run/apply/覆写）、`review`、`attach`、`apply`、415 | `:110-215`, `:189`, `:251-277`, `:305-475` |
 | `tests/test_manual_metadata.py` | `GET/PATCH /api/papers/{id}/metadata`（含 404）、rollback | `:326-400` |
 | `tests/test_deletion.py` | `papers_api.delete_paper` 直调：204、OpenSearch/MinIO 失败 503、顺序与幂等 | `:71-125`（非 TestClient） |
@@ -269,8 +269,8 @@
 1. **无统一异常处理器**：Pydantic 校验失败的 422 响应体 `detail` 是列表，与 `docs/architecture/MVP-SPEC.md:112` 的「统一 `{"detail": "…"}`」不一致；代码里没有任何 handler 可以覆盖它。
 2. **`/docs`、`/redoc`、`/openapi.json` 无鉴权**，匿名可获取完整接口清单。
 3. **无 CORS、无通用限流**：跨源浏览器调用不可用；限流仅存在于上传准入（`upload_admission.py`）。是否存在反向代理层的限流未在本次阅读范围内，**未确认**。
-4. **关闭不等待在途作业**：`job_queue.join()` 存在但 lifespan 未调用（`main.py:53-56`），重启会把中间态作业标 `INTERRUPTED`；UI 侧需提示用户重试。
-5. **启动不校验 OpenSearch 索引/别名**，也不跑 DB 迁移（`main.py:41-56` 无相关调用）；索引由脚本与 worker 自行处理（`ensure_index` 的调用点未在本模块范围内确认）。
+4. **关闭不等待在途作业**：`job_queue.join()` 存在但 lifespan 未调用（`main.py:54-57`），重启会把中间态作业标 `INTERRUPTED`；UI 侧需提示用户重试。
+5. **启动不校验 OpenSearch 索引/别名**，也不跑 DB 迁移（`main.py:42-57` 无相关调用）；索引由脚本与 worker 自行处理（`ensure_index` 的调用点未在本模块范围内确认）。
 6. **`GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无上下界**，可通过极大值放大查询。
 7. **`GET /health` 恒 200**，无法作为就绪探针区分「进程活」与「依赖可用」。
 8. **`Retry-After` 固定 2 秒**，不是配置项，积压很深时可能过于乐观。

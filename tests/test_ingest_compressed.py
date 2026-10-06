@@ -159,7 +159,8 @@ def test_zip_pdfs_are_unpacked_and_queued(client, tmp_archive_dir, queued, facto
     assert all(item["source_type"] == "local_path" for item in payloads)
     assert all(item["cleanup_after"] is True for item in payloads)
     assert all(Path(item["local_path"]).is_file() for item in payloads)
-    # A folder-sized import is batch work.
+    # Two files extracted = batch work; a single one would be interactive
+    # (P2-17: the archive wrapper follows the same 1-file rule).
     assert [priority for _, _, priority in queued.submitted] == [1, 1]
 
 

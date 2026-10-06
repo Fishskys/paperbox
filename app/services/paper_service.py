@@ -135,6 +135,12 @@ def compute_sha256_file(path, *, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+#: ``papers.fingerprint`` is ``String(255)``; cap the title/author segments of
+#: the ``title:`` branch so no input can exceed the column (review P2-1).
+_TITLE_SEGMENT_CHARS = 200
+_AUTHOR_SEGMENT_CHARS = 40
+
+
 def build_fingerprint(
     *,
     doi: str | None = None,
@@ -156,7 +162,14 @@ def build_fingerprint(
     normalized_title = normalize_text(title)
     normalized_author = normalize_text(first_author)
     if normalized_title and normalized_author and year:
-        return f"{_TITLE_PREFIX}{normalized_title}|{normalized_author}|{year}"
+        # ``papers.fingerprint`` is String(255) (review 2026-10-05, P2-1): cap
+        # the title segment so a pathological title cannot blow the column on
+        # insert -- the same failure mode as the 2026-09-30 paper_chunks
+        # section(255) incident. Only titles beyond the cap are affected.
+        return (
+            f"{_TITLE_PREFIX}{normalized_title[:_TITLE_SEGMENT_CHARS]}"
+            f"|{normalized_author[:_AUTHOR_SEGMENT_CHARS]}|{year}"
+        )
 
     if sha256:
         return f"{_SHA_PREFIX}{sha256.strip().casefold()}"

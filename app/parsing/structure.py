@@ -288,10 +288,36 @@ def _join_wrapped_lines(block: str) -> str:
     Wrapped lines end mid-sentence, so single newlines become spaces; a word
     broken with a trailing hyphen is stitched back together. Blank lines (real
     paragraph breaks) were already consumed by the caller.
+
+    GFM table rows (lines starting with ``|``) are preserved verbatim, one per
+    line (review 2026-10-05, P2-18): joining them collapsed a whole table onto
+    one line and destroyed the row structure docling had emitted.
     """
-    text = re.sub(r"[-\u2010\u2011]\s*\n\s*", "", block)
-    text = re.sub(r"\s*\n\s*", " ", text)
-    return re.sub(r"\s{2,}", " ", text).strip()
+    prose: list[str] = []
+    table: list[str] = []
+    out: list[str] = []
+
+    def flush_prose() -> None:
+        if not prose:
+            return
+        text = re.sub(r"[-\u2010\u2011]\s*\n\s*", "", "\n".join(prose))
+        text = re.sub(r"\s*\n\s*", " ", text)
+        out.append(re.sub(r"\s{2,}", " ", text).strip())
+        prose.clear()
+
+    for line in block.split("\n"):
+        if line.lstrip().startswith("|"):
+            flush_prose()
+            table.append(line)
+        else:
+            if table:
+                out.append("\n".join(table))
+                table.clear()
+            prose.append(line)
+    flush_prose()
+    if table:
+        out.append("\n".join(table))
+    return "\n".join(part for part in out if part).strip()
 
 
 def merge_short_sections(

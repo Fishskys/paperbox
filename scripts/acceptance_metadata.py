@@ -697,9 +697,15 @@ def main() -> int:
         )
 
         print(f"\npapers created by this run: {', '.join(checker.created) or 'none'}")
-        if args.cleanup:
-            cleanup(api, session, checker, started_at=started_at)
     finally:
+        # Cleanup runs even when a check raised mid-run: a failed acceptance
+        # must not leave synthetic papers behind (review 2026-10-05, P2-12 --
+        # acceptance_mcp.py's finally shape is the reference).
+        if args.cleanup and started_at is not None:
+            try:
+                cleanup(api, session, checker, started_at=started_at)
+            except Exception:  # noqa: BLE001 - report, do not mask the failure
+                logging.getLogger(__name__).exception("acceptance cleanup failed")
         session.close()
         api.close()
 
