@@ -113,6 +113,23 @@ def _mentions(exc: BaseException, keywords: tuple[str, ...]) -> bool:
     return any(keyword in haystack for keyword in keywords)
 
 
+def _integrity_error_text(exc: BaseException) -> str:
+    """Everything an IntegrityError says about *which* constraint fired.
+
+    PostgreSQL names the constraint (``diag.constraint_name`` / message), SQLite
+    names the columns (``UNIQUE constraint failed: papers.fingerprint``); both
+    spellings end up in one lowercased blob for matching.
+    """
+    parts = [str(exc)]
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        parts.append(str(orig))
+        diag = getattr(orig, "diag", None)
+        if diag is not None and getattr(diag, "constraint_name", None):
+            parts.append(str(diag.constraint_name))
+    return " ".join(parts).lower()
+
+
 def _with_cause(exc: BaseException) -> str:
     """Message text including the ``__cause__`` chain (``raise ... from ...``)."""
     parts = [_describe(exc)]
@@ -136,10 +153,16 @@ def classify_failure(exc: BaseException) -> Failure:
     detail = _with_cause(exc)
 
     if isinstance(exc, IntegrityError) or _mentions(exc, _KEYWORDS_DUPLICATE):
-        return Failure(
-            "DUPLICATE_FINGERPRINT",
-            f"DUPLICATE_FINGERPRINT: another live paper already claims this fingerprint ({detail})",
-        )
+        # Only a fingerprint collision is a DUPLICATE_FINGERPRINT (review
+        # 2026-10-05, P2-9): author/identifier/source unique conflicts used to
+        # wear the same code and sent everyone triaging the wrong table. Any
+        # other unique violation falls through to the generic handling -- the
+        # detail still carries the constraint name.
+        if "fingerprint" in _integrity_error_text(exc):
+            return Failure(
+                "DUPLICATE_FINGERPRINT",
+                f"DUPLICATE_FINGERPRINT: another live paper already claims this fingerprint ({detail})",
+            )
 
     if isinstance(exc, URLBlocked):
         # The inbound-URL gate refused the target (private/loopback/link-local, or a

@@ -250,14 +250,32 @@ def _process_job(session: Session, job) -> PayloadOutcome:
     paper_id = new_uuid()
     title = ingest.title_for_ingest(source.filename, source_url)
     fingerprint = paper_service.build_fingerprint(sha256=digest)
-    paper = paper_service.create_paper(
-        session,
-        title=title,
-        fingerprint=fingerprint,
-        paper_id=paper_id,
-        url=source_url,
-        status=paper_service.STATUS_PENDING,
-    )
+    try:
+        # The savepoint keeps the caller's transaction intact when a concurrent
+        # import commits the same fingerprint between the pre-check above and
+        # this insert (review 2026-10-05, P2-14): the loser resolves as the
+        # duplicate it is -- COMPLETED with the winner's paper id -- instead of
+        # dying on IntegrityError while the synchronous path reports a
+        # duplicate for the very same input.
+        with session.begin_nested():
+            paper = paper_service.create_paper(
+                session,
+                title=title,
+                fingerprint=fingerprint,
+                paper_id=paper_id,
+                url=source_url,
+                status=paper_service.STATUS_PENDING,
+            )
+    except IntegrityError:
+        existing = paper_service.find_by_sha256(
+            session, digest
+        ) or paper_service.find_by_fingerprint(session, fingerprint)
+        if existing is None:
+            raise
+        ingest.resolve_duplicate(session, existing, job)
+        session.commit()
+        _cleanup_source(source, payload, payload.get("object_key"))
+        return PayloadOutcome(paper_id=existing.id, duplicate=True)
 
     stored = _store_source(paper_id, source)
     file_record = paper_service.register_original_file(

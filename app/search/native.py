@@ -276,6 +276,7 @@ def native_search(
     inner_hits: int = DEFAULT_INNER_HITS,
     pagination_depth: int | None = None,
     pipeline: str = PIPELINE_RRF,
+    query_vector: list[float] | None = None,
 ) -> list[ChunkHit]:
     """Run one native hybrid request and return its collapsed chunks.
 
@@ -288,7 +289,7 @@ def native_search(
     if not query:
         return []
     try:
-        vector = embed_text(query)
+        vector = query_vector if query_vector is not None else embed_text(query)
     except EmbeddingError as exc:
         raise SearchError(f"embedding the query failed: {exc}") from exc
 

@@ -33,8 +33,11 @@ def get_url() -> str:
     dsn = config.get_main_option("sqlalchemy.url") or settings.database_url
     if not dsn:
         raise RuntimeError("POSTGRES_DSN is not configured")
-    # ConfigParser treats '%' as interpolation syntax; escape it for safety.
-    return dsn.replace("%", "%%")
+    # The DSN reaches SQLAlchemy verbatim: it never goes back through
+    # ConfigParser interpolation, so escaping ``%`` here (the old
+    # ``replace("%", "%%")``) corrupted every password containing one
+    # (review 2026-10-05, P2-2).
+    return dsn
 
 
 def include_object(obj, name, type_, reflected, compare_to) -> bool:  # noqa: ANN001

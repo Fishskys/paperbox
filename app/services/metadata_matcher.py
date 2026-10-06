@@ -190,6 +190,10 @@ def title_candidates(session: Session, title: str | None) -> list[Paper]:
     statement = (
         select(Paper)
         .where(Paper.deleted_at.is_(None), func.lower(Paper.title).like(f"%{fragment}%"))
+        # Deterministic order (review 2026-10-05, P2-15): the LIMIT used to cut
+        # an arbitrary row set, so the true match could fall outside it. Newest
+        # first -- a re-uploaded PDF usually matches a recently created paper.
+        .order_by(Paper.created_at.desc())
         .limit(_TITLE_CANDIDATE_LIMIT)
     )
     rows = session.execute(statement).scalars().all()
@@ -239,29 +243,42 @@ def find_by_title(
 
 
 def find_by_filename(session: Session, filename: str | None) -> list[Paper]:
-    """Step 5: a stored file with the same normalized name (weak signal)."""
+    """Step 5: a stored file with the same normalized name (weak signal).
+
+    The comparison itself is Python-side (``normalize_text`` is not expressible
+    in portable SQL), but the fetch is a narrow ``(paper_id, filename)`` tuple
+    query instead of full ``Paper`` entities with lazy per-paper file loads --
+    the old shape was one entity scan plus N lazy queries per miss (review
+    2026-10-05, P2-15).
+    """
     normalized = paper_service.normalize_text(filename)
     if not normalized:
         return []
-    statement = (
-        select(Paper)
+    rows = session.execute(
+        select(Paper.id, PaperFile.filename)
         .join(PaperFile, PaperFile.paper_id == Paper.id)
         .where(Paper.deleted_at.is_(None), PaperFile.deleted_at.is_(None))
-    )
-    papers: list[Paper] = []
+    ).all()
+    matched_ids: list[str] = []
     seen: set[str] = set()
-    for paper in session.execute(statement).scalars().all():
-        if paper.id in seen:
+    for paper_id, record_filename in rows:
+        if paper_id in seen:
             continue
-        for record in paper.files:
-            if record.deleted_at is not None:
-                continue
-            candidate = paper_service.normalize_text(record.filename)
-            if candidate and candidate == normalized:
-                seen.add(paper.id)
-                papers.append(paper)
-                break
-    return papers
+        candidate = paper_service.normalize_text(record_filename)
+        if candidate and candidate == normalized:
+            seen.add(paper_id)
+            matched_ids.append(paper_id)
+    if not matched_ids:
+        return []
+    papers = (
+        session.execute(
+            select(Paper).where(Paper.id.in_(matched_ids), Paper.deleted_at.is_(None))
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {paper.id: paper for paper in papers}
+    return [by_id[paper_id] for paper_id in matched_ids if paper_id in by_id]
 
 
 def match_record(

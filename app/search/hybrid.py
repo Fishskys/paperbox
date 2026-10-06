@@ -71,6 +71,12 @@ TITLE_BOOST = 2.0
 CANDIDATE_MULTIPLIER = 5
 #: kNN over-fetch factor for the semantic-only mode (spec: ``k = top_k * 3``).
 SEMANTIC_K_MULTIPLIER = 3
+#: Hard ceiling on the cross-encoder candidate pool (review 2026-10-05, P2-8):
+#: ``top_k=50`` x ``RERANK_CANDIDATES=5`` wanted 250 scored candidates in one
+#: request -- beyond any timeout, so the rerank silently degraded every time.
+#: A code constant on purpose: a deployment knob would invite tuning it back
+#: into the "always degrades" regime.
+MAX_RERANK_POOL = 100
 #: Fields returned for every hit.
 SOURCE_FIELDS: tuple[str, ...] = (
     "chunk_id",
@@ -454,6 +460,7 @@ def build_count_body(
     filters: Mapping[str, Any] | None = None,
     *,
     k: int = COUNT_K,
+    query_vector: list[float] | None = None,
 ) -> dict[str, Any]:
     """``size: 0`` + ``cardinality(paper_id)`` body for the paper count.
 
@@ -468,13 +475,13 @@ def build_count_body(
     if normalized_mode == "keyword":
         clause: dict[str, Any] = build_keyword_query(query, filters)
     elif normalized_mode == "semantic":
-        clause = _semantic_clause(query, filters, k)
+        clause = _semantic_clause(query, filters, k, query_vector=query_vector)
     elif normalized_mode == "hybrid":
         clause = {
             "bool": {
                 "should": [
                     build_keyword_query(query, filters),
-                    _semantic_clause(query, filters, k),
+                    _semantic_clause(query, filters, k, query_vector=query_vector),
                 ],
                 "minimum_should_match": 1,
             }
@@ -497,10 +504,16 @@ def build_count_body(
 
 
 def _semantic_clause(
-    query: str, filters: Mapping[str, Any] | None, k: int
+    query: str,
+    filters: Mapping[str, Any] | None,
+    k: int,
+    query_vector: list[float] | None = None,
 ) -> dict[str, Any]:
+    # ``query_vector`` lets one request embed its query once and share it
+    # across the search and the paper-count calls (review 2026-10-05, P2-7;
+    # the embedding container serializes inference behind one FIFO).
     try:
-        vector = embed_text(query)
+        vector = query_vector if query_vector is not None else embed_text(query)
     except EmbeddingError as exc:
         raise SearchError(f"embedding the query failed: {exc}") from exc
     return build_semantic_query(vector, filters, k=k)
@@ -514,6 +527,7 @@ def count_papers(
     client: OpenSearch | None = None,
     index: str = ALIAS,
     k: int = COUNT_K,
+    query_vector: list[float] | None = None,
 ) -> int:
     """Distinct papers the query matches under ``filters`` -- the ``total`` truth.
 
@@ -526,7 +540,9 @@ def count_papers(
     if not query:
         return 0
     response = _search(
-        build_count_body(query, mode, filters, k=k), client=client, index=index
+        build_count_body(query, mode, filters, k=k, query_vector=query_vector),
+        client=client,
+        index=index,
     )
     value = ((response.get("aggregations") or {}).get("papers") or {}).get("value") or 0
     return int(value)
@@ -628,9 +644,10 @@ def _semantic_hits(
     *,
     client: OpenSearch | None,
     index: str,
+    query_vector: list[float] | None = None,
 ) -> list[ChunkHit]:
     try:
-        vector = embed_text(query)
+        vector = query_vector if query_vector is not None else embed_text(query)
     except EmbeddingError as exc:
         raise SearchError(f"embedding the query failed: {exc}") from exc
 
@@ -660,6 +677,7 @@ def search_chunks(
     rerank: bool = False,
     telemetry: dict[str, Any] | None = None,
     backend: str | None = None,
+    query_vector: list[float] | None = None,
 ) -> list[ChunkHit]:
     """Retrieve chunks for ``query`` with the requested retrieval mode.
 
@@ -701,7 +719,9 @@ def search_chunks(
         ordered = sorted(hits, key=lambda hit: hit.score, reverse=True)[:fetch_k]
     elif normalized_mode == "semantic":
         k = fetch_k * SEMANTIC_K_MULTIPLIER
-        hits = _semantic_hits(query, k, filters, client=client, index=index)
+        hits = _semantic_hits(
+            query, k, filters, client=client, index=index, query_vector=query_vector
+        )
         ordered = sorted(hits, key=lambda hit: hit.score, reverse=True)[:fetch_k]
     elif resolved_backend == "native":
         # Engine-side fusion: the pipeline does the RRF and ``collapse`` returns
@@ -719,7 +739,13 @@ def search_chunks(
         if rerank:
             inner_hits = max(DEFAULT_INNER_HITS, _rerank_chunks_per_paper() - 1)
         ordered = native_search(
-            query, top_k, filters, client=client, index=index, inner_hits=inner_hits
+            query,
+            top_k,
+            filters,
+            client=client,
+            index=index,
+            inner_hits=inner_hits,
+            query_vector=query_vector,
         )
     else:
         candidates = fetch_k * CANDIDATE_MULTIPLIER
@@ -727,7 +753,12 @@ def search_chunks(
             query, candidates, filters, client=client, index=index
         )
         semantic_hits = _semantic_hits(
-            query, candidates, filters, client=client, index=index
+            query,
+            candidates,
+            filters,
+            client=client,
+            index=index,
+            query_vector=query_vector,
         )
         by_id: dict[str, ChunkHit] = {}
         for hit in keyword_hits + semantic_hits:
@@ -836,7 +867,12 @@ def _rerank_pool(hits: list[ChunkHit]) -> list[ChunkHit]:
             continue
         used[hit.paper_id] = used.get(hit.paper_id, 0) + 1
         pool.append(hit)
-    return pool
+    # Total ceiling (review 2026-10-05, P2-8): ``top_k=50`` x ``RERANK_CANDIDATES
+    # =5`` wanted 250 cross-encoder calls in one request -- far beyond any sane
+    # timeout, so the rerank silently degraded every time while burning CPU.
+    # Papers beyond the cap keep their first-stage standing (same mechanism the
+    # per-paper cap uses).
+    return pool[:MAX_RERANK_POOL]
 
 
 def _first_stage_k(top_k: int, rerank: bool) -> int:
@@ -844,7 +880,7 @@ def _first_stage_k(top_k: int, rerank: bool) -> int:
     if not rerank:
         return top_k
     factor = max(1, int(settings.rerank_candidates or 1))
-    return top_k * factor
+    return min(top_k * factor, MAX_RERANK_POOL)
 
 
 def _truncate_hits(

@@ -10,6 +10,7 @@ Run locally with::
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -208,9 +209,13 @@ class AuthContextMiddleware:
         if not settings.auth_enabled:
             identity = api_key_service.anonymous()
         elif token:
+            # The key lookup is a blocking DB probe on the event loop; push it
+            # to a worker thread (review 2026-10-05, P2-10 family).
             session = SessionLocal()
             try:
-                identity = api_key_service.authenticate(session, token)
+                identity = await asyncio.to_thread(
+                    api_key_service.authenticate, session, token
+                )
             finally:
                 session.close()
         state = scope.setdefault("state", {})

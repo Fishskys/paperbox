@@ -47,7 +47,7 @@
 | | `_write_entry` | 单条目边写边查每文件上限（346-370） |
 | | `remove_file`/`prune_dir`/`prune_tree`/`cleanup_dir` | 删除与空目录剪枝（376-431） |
 | `app/workers/housekeeping.py` | `run_gc` | 一次收集：孤儿/终态 staging、过期解包目录、残留压缩包（183-260；`STORED` 之前失败的行按 `STAGING_RETRY_GRACE_HOURS=72h` 保留其 staging，2026-09-22） |
-| | `load_job_refs` | 读作业行，定义 `live = finished_at is None and stage not in (COMPLETED, FAILED)`（103-145；`retryable = stage == "FAILED" and paper_id is None` 在 `:148`） |
+| | `load_job_refs` | 读作业行，定义 `live = finished_at is None and stage not in (COMPLETED, FAILED)`（103-145；`retryable = stage == "FAILED" and paper_id is None` 在 `:157`） |
 | | `Housekeeping` | 启动跑一次 + 每 `INGEST_GC_INTERVAL_S` 循环（280-347） |
 
 ## 3. 数据结构（表/字段/索引，或内存结构）
@@ -76,7 +76,7 @@
 | `ArchiveLimits` | `max_files`/`max_uncompressed_bytes`/`max_ratio`/`max_file_bytes`，由 settings 组装 | `archive_service.py:77-97` |
 | `ExtractedEntry` / `ExtractResult` | 解出的 PDF 与 `ignored`/`rejected`/`reasons` 计数 | `archive_service.py:100-121` |
 | `UploadAdmission` | `limit`、`high_watermark`、`_in_flight`、`_lock`、`_depth_provider` | `upload_admission.py:62-84` |
-| `GcReport` / `JobRef` | 收集结果四桶 + `errors`；作业引用含 `object_key`/`local_path` | `housekeeping.py:69-112` |
+| `GcReport` / `JobRef` | 收集结果四桶 + `errors`；作业引用含 `object_key`/`local_path` | `housekeeping.py:75-121` |
 
 作业 `payload`（由 `create_job` 合并，`ingestion_service.py:213-256`）：`source_type`（`url`/`file`/`local_path`）、`object_key`（staging 键）、`local_path` + `cleanup_after`（服务端本地文件）、`filename`/`content_type`/`size_bytes`。`local_path` 必须是绝对路径，否则 `UnsupportedSource` → 422（`ingestion_service.py:179-194`）。
 
@@ -123,9 +123,9 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 7. **zip bomb 在建条目前判定**：三上限全部取自 `archive.infolist()` 的中央目录（`archive_service.py:271-293`），超限时 `dest` 里一个字节都没写；条目级上限在写入过程中再兜一层（346-370）。
 8. **zip-slip 双保险**：`unsafe_reason` 逐条拒（217-234：空名、绝对路径、盘符路径、`..`、符号链接、设备文件），写出前再用 `is_within(target, dest)` 复核一次（315-320）。
 9. **嵌套压缩包不递归**（304-306，计入 `entries_ignored`）；`.pdf` 后缀只是候选，最终靠 `%PDF` 魔数（前 1 KiB，`PDF_MAGIC_WINDOW=1024`，173-180），无魔数即 `UNSUPPORTED_TYPE` 拒收并删文件（697-707）。
-10. **GC 只删文件、不碰作业行**：`run_gc` 只对作业表做 `select`（85-115），测试用真实作业行验证 stage 与 `error_code` 不变（`tests/test_upload_gc.py:301-318`）；失败只进 `GcReport.errors`，绝不抛（156-159、215-222）。
+10. **GC 只删文件、不碰作业行**：`run_gc` 只对作业表做 `select`（85-115），测试用真实作业行验证 stage 与 `error_code` 不变（`tests/test_upload_gc.py:315-332`）；失败只进 `GcReport.errors`，绝不抛（156-159、215-222）。
 11. **staging 没有宽限期**：GC 判据只有 liveness（174-181），没有年龄检查；孤立即刻被删。历史事故：staging 只写不删，13 个作业留下 9 个对象 49.8 MB（`housekeeping.py:5-10`，该数字来自代码注释，本会话未复测）。
-12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md` §3.8），存储成功后才 `_cleanup_source`（`tasks.py:277-287`）。
+12. **`STORED` 是删除的唯一检查点**：`STORED` 之前失败必须保留 staging 才能重试（`AGENTS.md` §3.8），存储成功后才 `_cleanup_source`（`tasks.py:295-305`）。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
 
@@ -134,16 +134,16 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 | `INGEST_MAX_FILE_MB` | 100 | 单文件上限，超限 `OVERSIZED` / 目录扫描 `OVERSIZED` | `config.py:134`；`ingestion_service.py:115-117` |
 | `INGEST_UPLOAD_CONCURRENCY` | 2 | 在途上传请求上限，超出 429 | `config.py:146`；`upload_admission.py:71-79` |
 | `INGEST_QUEUE_HIGH_WATERMARK` | 50 | 积压水位；只拒多文件请求，0 = 关闭 | `config.py:150-152`；`upload_admission.py:80-81`、`134-136` |
-| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数上限 → 422 | `config.py:154-156`；`ingestion.py:286-294` |
-| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节上限 → 413 | `config.py:158`；`ingestion.py:296-309` |
+| `INGEST_MAX_FILES_PER_REQUEST` | 20 | 单请求文件数上限 → 422 | `config.py:154-156`；`ingestion.py:305-313` |
+| `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节上限 → 413 | `config.py:158`；`ingestion.py:315-328` |
 | `INGEST_LOCAL_ROOTS` | 空 | 目录导入白名单（`;`/`,`/`os.pathsep` 分隔，realpath 归一化去重）；空 = 端点 404 | `config.py:164`、`241-265`；`local_scan.py:131-134` |
 | `INGEST_ARCHIVE_MAX_MB` | 500 | 压缩包本体上限 → 422 | `config.py:168`；`archive_service.py:186-211` |
 | `INGEST_ARCHIVE_MAX_FILES` | 2000 | 解包条目数上限（zip bomb #1） | `config.py:170`；`archive_service.py:276-280` |
 | `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:172-174`；`archive_service.py:281-286` |
 | `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:176`；`archive_service.py:287-293` |
 | `INGEST_ARCHIVE_TMP_DIR` | 空 | 解包目录（空 = 系统 temp） | `config.py:178`；`archive_service.py:127-135` |
-| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:180`；`housekeeping.py:208`、`:247-271` |
-| `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:184`；`housekeeping.py:324`、`323-334` |
+| `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:180`；`housekeeping.py:217`、`:247-271` |
+| `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:184`；`housekeeping.py:403`、`323-334` |
 | `INGEST_CONCURRENCY` | 2 | 并发流水线数（处理腿，本文只引用） | `config.py:140`；见 `02-ingestion-pipeline.md` |
 
 `Retry-After` 固定 2 秒：`upload_admission.RETRY_AFTER_SECONDS = 2`（`upload_admission.py:36`）。
@@ -169,6 +169,6 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 - **413 只统计“已声明大小”的 part**：`declared_total` 只累加 `upload.size` 为正整数的部分（297-301）；若解析器拿不到大小，回落路径把该 part 整份读进内存（107-110），最坏情况 20 × `INGEST_MAX_FILE_MB` 同时在内存。
 - ~~**`FAILED` 不算 live**~~ **已修（2026-09-22）**：`STORED` 之前失败（`paper_id IS NULL`）的作业，其 staging 对象现在保留 `STAGING_RETRY_GRACE_HOURS=72` 小时供重试（原先下一轮 GC 就删，重试必然取不到字节）；覆盖 `tests/test_upload_gc.py::test_staging_bytes_of_a_pre_stored_failure_are_kept_for_the_retry` 等三条。
 - **解包前的磁盘空间守卫未做**（`docs/progress/project.md` §16 已知遗留）：压缩包路径峰值 ≈ 压缩包 + 解压总量 + 正式副本，三重上限只约束后两者。
-- **`/ingest/compressed` 也吃上传准入**（占在途槽位 + 受水位限制），比计划更严，属有意选择（`docs/progress/project.md` §16，代码见 `ingestion.py:589-591`、`612`）。
+- **`/ingest/compressed` 也吃上传准入**（占在途槽位 + 受水位限制），比计划更严，属有意选择（`docs/progress/project.md` §16，代码见 `ingestion.py:608-610`、`612`）。
 - **队列是进程内的**：`--workers 1`；多副本需外部队列（`docs/progress/project.md` §16，本文不展开，见 `02-ingestion-pipeline.md`）。
 - 本会话未运行 pytest / docker，§7 的测试清单来自源码逐文件通读，行号与用例名以工作树为准；未实测任何端点（因此所有 HTTP 状态码结论均来自代码路径与测试断言，而非本机请求）。

@@ -31,8 +31,17 @@ from app.db.models import (
 )
 from app.services import api_key_service as keys
 from app.services import metadata_identifiers, paper_service
+from app.services import parser_service
+from tests.test_job_progress import (  # noqa: F401
+    factory,
+    make_job,
+    make_paper as make_paper_row,
+    stubbed_pipeline,
+)
 from tests.test_parser_service import _always_raises, _pdf_bytes
+from tests.test_pdf_embedded import extract_embedded_metadata
 from tests.test_primary_version import add_file, make_paper
+from tests.test_upload_gc import FakeStorage, age, make_job_row, run  # noqa: F401
 
 
 # --------------------------------------------------------------------------- #
@@ -341,3 +350,248 @@ def test_an_unreachable_docling_still_maps_to_docling_unavailable() -> None:
     codes = parser_service.degradation_codes(bundle.degraded_reason or "")
     assert "docling_unavailable" in codes
     assert "docling_rejected" not in codes
+
+
+# --------------------------------------------------------------------------- #
+# P2 batch (2026-10-05 review) — one test per finding where a unit is testable
+# --------------------------------------------------------------------------- #
+def test_title_fingerprint_is_capped_to_the_column() -> None:
+    """P2-1: a pathological title cannot blow fingerprint String(255)."""
+    fingerprint = paper_service.build_fingerprint(
+        title="word " * 120, first_author="a", year=2020
+    )
+    assert fingerprint.startswith("title:")
+    assert len(fingerprint) <= 255
+
+
+def test_long_titles_beyond_the_cap_collapse_together() -> None:
+    """Deterministic truncation: the same 200-char prefix -> same fingerprint."""
+    long_a = paper_service.build_fingerprint(
+        title="t" * 250 + "A", first_author="a", year=2020
+    )
+    long_b = paper_service.build_fingerprint(
+        title="t" * 250 + "B", first_author="a", year=2020
+    )
+    assert long_a == long_b
+
+
+def test_docling_reported_page_count_survives_missing_markers() -> None:
+    """P2-5: a document whose page markers were dropped takes the backend's
+    own page count instead of collapsing into one giant page 1."""
+    from app.parsing.docling_client import DoclingResult
+
+    def converter(*args, **kwargs):
+        return DoclingResult(
+            markdown="# title\n\nbody text without markers",
+            page_count=5,
+            parser_version="test",
+        )
+
+    bundle = parser_service.parse_pdf(
+        b"%PDF-fake", filename="a.pdf", backend="docling", converter=converter
+    )
+    assert bundle.page_count == 5
+
+
+def test_marker_pages_win_when_they_actually_show_pages() -> None:
+    from app.parsing.docling_client import DoclingResult
+
+    def converter(*args, **kwargs):
+        return DoclingResult(
+            markdown=(
+                "# t\n\n<!-- page-break -->\n\nbody\n\n"
+                "<!-- page-break -->\n\nmore"
+            ),
+            page_count=9,
+            parser_version="test",
+        )
+
+    bundle = parser_service.parse_pdf(
+        b"%PDF-fake", filename="a.pdf", backend="docling", converter=converter
+    )
+    assert bundle.page_count == 3
+
+
+def test_first_stage_k_is_capped() -> None:
+    """P2-8: top_k=50 x RERANK_CANDIDATES=5 wanted 250 cross-encoder calls."""
+    from app.search.hybrid import MAX_RERANK_POOL, _first_stage_k
+
+    assert _first_stage_k(10, True) == 50
+    assert _first_stage_k(50, True) == MAX_RERANK_POOL
+    assert _first_stage_k(50, False) == 50
+
+
+def test_rerank_pool_total_is_capped() -> None:
+    from types import SimpleNamespace
+
+    from app.search.hybrid import MAX_RERANK_POOL, _rerank_pool
+
+    hits = [SimpleNamespace(paper_id=f"p{index // 5}") for index in range(150)]
+    assert len(_rerank_pool(hits)) == MAX_RERANK_POOL
+
+
+def test_a_non_fingerprint_unique_conflict_is_not_mislabeled() -> None:
+    """P2-9: an author-name clash is not a DUPLICATE_FINGERPRINT."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.core.errors import classify_failure
+
+    exc = IntegrityError(
+        "INSERT INTO authors ...",
+        {},
+        Exception(
+            'duplicate key value violates unique constraint "uq_authors_normalized_name"'
+        ),
+    )
+    failure = classify_failure(exc)
+    assert failure.code != "DUPLICATE_FINGERPRINT"
+    assert "uq_authors_normalized_name" in failure.message
+
+
+def test_gfm_table_rows_survive_line_joining() -> None:
+    """P2-18: table rows keep their line structure; prose still joins."""
+    from app.parsing.structure import _join_wrapped_lines
+
+    block = (
+        "prose line one\n"
+        "prose line two\n"
+        "| a | b |\n"
+        "|---|---|\n"
+        "| c | d |\n"
+        "prose line three"
+    )
+    joined = _join_wrapped_lines(block)
+    assert "prose line one prose line two" in joined
+    assert "| a | b |\n|---|---|\n| c | d |" in joined
+    assert "prose line three" in joined
+
+
+def test_an_xmp_packet_with_a_dtd_is_refused() -> None:
+    """P2-19: entity declarations are the billion-laughs vector; the packet is
+    refused before xml.etree ever sees it."""
+    from tests.test_pdf_embedded import XMP_TEMPLATE, build_pdf
+
+    injected = XMP_TEMPLATE.format(
+        title="T",
+        author_one="A",
+        author_two="B",
+        description=']]></x:xmpmeta><!DOCTYPE lolz [<!ENTITY lol "lol">]>',
+        keywords="k",
+        doi="",
+        venue="v",
+        volume="1",
+        issue="2",
+        start_page="1",
+        end_page="2",
+        publication_date="2020",
+    )
+    metadata = extract_embedded_metadata(build_pdf(xmp=injected))
+    # The refusal path leaves the XMP side empty; the Info dictionary itself is
+    # still reported.
+    assert metadata.raw["xmp"] == {}
+    assert metadata.doi is None
+
+
+def test_extraction_dir_honors_the_retryable_grace(factory, tmp_path):  # noqa: F811
+    """P2-11: a retryable job keeps its unpacked files for 72h, not the 24h
+    TTL that made late retries fail with LocalSourceUnavailable."""
+    from tests.test_upload_gc import age, make_job_row, run
+
+    directory = tmp_path / "paperbox-req-late"
+    directory.mkdir()
+    (directory / "a.pdf").write_bytes(b"pdf")
+    age(directory, hours=30)  # older than the 24h TTL, younger than 72h
+
+    make_job_row(
+        factory,
+        payload={"source_type": "local_path", "local_path": str(directory / "a.pdf")},
+        stage="FAILED",
+        finished=True,
+        finished_hours_ago=30,
+    )
+
+    report = run(factory, FakeStorage([]), tmp_path)
+    assert directory.exists(), "a retryable job's extraction dir must survive"
+
+
+def test_extraction_dir_without_a_retryable_job_is_still_collected(
+    factory, tmp_path
+):  # noqa: F811
+    from tests.test_upload_gc import age, make_job_row, run
+
+    directory = tmp_path / "paperbox-req-done"
+    directory.mkdir()
+    (directory / "a.pdf").write_bytes(b"pdf")
+    age(directory, hours=30)
+
+    make_job_row(
+        factory,
+        payload={"source_type": "local_path", "local_path": str(directory / "a.pdf")},
+        stage="COMPLETED",
+        finished=True,
+        finished_hours_ago=30,
+    )
+
+    report = run(factory, FakeStorage([]), tmp_path)
+    assert not directory.exists()
+
+
+def test_a_lost_create_race_resolves_as_duplicate(
+    factory, stubbed_pipeline, monkeypatch
+) -> None:
+    """P2-14: the concurrent-import loser ends COMPLETED+duplicate, not FAILED."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models import IngestionJob
+    from app.services import ingestion_service as ingest
+    from app.workers import tasks
+
+    monkeypatch.setattr(tasks, "SessionLocal", factory)
+    winner_id = make_paper_row(factory)
+    job_id = make_job(factory)
+
+    state = {"raced": False}
+
+    def fake_find_by_sha256(session, digest):
+        if not state["raced"]:
+            return None
+        return session.query(Paper).filter(Paper.id == winner_id).one()
+
+    def fake_find_by_fingerprint(session, fingerprint):
+        if not state["raced"]:
+            return None
+        return session.query(Paper).filter(Paper.id == winner_id).one()
+
+    def race_then_lose(*args, **kwargs):
+        state["raced"] = True
+        raise IntegrityError(
+            "INSERT INTO papers",
+            {},
+            Exception(
+                'duplicate key value violates unique constraint "uq_papers_fingerprint_live"'
+            ),
+        )
+
+    monkeypatch.setattr(paper_service, "find_by_sha256", fake_find_by_sha256)
+    monkeypatch.setattr(paper_service, "find_by_fingerprint", fake_find_by_fingerprint)
+    monkeypatch.setattr(paper_service, "create_paper", race_then_lose)
+    monkeypatch.setattr(tasks, "_cleanup_source", lambda *a, **k: None)
+    monkeypatch.setattr(tasks.object_storage, "delete_object", lambda *a, **k: None)
+
+    session = factory()
+    try:
+        job = session.get(IngestionJob, job_id)
+        outcome = tasks._process_job(session, job)
+        assert outcome.duplicate is True
+        assert outcome.paper_id == winner_id
+        session.commit()
+    finally:
+        session.close()
+
+    session = factory()
+    try:
+        job = session.get(IngestionJob, job_id)
+        assert job.payload.get("duplicate") is True
+        assert job.paper_id == winner_id
+    finally:
+        session.close()

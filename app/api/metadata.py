@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import get_logger
 from app.core.security import require_api_key, require_write
@@ -115,7 +116,10 @@ async def import_metadata(
             detail=f"unknown source_type: {source_type}",
         )
     try:
-        report = importer.import_payload(
+        # The import (matching + optional merge writes) is a blocking DB run on
+        # the event loop otherwise (review 2026-10-05, P2-10 family).
+        report = await run_in_threadpool(
+            importer.import_payload,
             session,
             payload,
             apply=effective_apply,
@@ -128,7 +132,7 @@ async def import_metadata(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
     if effective_apply:
-        session.commit()
+        await run_in_threadpool(session.commit)
     logger.info(
         "metadata import",
         extra={

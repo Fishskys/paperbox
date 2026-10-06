@@ -354,6 +354,19 @@ def search_papers(
     """
     from app.search.hybrid import ALIAS, count_papers, facet_counts, search_chunks
 
+    # Embed the query once per request (review 2026-10-05, P2-7): the search
+    # and the paper-count courtesy query used to embed it separately, and the
+    # embedding container serializes inference behind one FIFO -- every saved
+    # call is latency off the p50/p95.
+    query_vector = None
+    if str(mode).strip().lower() in ("semantic", "hybrid"):
+        from app.services.embedding_service import EmbeddingError, embed_text
+
+        try:
+            query_vector = embed_text(query)
+        except EmbeddingError as exc:
+            raise SearchError(f"embedding the query failed: {exc}") from exc
+
     hits = search_chunks(
         query,
         mode,
@@ -364,6 +377,7 @@ def search_papers(
         rerank=rerank,
         telemetry=telemetry,
         backend=backend,
+        query_vector=query_vector,
         **search_kwargs,
     )
     results = normalize_scores(aggregate_papers(hits, top_k=top_k))
@@ -373,7 +387,14 @@ def search_papers(
             results, len({hit.paper_id for hit in hits}), len(hits), computed_facets
         )
     try:
-        total = count_papers(query, mode, filters, client=client, index=index or ALIAS)
+        total = count_papers(
+            query,
+            mode,
+            filters,
+            client=client,
+            index=index or ALIAS,
+            query_vector=query_vector,
+        )
     except SearchError as exc:
         # Counting is an extra courtesy query: a failure there must not turn a
         # working search into an error. Fall back to the pool and say so.

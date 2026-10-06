@@ -168,12 +168,15 @@ async def stage_and_queue(
         session.rollback()
         return _rejected(filename, exc, size_bytes=declared)
 
-    try:
+    def _finalize_file_job() -> tuple[IngestFileResult | None, object]:
+        """The DB half of staging (runs off the event loop, review P2-10).
+
+        Returns ``(duplicate_result, created_job)`` — exactly one is meaningful.
+        """
         existing = ingest.find_existing_paper(session, digest)
         if existing is not None:
             # Same content is already in the library: the staged copy has served
             # its only purpose (hashing) and goes away immediately.
-            await run_in_threadpool(_discard_staging, staging_key)
             job = ingest.create_job(
                 session,
                 source_type="file",
@@ -183,12 +186,15 @@ async def stage_and_queue(
             )
             ingest.resolve_duplicate(session, existing, job)
             session.commit()
-            return IngestFileResult(
-                filename=filename,
-                status=STATUS_DUPLICATE,
-                job_id=job.id,
-                paper_id=existing.id,
-                size_bytes=size,
+            return (
+                IngestFileResult(
+                    filename=filename,
+                    status=STATUS_DUPLICATE,
+                    job_id=job.id,
+                    paper_id=existing.id,
+                    size_bytes=size,
+                ),
+                job,
             )
 
         job = ingest.create_job(
@@ -200,12 +206,23 @@ async def stage_and_queue(
             payload={"object_key": staging_key},
         )
         session.commit()
+        return None, job
+
+    try:
+        duplicate, job = await run_in_threadpool(_finalize_file_job)
     except Exception as exc:  # noqa: BLE001 - database trouble is per-part too
         session.rollback()
         await run_in_threadpool(_discard_staging, staging_key)
         return _rejected(filename, exc, size_bytes=size)
+    if duplicate is not None:
+        # Same content was already in the library: the staged copy has served
+        # its only purpose (hashing) and goes away immediately.
+        await run_in_threadpool(_discard_staging, staging_key)
+        return duplicate
 
-    ingest.submit_or_fail(session, job.id, job_queue.KIND_INGEST, priority)
+    await run_in_threadpool(
+        ingest.submit_or_fail, session, job.id, job_queue.KIND_INGEST, priority
+    )
     return IngestFileResult(
         filename=filename,
         status=STATUS_ACCEPTED,
@@ -258,6 +275,8 @@ def ingest_url(
             status_code=status.HTTP_400_BAD_REQUEST, detail=f"url not allowed: {exc.reason}"
         ) from exc
 
+    # Sync endpoint: FastAPI runs it on the threadpool, so the DB calls here
+    # never touch the event loop.
     job = ingest.create_job(session, source_type="url", source=source)
     session.commit()
     queued = ingest.submit_or_fail(session, job.id, job_queue.KIND_INGEST) or job
@@ -665,10 +684,19 @@ async def ingest_compressed(
     archive_service.prune_tree(dest)
 
     if accepted_ids:
-        for job_id in accepted_ids:
-            ingest.submit_or_fail(
-                session, job_id, job_queue.KIND_INGEST, job_queue.PRIORITY_BATCH
-            )
+        # AGENTS section 1: one file = interactive (a human is waiting), even
+        # when it arrived inside an archive (review 2026-10-05, P2-17).
+        priority = (
+            job_queue.PRIORITY_INTERACTIVE
+            if len(accepted_ids) == 1
+            else job_queue.PRIORITY_BATCH
+        )
+
+        def _submit_all() -> None:
+            for job_id in accepted_ids:
+                ingest.submit_or_fail(session, job_id, job_queue.KIND_INGEST, priority)
+
+        await run_in_threadpool(_submit_all)
 
     logger.info(
         "ingest/compressed request finished",

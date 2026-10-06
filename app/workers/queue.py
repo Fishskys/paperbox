@@ -245,7 +245,12 @@ class IngestQueue:
         finally:
             session.close()
         for job_id, payload in requeue:
-            self.enqueue(job_id, kind_for_payload(payload))
+            # BATCH on purpose (review 2026-10-05, P2-6): the original
+            # interactive/batch decision was made by the request that is long
+            # gone, and a restart is an operator event -- recovered jobs must
+            # not jump ahead of the queue (the default priority is
+            # interactive, which is exactly the jump this avoids).
+            self.enqueue(job_id, kind_for_payload(payload), PRIORITY_BATCH)
         if requeue or interrupted:
             logger.warning(
                 "ingest queue recovered jobs from a previous process",

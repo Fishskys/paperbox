@@ -17,14 +17,14 @@
 | 表 | 一行代表 | 谁写它 | 出处 |
 |---|---|---|---|
 | `papers` | 一篇论文（**当前值**的物化） | `provenance_service.write_field`、`metadata_merge` | `models.py:76` |
-| `paper_sources` | 一份来源数据（一次导入 / 一次解析） | `metadata_sources.upsert_source` | `models.py:468` |
-| `paper_field_provenance` | 一条字段声明（append-only 账本） | `provenance_service.record_claim` / `promote` | `models.py:588` |
-| `paper_identifiers` | 一个标识符（DOI / arXiv / IEEE article number / …） | `metadata_identifiers.upsert_identifier` / `replace_identifier` | `models.py:527` |
-| `venues` | 一个期刊或会议**实体** | `venue_service.resolve_venue` | `models.py:206` |
-| `venue_editions` | 某实体**某一年的那一届** | `venue_service.get_or_create_edition` | `models.py:655` |
-| `paper_files` | 一个 PDF 版本（含主版本标记、来源归属） | `paper_service.register_original_file` / `select_primary_file` | `models.py:326` |
-| `authors` + `paper_authors` | 作者字典 + 论文↔作者（带顺序） | `paper_service.get_or_create_author` | `models.py:177` / `:237` |
-| `paper_tags` + `papers_tags` | 标签字典 + 论文↔标签（带 `kind`） | `metadata_tags.link_tags` / `replace_kind` | `models.py:265` / `:293` |
+| `paper_sources` | 一份来源数据（一次导入 / 一次解析） | `metadata_sources.upsert_source` | `models.py:476` |
+| `paper_field_provenance` | 一条字段声明（append-only 账本） | `provenance_service.record_claim` / `promote` | `models.py:596` |
+| `paper_identifiers` | 一个标识符（DOI / arXiv / IEEE article number / …） | `metadata_identifiers.upsert_identifier` / `replace_identifier` | `models.py:535` |
+| `venues` | 一个期刊或会议**实体** | `venue_service.resolve_venue` | `models.py:214` |
+| `venue_editions` | 某实体**某一年的那一届** | `venue_service.get_or_create_edition` | `models.py:663` |
+| `paper_files` | 一个 PDF 版本（含主版本标记、来源归属） | `paper_service.register_original_file` / `select_primary_file` | `models.py:334` |
+| `authors` + `paper_authors` | 作者字典 + 论文↔作者（带顺序） | `paper_service.get_or_create_author` | `models.py:185` / `:245` |
+| `paper_tags` + `papers_tags` | 标签字典 + 论文↔标签（带 `kind`） | `metadata_tags.link_tags` / `replace_kind` | `models.py:273` / `:301` |
 
 关系主轴（三层 + 一个骨架）：
 
@@ -90,7 +90,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ## 3. 表里有什么
 
-### 3.1 `paper_sources`（`models.py:468-524`）
+### 3.1 `paper_sources`（`models.py:476-532`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -107,9 +107,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `imported_at` | DATETIME NOT NULL，默认 `now()` | |
 | `importer` | VARCHAR(128) | API / CLI / 脚本名 |
 
-约束与索引：`UNIQUE(source_type, source_ref)`（`uq_paper_sources_type_ref`，`models.py:481`）＝**幂等导入**；`ix_paper_sources_paper_id`、`ix_paper_sources_match_status`。
+约束与索引：`UNIQUE(source_type, source_ref)`（`uq_paper_sources_type_ref`，`models.py:489`）＝**幂等导入**；`ix_paper_sources_paper_id`、`ix_paper_sources_match_status`。
 
-### 3.2 `paper_identifiers`（`models.py:527-586`）
+### 3.2 `paper_identifiers`（`models.py:535-594`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -124,9 +124,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 约束与索引：`UNIQUE(paper_id, scheme, normalized_value)`（`:522`）＝同一篇论文内不重复；**部分唯一** `UNIQUE(scheme, normalized_value) WHERE paper_id IS NOT NULL`（`uq_paper_identifiers_scheme_value`，`:529`）＝一个标识符只属一篇论文；`ix_paper_identifiers_paper_id`。
 
-语义要点：删除论文时 `soft_delete_paper`（`paper_service.py:657`）会**删掉标识符行**以释放 DOI；`upsert_identifier`（`:231`）遇到"属主已软删"的行会把它改指到新论文。
+语义要点：删除论文时 `soft_delete_paper`（`paper_service.py:670`）会**删掉标识符行**以释放 DOI；`upsert_identifier`（`:244`）遇到"属主已软删"的行会把它改指到新论文。
 
-### 3.3 `paper_field_provenance`（`models.py:588-653`）
+### 3.3 `paper_field_provenance`（`models.py:596-661`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -148,9 +148,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 - `identifier:<scheme>`，如 `identifier:doi`
 - `tag:<kind>`，如 `tag:ieee_terms`
 
-约束与索引：**部分唯一** `UNIQUE(paper_id, field) WHERE is_current`（`uq_paper_field_provenance_current`，`:604`）；`ix_paper_field_provenance_paper_field`。历史行永不删除——回滚 = 把历史某行置回 `is_current=true` 并写回 `papers` 列（`rollback_field`，`provenance_service.py:253`）。
+约束与索引：**部分唯一** `UNIQUE(paper_id, field) WHERE is_current`（`uq_paper_field_provenance_current`，`:608`）；`ix_paper_field_provenance_paper_field`。历史行永不删除——回滚 = 把历史某行置回 `is_current=true` 并写回 `papers` 列（`rollback_field`，`provenance_service.py:253`）。
 
-### 3.4 `venues`（`models.py:206-231`）与 `venue_editions`（`:659-688`）
+### 3.4 `venues`（`models.py:214-239`）与 `venue_editions`（`:667-696`）
 
 | 表 | 列 | 约束 |
 |---|---|---|
@@ -161,7 +161,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 写入方 `venue_service`：`get_or_create_edition:204` / `resolve_venue:252` / `attach_venue:285`，语义是**只填空**。
 
-### 3.5 `papers` 的元数据相关列（`models.py:76-175`）
+### 3.5 `papers` 的元数据相关列（`models.py:76`）
 
 | 组 | 列 |
 |---|---|
@@ -174,7 +174,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 索引：部分唯一 `uq_papers_fingerprint_live (fingerprint) WHERE deleted_at IS NULL`；`ix_papers_doi` / `ix_papers_arxiv_id` / `ix_papers_year` / `ix_papers_status` / `ix_papers_venue_year` / `ix_papers_created_at`。
 
-### 3.6 `paper_files`（`models.py:326-374`）
+### 3.6 `paper_files`（`models.py:334-382`）
 
 | 列 | 类型 / 约束 | 说明 |
 |---|---|---|
@@ -188,9 +188,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 约束与索引：**部分唯一** `UNIQUE(paper_id) WHERE is_primary AND deleted_at IS NULL`（`uq_paper_files_primary`，`:324`）；`ix_paper_files_paper_id`。
 
-主版本优先级 `published_pdf(3) > original(2) > arxiv_pdf(1) > supplement(0)`（`paper_service.py:64-69`）；`select_primary_file`(`:439`) 取优先级最高、同级取先到；`original_file(paper)`（`:413`）返回的**是主版本文件**，`GET /api/papers/{id}/file`、reindex、删除都走它。**只有主版本被解析/切块/索引**，非主版本照样登记但不解析。
+主版本优先级 `published_pdf(3) > original(2) > arxiv_pdf(1) > supplement(0)`（`paper_service.py:64-69`）；`select_primary_file`(`:452`) 取优先级最高、同级取先到；`original_file(paper)`（`:426`）返回的**是主版本文件**，`GET /api/papers/{id}/file`、reindex、删除都走它。**只有主版本被解析/切块/索引**，非主版本照样登记但不解析。
 
-### 3.7 作者与标签（`models.py:177-205`、`223-315`）
+### 3.7 作者与标签（`models.py:185-213`、`223-315`）
 
 | 表 | 列 | 约束 |
 |---|---|---|
@@ -201,15 +201,15 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 `kind ∈ {ieee_terms, author_terms, dynamic_index_terms, source_tag}`（`metadata_tags.py:22-25`）；落库入口 `link_tags:64` / `replace_kind:141` / `tags_by_kind:133`。
 
-作者唯一性：`get_or_create_author`（`paper_service.py:182`）按 `normalized_name` 查行，旧实现用 `scalar_one_or_none()`，重复行会让整篇论文 `MultipleResultsFound` 失败；现在既加了唯一约束（迁移 `0de3ab5e24dc`，先把重复行的关联重指到最老行再删重复行），查找也改成**容错**（最老行优先 + 多条时 WARNING），未跑迁移的库照常工作。
+作者唯一性：`get_or_create_author`（`paper_service.py:195`）按 `normalized_name` 查行，旧实现用 `scalar_one_or_none()`，重复行会让整篇论文 `MultipleResultsFound` 失败；现在既加了唯一约束（迁移 `0de3ab5e24dc`，先把重复行的关联重指到最老行再删重复行），查找也改成**容错**（最老行优先 + 多条时 WARNING），未跑迁移的库照常工作。
 
 ### 3.8 四个部分唯一索引 = 模型不变量
 
 | 不变量 | 索引 | 定义处 | 违反时会怎样 |
 |---|---|---|---|
-| 一个标识符只属一篇论文 | `uq_paper_identifiers_scheme_value` | `models.py:545` | 同一 DOI 注册不上第二篇；删除论文时**必须**释放标识符行 |
-| 每个字段只有一个当前值 | `uq_paper_field_provenance_current` | `models.py:599` | 翻转当前值必须在同一事务里先降旧行 |
-| 每篇论文只有一个主版本文件 | `uq_paper_files_primary` | `models.py:334` | 主版本翻牌必须在同一事务内改完所有行 |
+| 一个标识符只属一篇论文 | `uq_paper_identifiers_scheme_value` | `models.py:553` | 同一 DOI 注册不上第二篇；删除论文时**必须**释放标识符行 |
+| 每个字段只有一个当前值 | `uq_paper_field_provenance_current` | `models.py:607` | 翻转当前值必须在同一事务里先降旧行 |
+| 每篇论文只有一个主版本文件 | `uq_paper_files_primary` | `models.py:342` | 主版本翻牌必须在同一事务内改完所有行 |
 | 指纹只被存活论文占用 | `uq_papers_fingerprint_live` | `models.py:89` | 软删行保留原指纹供追溯，删除即释放 |
 
 ---
@@ -265,7 +265,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 落库与报告：`apply_decision:263` → `merge_values:320`（批量）→ `conflict_report:375`；复核清单由 `recorded_conflicts:533` 生成，**只列"真冲突"**（`is_current=false` 且值不同、来源不是 `pdf_heuristic`、论文未删）——"结构化覆盖启发式"是规则 2 的正常工作，不出现在清单里。
 
-### 4.4 五步匹配器（`match_record`，`metadata_matcher.py:267-340`）
+### 4.4 五步匹配器（`match_record`，`metadata_matcher.py:284-357`）
 
 | 步 | 依据 | 置信度 | 结果 |
 |---|---|---|---|
@@ -280,10 +280,10 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ### 4.5 摄取链：PDF → 归属哪篇论文 → 主版本 → 元数据回填
 
-1. `_run_pipeline`（`tasks.py:446`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`（`:768`）。
-2. `_match_existing_paper`（`:817`）：先读 PDF 内嵌元数据（Info / XMP）匹配，失败再跑首页启发式匹配；命中已有论文（含壳）→ `metadata_shell.adopt_paper`，把 `reused_paper_id` / `match_method` 写进 `job.payload`。
-3. `apply_primary_selection`（`paper_service.py:476`）判主版本；非主版本立刻 `_finish_non_primary`（`tasks.py:887`）结束。
-4. 主版本继续：`_reset_placeholder_title`（`:866`）→ `_backfill_metadata`（`:869`）→ `_restore_placeholder_title`（`:859`）→ 指纹升级（`sha256` 撞车则丢弃本次论文）→ 切块 → 嵌入 → `delete_by_paper_id` + `bulk_index_chunks` → `INDEXED`。
+1. `_run_pipeline`（`tasks.py:464`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`（`:786`）。
+2. `_match_existing_paper`（`:835`）：先读 PDF 内嵌元数据（Info / XMP）匹配，失败再跑首页启发式匹配；命中已有论文（含壳）→ `metadata_shell.adopt_paper`，把 `reused_paper_id` / `match_method` 写进 `job.payload`。
+3. `apply_primary_selection`（`paper_service.py:489`）判主版本；非主版本立刻 `_finish_non_primary`（`tasks.py:905`）结束。
+4. 主版本继续：`_reset_placeholder_title`（`:879`）→ `_backfill_metadata`（`:882`）→ `_restore_placeholder_title`（`:872`）→ 指纹升级（`sha256` 撞车则丢弃本次论文）→ 切块 → 嵌入 → `delete_by_paper_id` + `bulk_index_chunks` → `INDEXED`。
 5. `_backfill_metadata` 按层写声明：第 1 层 `pdf_embedded`（结构化，confidence 1.0）→ 第 2 层 `pdf_heuristic`（confidence 0.5），每层各自 `upsert_source` 后 `merge_values`。
 
 主版本四场景：
@@ -293,7 +293,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 首个版本 | `primary`，正常解析索引 |
 | 更高优先级后到 | `promoted`：同一次流水线继续 `PARSING→INDEXING`，用 `delete_by_paper_id` 换掉旧文档 |
 | 更低优先级后到 | `non_primary`：只登记文件；作业 `COMPLETED` + `payload["indexed"]=false`、`reason="non_primary_version"` |
-| 主版本被移除 | `remove_file`（`paper_service.py:518`）按优先级重选；无剩余文件 → `FAILED`，索引留待人工 |
+| 主版本被移除 | `remove_file`（`paper_service.py:531`）按优先级重选；无剩余文件 → `FAILED`，索引留待人工 |
 
 ### 4.6 壳论文（`AWAITING_FILE`）：元数据先、PDF 后
 
@@ -305,10 +305,10 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 | 端点 | 作用 | 出处 |
 |---|---|---|
-| `POST /api/metadata/import` | 导入外部记录，**默认 dry_run** | `api/metadata.py:92` |
-| `GET /api/metadata/review` | 复核清单（`pending` / `ambiguous` 来源 + 真冲突） | `:147` |
-| `POST /api/metadata/sources/{source_id}/attach` | 人工把来源挂到某篇论文并重放合并 | `:164` |
-| `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | `:217` |
+| `POST /api/metadata/import` | 导入外部记录，**默认 dry_run** | `api/metadata.py:93` |
+| `GET /api/metadata/review` | 复核清单（`pending` / `ambiguous` 来源 + 真冲突） | `:151` |
+| `POST /api/metadata/sources/{source_id}/attach` | 人工把来源挂到某篇论文并重放合并 | `:168` |
+| `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | `:221` |
 | `GET /api/papers/{id}/metadata` | 当前值 + 字段账本视图 | `api/papers.py:193` |
 | `PATCH /api/papers/{id}/metadata` | 人工编辑（未知键进 `rejected`；改 `doi`/`arxiv_id` 会升级指纹） | `:186` |
 | `POST /api/papers/{id}/metadata/rollback` | 把某字段回滚到历史声明 | `:206` |
@@ -330,7 +330,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 - **索引快照**：`app/search/snapshot.py::paper_metadata_snapshot`（`:74`）把当前值写成 chunk 文档上的可过滤字段
   （`venue`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers`/四个 tag kind），INDEXING 阶段由
-  `_index_rows`（`tasks.py:1235`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`
+  `_index_rows`（`tasks.py:1253`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`
   （重算向量，≈1 chunk/s），要么 `uv run python scripts/refresh_index_metadata.py`（只改快照、秒级；2026-09-22
   真机 2883 文档全部更新、0 失败）。
 - **读接口**：`PaperOut`（`app/schemas/paper.py:24`）直接输出当前值列 `volume/issue/pages/publication_date/
@@ -390,5 +390,5 @@ CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_m
 
 - `papers.external_id`（`models.py:89`）全仓无引用，是历史遗留列。
 - `ImportReport.unmatched`（`metadata_import.py:593`）有字段无自增点，恒为 0；没有证据的记录一律计入 `created_shell`。
-- `PrimaryOutcome.needs_reindex`（`paper_service.py:466-468`）只有单测引用，app 无调用方——主版本翻牌由同一次流水线继续索引完成。
+- `PrimaryOutcome.needs_reindex`（`paper_service.py:479-481`）只有单测引用，app 无调用方——主版本翻牌由同一次流水线继续索引完成。
 - `papers.doi` / `papers.arxiv_id` 是镜像列，改它们必须同时改 `paper_identifiers`（走 `replace_identifier` + `mirror_legacy_columns`）。
