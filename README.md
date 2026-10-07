@@ -36,6 +36,41 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 > 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成
 > `wsl -e bash -lc "cd /mnt/<盘>/.../paperbox/infra && docker compose up -d"` 即可。
 
+### 可选：让 Agent 通过 MCP 接入
+
+REST 之外，同一个进程还对外提供 MCP 端点 `/mcp`（Streamable HTTP）：10 个工具（检索、读块与上下文、
+元数据、签名下载、导入、删除、重建索引）与 REST **共用同一套业务实现、密钥与审计**，所以数字和权限
+口径一致。默认关闭，启用三步（需要改三项配置）：
+
+```bash
+# 1) 发一把密钥（角色 read < write < admin；库内只存 sha256，明文只在创建时打印一次）
+uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role admin
+
+# 2) 打开开关；Host 白名单必填，写客户端实际访问用的主机名（含端口通配）
+#    .env:  MCP_ENABLED=true
+#           AUTH_ENABLED=true
+#           MCP_ALLOWED_HOSTS=127.0.0.1,127.0.0.1:*,localhost,localhost:*
+
+# 3) 重启应用后自检（只读面 37 项断言，EXIT=0 即通过）
+PAPER_API_KEY=<第 1 步打印的密钥> uv run python scripts/acceptance_mcp.py
+```
+
+客户端侧把 URL 指向 `http://<主机>:8077/mcp`、密钥放进 `Authorization: Bearer` 头即可，例如 Codex：
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.paperbox]
+url = "http://127.0.0.1:8077/mcp"
+bearer_token_env_var = "PAPERBOX_MCP_TOKEN"
+```
+
+写工具（导入 / 删除 / 重建索引 / 改元数据）默认**不注册**（`tools/list` 里看不到），要显式打开
+`MCP_WRITE_ENABLED` 与对应的 `MCP_ALLOW_*`；删除与重建即使开了也默认先跑 `dry_run`。工具契约、
+错误码、四个客户端的接入片段与排障见 [MCP 契约](docs/architecture/11-mcp-agent-interface.md)。
+
+> 只开 `MCP_ENABLED` 而不开 `AUTH_ENABLED` 时，MCP 面等同匿名 admin（与 REST 同一套开关），
+> 适合本机自用；只要监听地址不止本机，就应当把 `AUTH_ENABLED` 一起打开并按上面发密钥。
+
 具体部署（服务器形态、数据目录、备份迁移）与全部配置项、接口参数、使用示例，参考[用户手册](UserManual.md)。
 
 ## 3. 项目架构
@@ -133,7 +168,7 @@ paperbox/
 
 ## 6. 声明
 
-本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.3.0**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.4.0**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 使用中遇到问题或有想法，欢迎提 [Issue](https://github.com/Fishskys/paperbox/issues) 与 Pull Request；
 如果它对你的工作有帮助，欢迎点一个 ⭐ [Star](https://github.com/Fishskys/paperbox)。
