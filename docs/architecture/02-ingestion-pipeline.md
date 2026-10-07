@@ -188,7 +188,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:577-582 → 轮询终止
 | **重试路由看 `paper_id`，不看 `stage`**。`STORED` 之后失败必有 `paper_id`，故能复用 MinIO 原文与论文行 | `tasks.py:182-191`；测试 `tests/test_job_retry.py:114-252` |
 | **`dedupe=False` 只用于 reindex**。若 reindex 也做指纹弃单，会把自己（已索引的存活论文）连 chunk 带索引文档一起清掉 | `tasks.py:114` 与 `_run_pipeline` docstring L452-466；`_upgrade_fingerprint` 的 `discard_on_conflict` L572-588、L601-608；测试 `tests/test_fingerprint_priority.py:338` |
 | `dedupe=False` 还顺带跳过 `_resolve_target_paper`（条件是 `dedupe and file_record is not None`，reindex 两者都不满足）→ reindex 不会走非主版本分支 | `tasks.py:500-500`；`reindex_paper` 未传 `file_record`（L111） |
-| **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:461-463` |
+| **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:466-468` |
 | **同名常量两处定义**：`tasks.py:56-63` 定义了自己的 `STAGE_DOWNLOADING`/`STAGE_STORED`/`PROGRESS_DOWNLOADING`/`PROGRESS_STORED`，但这两阶段实际用的是 `ingest.*`（L227、L274-275）；两处值相同，暂无行为差异，但改一处会漏另一处 | `tasks.py:56-63` vs `226-228`、`273-275` |
 | 队列是**进程内**的：只有 `--workers 1` 的前提下成立 | `queue.py:20-24`；`README.md:135-137` |
 | `stop()` 不会杀线程里的流水线；该作业行停在中间态，下次启动被 `recover` 标 `INTERRUPTED` | `queue.py:139-154` |
@@ -233,7 +233,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:577-582 → 轮询终止
 - **`run_reindex_job` 的"无 paper_id"失败不带错误码**：`mark_failed` 未传 `code`，于是 `stage=FAILED` 而 `error_code=NULL`，与其它失败不一致。`tasks.py:129-132`。
 - **没有取消接口**：`QUEUED` 作业无法取消，只能在跑完后删除论文；本文未发现相关端点或测试（未确认是否有意为之）。
 - **`progress` 的粒度**：`STORED → PARSING` 之间（下载+解析）没有中间反馈，大 PDF 会长时间停在 30/45；`PARSING` 内部无进度。
-- **`stage` 无枚举约束**：DB 层 `String(32)` 无 CHECK，写错值不会被拦住。`app/db/models.py:461-463`。
+- **`stage` 无枚举约束**：DB 层 `String(32)` 无 CHECK，写错值不会被拦住。`app/db/models.py:466-468`。
 - **阶段常量重复定义**：`tasks.py:56-63` 与 `ingestion_service.py:33-64` 各有一套 `DOWNLOADING`/`STORED` 常量（值相同、互不引用），后续改动有漏改风险。
 - **`payload.indexed` / `payload.reason` 不上 API**：非主版本作业只在 `payload` 里留痕，`serialize_job` 不暴露，客户端只能看到 `COMPLETED`。`tasks.py:881-884`、`ingestion_service.py:294-307`。
 - **队列统计不做持久化**：`stats()` 是内存快照，重启后归零，没有历史/告警。`queue.py:279-296`。
