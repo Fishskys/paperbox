@@ -4,7 +4,7 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.4.0] - 2026-10-07
 
 ### Added
 
@@ -13,6 +13,8 @@
   缺凭证 401、不匹配 403、档位不足 403（`insufficient role`）；日志/审计/检索日志只记 key 前缀；
   `scripts/manage_keys.py create|list|revoke` 管理密钥；签名下载仍只认 HMAC。真机双态验收通过。
 - **`scripts/acceptance_auth.py`**：鉴权真机验收（关态 5 项 / 开态 13 项，含 MCP 面与吊销即时生效）。
+- **README §2 增加「让 Agent 通过 MCP 接入」**：发密钥 → 开 `MCP_ENABLED` + `AUTH_ENABLED` + Host 白名单
+  → 重启自检三步，附 Codex 侧配置片段与写工具默认不注册的说明。
 
 ### Changed
 
@@ -21,6 +23,8 @@
   正确性（P1-7 `_PDF_SUFFIX` 正则、P1-8 过滤器归一化、P1-9 CJK token 计权、P1-10 身份整值声明、
   P1-11 非 UUID 预检、P1-17 单测重建部分唯一索引）、健壮性（P1-12 docling 连接级超时、P1-13
   `docling_rejected` 账本码、P1-14 `submit_or_fail`）、P2 19/20 与 P3 文档对账项。
+- **`.env.example` 注释改为中英对照**（每条注释中文一行、英文一行；91 个键值行逐字节未动）：模板原先是
+  中英混杂，现在同一份文件内每种语言都能读懂全部配置，不必在中文注释和英文注释之间跳。
 - **测试不再继承本地 `.env`**：`tests/conftest.py` 固定 `MCP_ENABLED=false` / `AUTH_ENABLED=false`
   （MCP SDK 的 session manager 每进程只能进一次，第二个 `TestClient` 会启动失败；单测要 MCP 的
   case 自行显式打开）。
