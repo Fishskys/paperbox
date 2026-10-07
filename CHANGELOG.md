@@ -4,6 +4,33 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- **鉴权体系 v1（`AUTH_ENABLED` 全开全关 + 三档密钥 + 前缀审计）**：REST 30 个端点与 `/mcp` 10 个工具
+  共用一套密钥（`api_keys` 表只存 sha256；`read < write < admin`；env 值作启动引导 admin 行）；
+  缺凭证 401、不匹配 403、档位不足 403（`insufficient role`）；日志/审计/检索日志只记 key 前缀；
+  `scripts/manage_keys.py create|list|revoke` 管理密钥；签名下载仍只认 HMAC。真机双态验收通过。
+- **`scripts/acceptance_auth.py`**：鉴权真机验收（关态 5 项 / 开态 13 项，含 MCP 面与吊销即时生效）。
+
+### Changed
+
+- **审查修复（2026-10-05 全项目审查的 P0–P3）**：事务边界（P1-1 savepoint、P1-2 两段 flush、P1-3 采纳检查点、
+  P1-4 chunk 快照/恢复）、数据生命周期（P1-5 staging GC 年龄保护、P1-6 软删属主、P2-20 孤儿原件 24 h）、
+  正确性（P1-7 `_PDF_SUFFIX` 正则、P1-8 过滤器归一化、P1-9 CJK token 计权、P1-10 身份整值声明、
+  P1-11 非 UUID 预检、P1-17 单测重建部分唯一索引）、健壮性（P1-12 docling 连接级超时、P1-13
+  `docling_rejected` 账本码、P1-14 `submit_or_fail`）、P2 19/20 与 P3 文档对账项。
+- **测试不再继承本地 `.env`**：`tests/conftest.py` 固定 `MCP_ENABLED=false` / `AUTH_ENABLED=false`
+  （MCP SDK 的 session manager 每进程只能进一次，第二个 `TestClient` 会启动失败；单测要 MCP 的
+  case 自行显式打开）。
+
+### Fixed
+
+- **P1-16 收尾：`Content-Length` 之外的路也封了**。JSON 请求体现在由 `BodyLimitMiddleware`
+  按上限（8 MB）缓冲后回放给应用，**chunked 或谎报长度的请求无法再让 `request.json()` 无界缓冲**，
+  超限一律 413 且不执行路由；multipart 无声明长度仍走流式（业务层自有限制）。
+
 ## [0.3.0] - 2026-10-05
 
 paperbox 从"只有 REST 接口"变成"REST + MCP 双面服务"：agent 可以直接把论文库当检索与阅读工具用。
