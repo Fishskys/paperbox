@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
 from app.api import ingestion as ingestion_api
@@ -146,40 +146,83 @@ MAX_TOTAL_BODY_BYTES = 256 * 1024 * 1024
 
 
 class BodyLimitMiddleware:
-    """Reject oversized bodies from ``Content-Length`` before anything reads them.
+    """Cap request bodies before anything reads them (review 2026-10-05, P1-16).
 
-    Check-only (no body is consumed): a request without ``Content-Length``
-    (chunked) passes and is bounded by the per-endpoint streaming limits. JSON
-    gets a much smaller ceiling than multipart — no legitimate JSON body here
-    is anywhere near 8 MB, while an 8 MB JSON payload buffered by
-    ``request.json()`` used to be a cheap way to pressure the single worker.
+    Two body shapes, two mechanisms:
+
+    * **Declared length** — a ``Content-Length`` over the ceiling is refused up
+      front and no body is read at all (JSON 8 MB, everything else 256 MB).
+    * **JSON** — the body is buffered *up to the ceiling* and replayed to the
+      app, so neither a chunked body nor one that lies about its declared length
+      can make ``request.json()`` buffer unbounded bytes. Over the ceiling: 413,
+      and no route ever runs. The buffer is bounded by the ceiling by
+      construction, which is the whole point.
+
+    Multipart without a declared length still streams through: the upload path
+    counts bytes per file and per request while streaming (that is where its own
+    413/422 rules live), and buffering up to 256 MB here would be exactly the
+    memory spike this class exists to prevent.
     """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            headers = {
-                key.decode("latin-1").lower(): value.decode("latin-1")
-                for key, value in scope.get("headers", [])
-            }
-            content_length = headers.get("content-length", "")
-            if content_length.isdigit():
-                content_type = headers.get("content-type", "")
-                if content_type.split(";", 1)[0].strip().lower() == "application/json":
-                    limit = MAX_JSON_BODY_BYTES
-                else:
-                    limit = MAX_TOTAL_BODY_BYTES
-                if int(content_length) > limit:
-                    from starlette.responses import JSONResponse
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-                    response = JSONResponse(
-                        {"detail": "request body too large"}, status_code=413
-                    )
-                    await response(scope, receive, send)
-                    return
-        await self.app(scope, receive, send)
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        is_json = content_type == "application/json"
+        limit = MAX_JSON_BODY_BYTES if is_json else MAX_TOTAL_BODY_BYTES
+
+        declared = headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > limit:
+            await _answer_too_large(scope, receive, send)
+            return
+
+        if not is_json or scope.get("method") in {"GET", "HEAD", "OPTIONS"}:
+            await self.app(scope, receive, send)
+            return
+
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                continue
+            body += message.get("body", b"")
+            if len(body) > MAX_JSON_BODY_BYTES:
+                # The ceiling is enforced on bytes that actually arrived, so a
+                # missing or understated Content-Length cannot get past it.
+                await _answer_too_large(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        replayed = False
+
+        async def replay() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+
+async def _answer_too_large(scope: Scope, receive: Receive, send: Send) -> None:
+    """Answer 413 without giving the body to any route."""
+    from starlette.responses import JSONResponse
+
+    response = JSONResponse({"detail": "request body too large"}, status_code=413)
+    await response(scope, receive, send)
 
 
 app.add_middleware(BodyLimitMiddleware)

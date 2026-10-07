@@ -246,6 +246,32 @@ def test_an_oversized_query_is_a_422(client) -> None:
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
+def test_a_chunked_json_body_over_the_ceiling_is_a_413(client) -> None:
+    """P1-16, the half the first fix missed: no ``Content-Length`` is not a way around it.
+
+    An iterator body goes out as ``Transfer-Encoding: chunked``, which is exactly
+    the shape that used to reach ``request.json()`` unbounded. The middleware now
+    counts the bytes that actually arrive.
+    """
+    payload = b'{"query": "' + b"x" * (9 * 1024 * 1024) + b'"}'
+    chunks = (payload[index : index + 65536] for index in range(0, len(payload), 65536))
+    response = client.post(
+        "/api/search", content=chunks, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    assert response.json() == {"detail": "request body too large"}
+
+
+def test_a_chunked_json_body_under_the_ceiling_reaches_the_route(client) -> None:
+    """The same path must not break the body: it is buffered and replayed intact."""
+    payload = b'{"query": "' + b"x" * 1001 + b'"}'  # pydantic's own cap → 422
+    chunks = (payload[index : index + 8] for index in range(0, len(payload), 8))
+    response = client.post(
+        "/api/search", content=chunks, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 def test_a_normal_query_body_passes_the_ceiling(client) -> None:
     """A normal-size body reaches route handling (the 422 is pydantic's, on
     filters, not the middleware's) — here: an unknown mode, small body."""

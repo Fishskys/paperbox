@@ -22,6 +22,22 @@ invariant now fails on IntegrityError instead of passing silently (review
 
 from __future__ import annotations
 
+import os
+
+# The unit suite must not inherit the developer's ``.env``. Two switches matter:
+#
+# * ``MCP_ENABLED=true`` makes the app lifespan enter the SDK session manager, and
+#   that manager "can only be called once per instance" -- the second ``TestClient``
+#   in a run then dies during startup. Tests that exercise MCP turn it on
+#   explicitly (``tests/test_mcp_*.py``), so pin it off here.
+# * ``AUTH_ENABLED=true`` would make anonymous requests 401; the suite asserts
+#   anonymous behaviour and the auth fixtures set the switch themselves.
+#
+# Real environment variables take priority over ``.env`` in pydantic-settings, and
+# conftest is imported before any test module, so this pins the whole run.
+os.environ["MCP_ENABLED"] = "false"
+os.environ["AUTH_ENABLED"] = "false"
+
 import pytest
 import sqlalchemy
 from sqlalchemy import Index, Table, UniqueConstraint, create_engine, text
