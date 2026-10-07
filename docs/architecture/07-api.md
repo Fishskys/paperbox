@@ -50,8 +50,8 @@
 | GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 是 | — | `app/api/papers.py:242` |
 | PATCH | `/api/papers/{paper_id}/metadata` | 手动改元数据 | 是 | — | `app/api/papers.py:256` |
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张 | 是 | — | `app/api/papers.py:276` |
-| DELETE | `/api/papers/{paper_id}` | 删除（204） | 是 | — | `app/api/papers.py:302` |
-| POST | `/api/papers/{paper_id}/reindex` | 重建索引（202） | 是 | — | `app/api/papers.py:345` |
+| DELETE | `/api/papers/{paper_id}` | 删除（204） | 是 | — | `app/api/papers.py:240` |
+| POST | `/api/papers/{paper_id}/reindex` | 重建索引（202） | 是 | — | `app/api/papers.py:266` |
 | POST | `/api/metadata/import` | 外部元数据导入 | 是 | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py:93-103` |
 | GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py:151-155` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py:168` |
@@ -59,7 +59,7 @@
 | POST | `/api/search` | 论文级混合检索 | 是 | — | `app/api/search.py:49` |
 | GET | `/api/search-logs` | 检索日志（只读） | 是 | `limit`、`since`、`mode` | `app/api/search_logs.py:27-32` |
 
-`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:60-68` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/api/search.py:199`。
+`/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py:60-68` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py:50` 只收 body），日志另开 session：`app/services/search_pipeline.py:155`。
 
 ### 2.2 鉴权实现（2026-10-05 起按 plan `2026-10-05_145619-api-auth-keys-roles` 重写）
 
@@ -111,11 +111,11 @@
 | 原文对象缺失 / `ObjectNotFound` | 404 | `app/api/papers.py:124-126`, `:122-125` |
 | `ObjectStorageError`（读文件） | 503 | `app/api/papers.py:134-138` |
 | rollback 的 `provenance_id` 不属该论文/字段 | 404 | `app/api/papers.py:288-291` |
-| DELETE：`SearchIndexError` / `ObjectStorageError` | 503（不标记删除，可重试） | `app/api/papers.py:316-320`, `:275-279` |
+| DELETE：`SearchIndexError` / `ObjectStorageError` | 503（不标记删除，可重试） | `app/api/papers.py:253-262`, `:275-279` |
 | `POST /api/metadata/import`：Content-Type 既非 multipart 也非 JSON | 415 | `app/api/metadata.py:88-90` |
 | 同上：multipart 缺 `file` part / JSON 解析失败 / 未知 `source_type` / `importer` 抛 `ValueError` | 422 | `app/api/metadata.py:67-71`, `:75-79`, `:83-87`, `:113-117`, `:130-133` |
 | `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py:55-58`, `:182-183`, `:245-253` |
-| `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:89-94`, `:95-98` |
+| `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py:45-48`, `:49-52` |
 | `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py:38-56` |
 
 ### 2.4 lifespan 启停序列（`app/main.py:42-57`）
@@ -192,9 +192,9 @@
 **启动**：uvicorn → `app.main:lifespan`(`main.py:43`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → 请求可服务。
 
 **`POST /api/papers/ingest/files`**（`ingestion.py:281`）：
-`request_id_middleware`(`main.py:71`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:305-328`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:134`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:96` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:247-255`) → `job_queue.submit`(`:261` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:301`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:323`) → 返回 `summarize()` 的 202 响应(`:345`)。
+`request_id_middleware`(`main.py:71`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:305-328`) → `upload_admission.get_admission()` + `should_throttle_batch`(`ingestion.py:344-345`) → `admission.slot()`(`ingestion.py:350`) → 逐文件 `stage_and_queue`(`:134`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:96` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:247-255`) → `job_queue.submit`(`:261` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:301`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:323`) → 返回 `summarize()` 的 202 响应(`ingestion.py:374`)。
 
-**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:234`) → `_maybe_rewrite`(`search.py:167`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:150`) → 逐结果构造 `SearchResult`(`:181`) → `_log_search` 另开 `SessionLocal()` 写日志(`:210`, `:208`) → `SearchResponse`(`:223`)。
+**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:234`) → `maybe_rewrite`(`app/services/search_pipeline.py:38`，线程化 `app/services/search_pipeline.py:189`) → `asyncio.to_thread(search_service.search_papers)`(`app/services/search_pipeline.py:193`) → 逐结果构造 `SearchResult`(`app/services/search_pipeline.py:81`) → `_log_search` 另开 `SessionLocal()` 写日志(`app/services/search_pipeline.py:139`, `app/services/search_pipeline.py:155`) → `SearchResponse`(`app/services/search_pipeline.py:113`)。
 
 **`GET /api/papers/{id}/file`**（`papers.py:103`）：`_load_paper`(`:49`) → `papers.original_file`（主版本）→ `object_storage.open_stream`(`:121`) → `StreamingResponse` 64 KiB 分块 + `Content-Disposition: attachment`(`:134-146`)。
 
@@ -236,7 +236,7 @@
 | `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:140` |
 | `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:61`, `:65`, `:70`；`health.py:60-76` |
 | `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:129-130` |
-| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:83`, `:89`；`search.py:107-111` |
+| `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:83`, `:89`；`app/services/search_pipeline.py:121-125` |
 | `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:104-106`, `:220-238` |
 | `MCP_ENABLED` / `MCP_ALLOWED_HOSTS` | `False` / `""` | 是否挂载 `/mcp`；开启时白名单**必填**（空则启动报错）。白名单要同时写 `host` 与 `host:*` | `config.py:132`, `:138`, `_check_mcp` |
 | `MCP_WRITE_ENABLED` + `MCP_ALLOW_DELETE`/`_METADATA_WRITE`/`_REINDEX` | `False` | 写工具总闸与三个分开关；关掉的工具**不注册** | `config.py:140-146` |
@@ -257,10 +257,10 @@
 | `tests/test_metadata_api.py` | `/api/metadata/import`（dry_run/apply/覆写）、`review`、`attach`、`apply`、415 | `:110-215`, `:189`, `:251-277`, `:305-475` |
 | `tests/test_manual_metadata.py` | `GET/PATCH /api/papers/{id}/metadata`（含 404）、rollback | `:326-400` |
 | `tests/test_deletion.py` | `papers_api.delete_paper` 直调：204、OpenSearch/MinIO 失败 503、顺序与幂等 | `:71-125`（非 TestClient） |
-| `tests/test_upload_gc.py` | housekeeping 生命周期（周期任务启停）、幂等、不改作业行 | `README.md:445` |
-| `tests/test_ingest_queue.py` / `test_queue_priority.py` | `recover_jobs`/`mark_queued`、优先级与 `queued_high/low` | `README.md:435-436` |
-| `tests/test_job_retry.py` | 重试的原子认领与路由（服务层） | `README.md:432` |
-| `tests/test_search_log.py` | 检索日志行序列化与写入降级（服务层） | `README.md:433` |
+| `tests/test_upload_gc.py` | housekeeping 生命周期（周期任务启停）、幂等、不改作业行 | `README.md`（已精简，原测试清单移除） |
+| `tests/test_ingest_queue.py` / `test_queue_priority.py` | `recover_jobs`/`mark_queued`、优先级与 `queued_high/low` | `README.md`（已精简） |
+| `tests/test_job_retry.py` | 重试的原子认领与路由（服务层） | `README.md`（已精简） |
+| `tests/test_search_log.py` | 检索日志行序列化与写入降级（服务层） | `README.md`（已精简） |
 
 未覆盖（本模块视角）：`security.py` 的 401/403 分支（tests/ 内 grep `api_key_matches|extract_api_key|verify_api_key` 0 命中，所有 API 测试用 `dependency_overrides` 绕过）、`GET /health`、`GET /api/search-logs` 路由、`GET /api/jobs/queue` 路由、`GET /api/jobs` 路由、`main.py` 的 lifespan 与 `request_id_middleware`（`TestClient` 只出现在 5 个文件：`test_ingest_files/file`、`test_ingest_dir`、`test_ingest_compressed`、`test_metadata_api`、`test_manual_metadata`）。
 
@@ -277,5 +277,5 @@
 9. **MCP 侧的四项细化未做**（非缺口，见 `docs/architecture/11-mcp-agent-interface.md` §12）：审计字段细化（T-A4）、错误码细化（T-A7）、预算与翻页边界细化（T-A8）、作业等待语义细化（T-A9）。
 10. **MCP 无速率限制**：审计能看见谁调了多少，但没有任何 per-key 限流（"限流未做"是明确记录在案的缺口）。
 11. **MCP 只在 Hermes 与 codex 上做过真机验收**：Claude Code（本机未安装）与自研 harness 的片段**未验证**；SSRF 闸残留 DNS rebinding 风险（解析与连接之间的竞态，已在 `net_guard.py` 明文标注）。
-9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` §2（`:29-53`）未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` §3.4 的导入示例含无效的 `-F source_type=…`（`:238-239`）且响应示例字段名写作 `total_records`（`:240`），代码实际返回 `total`（`app/schemas/metadata.py:132`、`app/services/metadata_import.py:600-612`）；`docs/architecture/MVP-SPEC.md:9` 提示该文件部分表述已过期。
+9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` §2（`:29-53`）未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` §3.4 的导入示例含无效的 `-F source_type=…`（README 已精简，原 §3.4 示例移除）且响应示例字段名写作 `total_records`（同上），代码实际返回 `total`（`app/schemas/metadata.py:132`、`app/services/metadata_import.py:600-612`）；`docs/architecture/MVP-SPEC.md:9` 提示该文件部分表述已过期。
 10. **鉴权零单测**：401/403 与 `X-API-Key` 回退路径均无测试；测试统一绕过依赖，因此「precondition 挂了但鉴权漏配」这类回归不会被发现。

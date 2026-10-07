@@ -14,11 +14,11 @@
 - MinIO 存原文 PDF 与上传暂存对象，键布局由 `app/services/object_storage.py` 统一构造，API 只经 `GET /api/papers/{id}/file` 转发（`app/services/object_storage.py:11-12`）；
 - OpenSearch 存 chunk 级文档（含 1024 维向量），全部读写走别名 `paper_chunks_current`（`app/search/opensearch.py:4-5`、`:24-27`）；
 - **三端一致性对账（只读）**：`GET /api/consistency` + `scripts/check_consistency.py` 逐篇核对「`paper_files.object_key` ↔ MinIO 对象」与「chunk 行 ↔ 索引文档」，报出缺失/孤儿/删除残留；**解析产物（`papers/<id>/extracted/...`，即 `PARSER_CACHE`）单独计成 `cache_objects`/`cache_objects_total`，永不算 problem**（它从不登记 `paper_files`，2026-09-30 前被误报成 `orphan_object`，30 篇 = `problems=30`）；不写任何一端，某个 store 连不上只记进 `errors` 并继续回答另外两端（`app/services/consistency_service.py:485`，2026-09-22）。加 `?parser_papers=true`（或 `check_consistency.py --parser-papers`）时另外按解析戳给出**存活论文 id 清单**（`:354` `_census_ids`，上限 `:93` `PARSER_PAPER_ID_LIMIT`）——那是 `scripts/reindex.py --parser-backend <name>` 的工作清单，默认报告仍是摘要（2026-09-30）。
-- 清理职责：`DELETE /api/papers/{id}` 先删索引文档与对象再置 `deleted_at`（`app/api/papers.py:302-331`）；`app/workers/housekeeping.py` 回收 `uploads/` 残留与解包目录；`scripts/purge_deleted.py` 补历史遗留。
+- 清理职责：`DELETE /api/papers/{id}` 先删索引文档与对象再置 `deleted_at`（`app/api/papers.py:240-263` → `paper_service.purge_paper`（`app/services/paper_service.py:352-381`））；`app/workers/housekeeping.py` 回收 `uploads/` 残留与解包目录；`scripts/purge_deleted.py` 补历史遗留。
 
 不做：
 
-- 不做跨存储事务：PG、OpenSearch、MinIO 三步顺序执行、各自幂等，任一步失败就返回 503 让调用方整体重试（`app/api/papers.py:306-328`）；
+- 不做跨存储事务：PG、OpenSearch、MinIO 三步顺序执行、各自幂等，任一步失败就返回 503 让调用方整体重试（`app/api/papers.py:251-262`）；
 - 不用 DB 触发器维护时间戳：`updated_at` 靠 SQLAlchemy `onupdate`，裸 SQL 更新不会刷新（`app/db/models.py:22-23`、`:65-70`）；
 - 不存 extracted/figures 产物：`build_extracted_key`/`build_figure_key` 已定义但本仓库无调用方（`app/services/object_storage.py:114-119`，grep 全仓无引用）；
 - 不让客户端直连 MinIO（无 presign 对外，`presigned_get_url` 注释为内部调试，`app/services/object_storage.py:453-462`）。
@@ -111,12 +111,12 @@ venues ──CASCADE──> venue_editions
 5. `_cleanup_source`（`tasks.py:421-439`）删 staging 对象（失败交给 housekeeping），有 `cleanup_after` 时 `remove_local_file`（`:442-460`）删解包文件并修剪空目录；
 6. 解析/embedding 后 `opensearch.bulk_index_chunks`（`app/search/opensearch.py:302-361`）写别名 `paper_chunks_current`，文档 `_id = chunk_id`。
 
-删除（`DELETE /api/papers/{id}`，`app/api/papers.py:302-342`）：
+删除（`DELETE /api/papers/{id}`，`app/api/papers.py:240-263`）：
 
 1. `_load_paper` 取活论文（软删后 404）；
 2. `opensearch.delete_by_paper_id`（`opensearch.py:364-389`）删索引文档；失败 → `SearchIndexError` → 503，论文保持可见；
 3. `object_storage.delete_prefix(paper.id)`（`object_storage.py:426-434`）删 `papers/<id>/` 下全部对象；失败 → 503；
-4. `paper_service.soft_delete_paper`（`:547-569`）置 `papers.deleted_at = now()`、`status = "DELETED"`（常量 `:34`）、把未删的 `paper_files` 也置 `deleted_at`，并物理删除该论文的 `paper_identifiers`；
+4. `paper_service.soft_delete_paper`（`app/services/paper_service.py:763-785`）置 `papers.deleted_at = now()`、`status = "DELETED"`（常量 `:45`）、把未删的 `paper_files` 也置 `deleted_at`，并物理删除该论文的 `paper_identifiers`；
 5. `session.commit()`。
 
 补漏：`scripts/purge_deleted.py` 遍历 `deleted_at IS NOT NULL` 的论文（`:63-69`），对每篇调 `opensearch.delete_by_paper_id` + `object_storage.delete_prefix`（`:149-150`），`--dry-run` 只统计不写；`paper_chunks` 行故意保留（`:14-14`）。
@@ -178,7 +178,7 @@ venues ──CASCADE──> venue_editions
 
 ## 8. 未做 / 已知缺口
 
-- 文档与代码冲突（以代码为准）：`models.py:3-14` 与 `README.md:513` 说 9/13 张表，实际 14 张；`mappings.py:1` 与 `README.md:399` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v3`）。
+- 文档与代码冲突（以代码为准）：`models.py:3-14` 说 "9 + 4 = 13 张"表，实际 14 张；`mappings.py:1` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（注：README 已改写，原 `README.md` 第 513/399 行的这些说法已不存在）（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v3`）。
 - `build_extracted_key` / `build_figure_key` / `papers/<id>/supplementary/` 只是预留布局，无任何调用方（`object_storage.py:5-9`、`:114-119`）。
 - **备份只覆盖 OpenSearch**：快照仓库（`paperbox_backup`）不包含 PostgreSQL 与 MinIO 原件 —— PG 在 WSL 的 ext4（`paperbox-data/` 备份不覆盖），MinIO 的对象要靠 `mc mirror` 或冻结的 PDF 副本。
 - `papers.deleted_at` 之外没有清理机制：`paper_chunks` 行软删后长期保留，仅 `scripts/purge_deleted.py` 处理 OpenSearch/MinIO 遗留，需要人工触发。
