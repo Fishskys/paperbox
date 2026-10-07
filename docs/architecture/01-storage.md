@@ -140,14 +140,14 @@ venues ──CASCADE──> venue_editions
 |---|---|---|---|
 | `POSTGRES_DSN` | `postgresql+psycopg://postgres:postgres@localhost:5432/paperbox` | 唯一 DSN 来源，Alembic 也用它 | `app/core/config.py:50-53`；`migrations/env.py:31`；`alembic.ini:5-7` 留空 |
 | 连接池 | `pool_size=5` / `max_overflow=10` / `pool_recycle=1800` / `pool_pre_ping=True` | 引擎行为（非环境变量） | `app/db/session.py:26-33` |
-| `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名 | `app/core/config.py:62`；`.env.example:17` 与实测 `.env` 均为 `paper_chunks_v3` |
+| `OPENSEARCH_INDEX` | `paper_chunks_v3` | 物理索引名 | `app/core/config.py:62`；`.env.example:25` 与实测 `.env` 均为 `paper_chunks_v3` |
 | `OPENSEARCH_ALIAS` | `paper_chunks_current` | 读写别名 | `app/core/config.py:63`；`app/search/opensearch.py:24-27` |
 | `EMBEDDING_DIMENSION` | `1024` | 决定 `knn_vector.dimension` | `app/core/config.py:77`；`app/search/mappings.py:124` |
-| `MINIO_BUCKET` | `paperbox` | 默认桶 | `app/core/config.py:72`；`.env.example:25` |
+| `MINIO_BUCKET` | `paperbox` | 默认桶 | `app/core/config.py:72`；`.env.example:34` |
 | `MINIO_SECURE` | `False` | 明文 HTTP | `app/core/config.py:71` |
 | `papers` / `uploads` / `original.pdf` | 常量 | 正式前缀、暂存前缀、正式文件名 | `app/services/object_storage.py:37-41` |
 | `BULK_BATCH_SIZE` | `200` | 批量索引批大小 | `app/search/opensearch.py:30` |
-| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:186`、`:250-254`；`.env.example:187` |
+| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:186`、`:250-254`；`.env.example:293` |
 | `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:188` |
 | `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:192`；`app/workers/housekeeping.py:419-430` |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:51` |
@@ -178,7 +178,7 @@ venues ──CASCADE──> venue_editions
 
 ## 8. 未做 / 已知缺口
 
-- 文档与代码冲突（以代码为准）：`models.py:3-14` 说 "9 + 4 = 13 张"表，实际 14 张；`mappings.py:1` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（注：README 已改写，原 `README.md` 第 513/399 行的这些说法已不存在）（`.env.example:17` 与工作树 `.env` 均为 `paper_chunks_v3`）。
+- 文档与代码冲突（以代码为准）：`models.py:3-14` 说 "9 + 4 = 13 张"表，实际 14 张；`mappings.py:1` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（注：README 已改写，原 `README.md` 第 513/399 行的这些说法已不存在）（`.env.example:25` 与工作树 `.env` 均为 `paper_chunks_v3`）。
 - `build_extracted_key` / `build_figure_key` / `papers/<id>/supplementary/` 只是预留布局，无任何调用方（`object_storage.py:5-9`、`:114-119`）。
 - **备份只覆盖 OpenSearch**：快照仓库（`paperbox_backup`）不包含 PostgreSQL 与 MinIO 原件 —— PG 在 WSL 的 ext4（`paperbox-data/` 备份不覆盖），MinIO 的对象要靠 `mc mirror` 或冻结的 PDF 副本。
 - `papers.deleted_at` 之外没有清理机制：`paper_chunks` 行软删后长期保留，仅 `scripts/purge_deleted.py` 处理 OpenSearch/MinIO 遗留，需要人工触发。

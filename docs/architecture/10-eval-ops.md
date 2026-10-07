@@ -170,13 +170,13 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | 报告默认带 UTC 时间戳名 | `report-<YYYYmmddTHHMMSSZ>.json`（Markdown 同名换后缀）；历史报告的 `params.queries` 仍写旧路径 `D:\hermes\...`，不回填 | `scripts/eval.py:198-199, 396-398` |
 | **日志不写仓库根 + 单测不碰真机** | 日志 → `logs/{codex,app,eval}/`（已 gitignore）；pytest 只跑纯函数与内存 SQLite，真机验证放 `scripts/` 且自带清理 | `AGENTS.md` §6、`.gitignore:23-24`、`tests/conftest.py:83` |
 | `extra_hosts` 陷阱 | Linux 的 Docker 引擎**不自带** `host.docker.internal`，根 compose 显式声明 `host-gateway`；不加则容器内四依赖全不可达 | `docker-compose.yml:5-6, 24-26`、`AGENTS.md` §3.1 |
-| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:267-271` |
-| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:255` |
+| 容器内 `127.0.0.1` 是容器自己 | 应用容器化时五个依赖地址必须走 `host.docker.internal` 或同网络服务名 | `.env.example:428-437` |
+| 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:413` |
 | `Dockerfile` 的监听参数 | CMD 用 `sh -c exec` 展开 `PAPER_API_HOST/PORT`，此前写死导致 compose 传参**被静默忽略** | `Dockerfile:31-33`、`docs/progress/project.md:509` |
 | 评测脚本不硬编码 WSL | `_docker_argv` 按 `PAPERBOX_DOCKER_PREFIX` → `docker` → `wsl -e docker` 选择，Linux 上可用 | `build_eval_set.py:26-43`、`docs/progress/project.md:510` |
 | `--resume` 的键是**相对路径** | 报告里 `relative`（或退回 `path`）；`status=skipped` 的行不算已完成 | `bulk_ingest_dir.py:224-238` |
 | 429 以服务端 `Retry-After` 为准 | 有该头就用它（封顶 60s），没有才指数退避 + 25% 抖动 | `bulk_ingest_dir.py:180-208` |
-| 精排超时会**静默降级** | `RERANK_TIMEOUT` 默认 10 秒撑不住慢档精排（jina 0.276 s/候选，`top_k=10` ≈14s），表现为“能搜到但没重排”（`rerank.model=null`）；现役 int8 档只要 ≈3.2s，但队列单线程时等待由队列决定 | `docs/progress/project.md:468-472`、`.env.example:76-82` |
+| 精排超时会**静默降级** | `RERANK_TIMEOUT` 默认 10 秒撑不住慢档精排（jina 0.276 s/候选，`top_k=10` ≈14s），表现为“能搜到但没重排”（`rerank.model=null`）；现役 int8 档只要 ≈3.2s，但队列单线程时等待由队列决定 | `docs/progress/project.md:468-472`、`.env.example:130-132` |
 | `purge_deleted` 只清索引与对象 | `paper_chunks` 行**故意保留**（软删语义），且只处理 `deleted_at` 非空的行 | `purge_deleted.py:13-14, 37-39` |
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
@@ -186,16 +186,16 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
 | `PAPER_API_BASE` / `PAPER_API_URL` / `PAPER_API_KEY` | `http://127.0.0.1:8077` / 空 | 评测与批量脚本的基址与 Bearer | `scripts/eval.py:61, 378-384` |
-| `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址与端口（容器 CMD 也读） | `.env.example:36-40`、`Dockerfile:33` |
-| `POSTGRES_DSN` | `postgresql+psycopg://…@127.0.0.1:5432/paperbox` | 权威 DSN，覆盖 `POSTGRES_*` 分项 | `.env.example:12-13` |
-| `OPENSEARCH_URL` / `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `http://127.0.0.1:9200` / `paper_chunks_v3` / `paper_chunks_current` | 索引与别名（读写走别名） | `.env.example:16-18` |
-| `MINIO_ENDPOINT` / `MINIO_BUCKET` | `127.0.0.1:9000` / `paperbox` | 原件存储 | `.env.example:21-25` |
-| `EMBEDDING_URL` / `EMBEDDING_BATCH_SIZE` | `http://127.0.0.1:8090` / `16` | 向量服务；批量必须与容器 `MAX_BATCH` 一致 | `.env.example:28-32` |
-| `RERANK_ENABLED` / `RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8` / `model.onnx` / `4` / `10`（本机 `.env`=60）/ `5` | 精排开关、模型与 ONNX 文件、限批、超时、候选倍数（换档不用改代码，见 06 篇 §6） | `.env.example:55-82` |
-| `RRF_KEYWORD_WEIGHT` / `RRF_SEMANTIC_WEIGHT` | `1.0` / `1.0` | RRF 融合权重（sweep 结论：保留等权） | `.env.example:130-132`、`docs/progress/project.md:347-349` |
-| `QUERY_REWRITE_*` | `false` / 空 / `512` / `300` / `10` | 服务端查询改写（含 CJK 才改写） | `.env.example:134-146` |
-| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `true` / `20` | 检索日志（评测调用同样落库） | `.env.example:152-154`、`docs/progress/project.md:283` |
-| `INGEST_MAX_FILE_MB` / `INGEST_LOCAL_ROOTS` | `100` / 空（**`/ingest/dir` 关闭，404**） | 上传大小上限（`bulk_ingest_dir.py` 客户端预筛也读它）；目录导入白名单，仅 PDF 与 app 同机时可用 | `.env.example:158,170, 99-102` |
+| `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址与端口（容器 CMD 也读） | `.env.example:72-73`、`Dockerfile:33` |
+| `POSTGRES_DSN` | `postgresql+psycopg://…@127.0.0.1:5432/paperbox` | 权威 DSN，覆盖 `POSTGRES_*` 分项 | `.env.example:19-20` |
+| `OPENSEARCH_URL` / `OPENSEARCH_INDEX` / `OPENSEARCH_ALIAS` | `http://127.0.0.1:9200` / `paper_chunks_v3` / `paper_chunks_current` | 索引与别名（读写走别名） | `.env.example:24-26` |
+| `MINIO_ENDPOINT` / `MINIO_BUCKET` | `127.0.0.1:9000` / `paperbox` | 原件存储 | `.env.example:30-34` |
+| `EMBEDDING_URL` / `EMBEDDING_BATCH_SIZE` | `http://127.0.0.1:8090` / `16` | 向量服务；批量必须与容器 `MAX_BATCH` 一致 | `.env.example:38-43` |
+| `RERANK_ENABLED` / `RERANK_MODEL` / `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` / `RERANK_TIMEOUT` / `RERANK_CANDIDATES` | `true` / `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8` / `model.onnx` / `4` / `10`（本机 `.env`=60）/ `5` | 精排开关、模型与 ONNX 文件、限批、超时、候选倍数（换档不用改代码，见 06 篇 §6） | `.env.example:77-132` |
+| `RRF_KEYWORD_WEIGHT` / `RRF_SEMANTIC_WEIGHT` | `1.0` / `1.0` | RRF 融合权重（sweep 结论：保留等权） | `.env.example:205-207`、`docs/progress/project.md:347-349` |
+| `QUERY_REWRITE_*` | `false` / 空 / `512` / `300` / `10` | 服务端查询改写（含 CJK 才改写） | `.env.example:210-224` |
+| `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `true` / `20` | 检索日志（评测调用同样落库） | `.env.example:232-234`、`docs/progress/project.md:283` |
+| `INGEST_MAX_FILE_MB` / `INGEST_LOCAL_ROOTS` | `100` / 空（**`/ingest/dir` 关闭，404**） | 上传大小上限（`bulk_ingest_dir.py` 客户端预筛也读它）；目录导入白名单，仅 PDF 与 app 同机时可用 | `.env.example:239, 271` |
 
 **容器侧（`infra/.env`，只被 compose 插值读取）**
 
