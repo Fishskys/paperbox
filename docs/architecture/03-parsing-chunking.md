@@ -286,8 +286,8 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
    │                 on_degrade=degradations)            tasks.py:573-580 → chunking.py:649
    │  └─ pages_and_sections_from_markdown(markdown.py:311) 反推 pages + sections
    │     → merge_short_sections(structure.py:323) → chunk_document(chunking.py:581)
-   │        → 逐节 _chunk_section(:448) → _semantic_pieces(:279) → _report_fallback(:262)
-   │           → _split_oversized_piece(:376)/_overlap_suffix(:413)/_finalize(:427)
+   │        → 逐节 _chunk_section(chunking.py:479) → _semantic_pieces(chunking.py:310) → _report_fallback(chunking.py:293)
+   │           → _split_oversized_piece(chunking.py:407)/_overlap_suffix(chunking.py:444)/_finalize(chunking.py:458)
    │     chunks 为空 → raise IngestionError("parsing produced no chunks")  tasks.py:582
    ├─ _replace_chunks(...)                               tasks.py:589 → :1114
    ├─ degradations.resolve(STAGE_CHUNKING)               tasks.py:592（本次没报的降级就此作废）
@@ -370,7 +370,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 写进 chunk 与索引文档 | `config.py:80`；使用 `tasks.py:1138`、`:1089` |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | 写进 chunk 与索引文档 | `config.py:87`；使用 `tasks.py:1138`、`tasks.py:1089` |
 | `EMBEDDING_DIMENSION` | 1024 | 向量维度校验 + 落库 | `config.py:81`；`embedding_service.py:67-74` |
 | `EMBEDDING_BATCH_SIZE` | 32 | 单请求文本数 | `config.py:82`；`embedding_service.py:98-99` |
 | `EMBEDDING_URL` | `http://localhost:8090` | 服务地址（`/embed`） | `config.py:79`；`embedding_service.py:21` |
@@ -447,7 +447,7 @@ docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `READ
 |---|---|
 | **降级后端**（pypdf）无 OCR / 无版面分析（分栏靠 `layout.py` 几何重排、表格只留占位） | `errors.py:65-66` 仅提示；`pdf.py:55` 只走 `extract_text()` 默认顺序。docling 后端有版面顺序/表格/公式（`docs/progress/parser.md` §5.9：5 份输入真机对照，真表 1/3/4 张、公式 LaTeX 1/13/6 处、标题层级 11 vs pypdf 53） |
 | 全大写短行规则会误报章节 | `structure.py:120-121`（`TABLE I` 等） |
-| 死代码：`_ROMAN_TAIL`、`Chunk.is_overlap`（恒 `False`、无消费方） | `structure.py:26`；`chunking.py:232`、`:398`，全仓无其它引用 |
+| 死代码：`_ROMAN_TAIL`、`Chunk.is_overlap`（恒 `False`、无消费方） | `structure.py:26`；`chunking.py:258`、`chunking.py:474`，全仓无其它引用 |
 | `_spans` 不进 `paper_chunks`/OpenSearch | 仅 `_finalize` 用来算页码 |
 | 部分覆盖的 `sections` 会丢文本 | `chunking.py:526-534` 与该函数 docstring（`:548-549`）矛盾 |
 | ~~CJK token 估算偏差~~ **已修（2026-10-05 审查 P1-9）**：`estimate_tokens` 对 CJK 按 1.25 token/字计权（`chunking.py` `_CJK_TOKENS_PER_CHAR`），中文块预算回落到 512 上限内；512 上限本身仍无 embedding 侧硬校验（靠预算正确性） |
