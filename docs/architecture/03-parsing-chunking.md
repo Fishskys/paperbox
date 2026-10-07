@@ -16,7 +16,7 @@
 | 文本规范化：统一换行、丢控制字符、保留行结构 | `app/parsing/pdf.py:64` |
 | 章节识别 + 段落化（硬换行拼回散文） | `app/parsing/structure.py:94`、`:132`、`:276`、`:285` |
 | 远端 docling 解析：版面顺序 + 标题层级 + 真表格 + 公式 LaTeX → markdown（**T4**） | `app/parsing/docling_client.py:359` |
-| 后端选择 / 降级留痕 / 解析产物缓存（**T6 + T7.1**） | `app/services/parser_service.py:144`（纯函数）、`:332`（带缓存） |
+| 后端选择 / 降级留痕 / 解析产物缓存（**T6 + T7.1**） | `app/services/parser_service.py:145`（纯函数）、`:333`（带缓存） |
 | 降级侧的几何重排与页眉页脚剔除（双栏：先左栏后右栏；**T5**） | `app/parsing/layout.py:651`、`:702` |
 | 两后端**共用**的 markdown 方言（页标记 / 标题层级 / 归一化；**T5**） | `app/parsing/markdown.py:175`、`:416`、`:441` |
 | 降级账本 sink（`parsing`/`chunking`/… 阶段词表；**T7.3**） | `app/services/degradation_service.py:81`、`:226` |
@@ -226,7 +226,7 @@
 | `ParseBundle` | `markdown`、`page_count`、`spans`、`backend`、`parser_version`、`degraded_reason`、`timings`、`headings`、`raw_json`、`cache_hit` | 解析器统一返回（`markdown.py:93-111`）；**字段已冻结** |
 | `DoclingResult` | `markdown`、`page_count`、`parser_version`、`processing_time`、`raw_json`、`formula_fallback`、`notes` | 客户端层结果（`docling_client.py:121-139`）；`degraded_reason` 由 `formula_fallback` 推出 |
 
-落库映射（`tasks.py:1114-1146`；模型 `app/db/models.py:392-437`）：
+落库映射（`tasks.py:1114-1146`；模型 `app/db/models.py:392-442`）：
 
 | `Chunk` 字段 | `paper_chunks` 列 | 约束/索引 |
 |---|---|---|
@@ -263,7 +263,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
    │  ← 解析**挪到这一步之后**：判成重复/非主版本的论文不再白付一次 docling（§6.1）
    ├─ degradation_service.Recorder(...)                  tasks.py:496（T7.3 降级 sink）
    ├─ _advance_stage(STAGE_CHUNKING, 60.0)               tasks.py:545
-   ├─ parser_service.parse_paper_file(paper.id, data, …)  tasks.py:551 → parser_service.py:332
+   ├─ parser_service.parse_paper_file(paper.id, data, …)  tasks.py:551 → parser_service.py:333
    │  ├─ _load_cached_bundle(:458)         六条判据全中即重放（`cache_hit=True`），不再解析
    │  └─ parse_pdf(:138)                   纯函数：无 DB / MinIO / 任务状态
    │     ├─ _resolve_backend(:214)         backend = 显式参数 > `PARSER_BACKEND`（默认 docling）
@@ -329,7 +329,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 19. **未启用的 sink 不改变行为**：`on_degrade=None` 时 `_report_fallback` 立即返回，单元测试与既有调用方（`tests/test_chunking_semantic.py`）不加参数即保持原语义。
 
 20. **超长「标题」当正文，且必须留痕（2026-09-30，真机踩出来的）**：docling 会把「论文标题 + 作者块」并成一个一级标题，实测有一个 356 字符的 `#` 行。这种行不是章节标题：`pages_and_sections_from_markdown`（`markdown.py:311`，判定在 `:376`）里标题超过 `MAX_SECTION_TITLE_CHARS=200`（`:66`）就**降级为正文**（正文不能丢，标题/作者信息全在里面），并经 `_report_long_heading`（`:293-307`）报 `on_degrade("chunking", "section_title_too_long", {page, title_chars, limit, preview})` → `paper_degradations`。根因是 `paper_chunks.section`/`subsection` 当时是 `varchar(255)`：`2205.00360` 与 `2604.07387` 就是这样**整篇导入失败**（`value too long for type character varying(255)`）。两处一起改：列宽迁移 `8d3f5c1b7a20_chunk_section_text`（→ `text`）+ 适配器护栏；缺任何一半都不够（护栏挡住新数据，迁移修好历史库）。单测 `tests/test_markdown_sections.py`（降级为正文 / 走 sink / `chunk_markdown` 透传）。
-20. **解析阶段的降级同样走这个 sink**：`parser_service.degradation_codes()` 把 `degraded_reason` 文本映射成 `docling_unavailable`/`formulas_as_text`/`table_structure_lost`/`reading_order_unverified`，兜底 `parse_degraded`（`parser_service.py:104-113` 映射表、`:115-126` 上报点，`parse_pdf(on_degrade=...)`）。**T8 的验收已完成，但流水线仍未接 `parse_paper_file`**（见 §4「解析后端的两条路」），切换属 plan §6.1。
+20. **解析阶段的降级同样走这个 sink**：`parser_service.degradation_codes()` 把 `degraded_reason` 文本映射成 `docling_unavailable`/`formulas_as_text`/`table_structure_lost`/`reading_order_unverified`，兜底 `parse_degraded`（`parser_service.py:105-114` 映射表、`:116-127` 上报点，`parse_pdf(on_degrade=...)`）。**T8 的验收已完成，但流水线仍未接 `parse_paper_file`**（见 §4「解析后端的两条路」），切换属 plan §6.1。
 
 21. **交换格式 = docling 导出的 markdown**（T3 决策 1–5）：`docling` 侧直接产出它，`pypdf` 侧由 `markdown.render_markdown` 归一化到同一份方言（页标记、层级、表格占位、公式词）。**下游切块只认 markdown、不认后端** —— 所以任何一侧改方言都要同时改 `markdown.py` 与另一侧的产出，并有 `tests/test_markdown_fallback.py` 钉形状。
 22. **降级侧每页做两次 pypdf 提取**（`layout.py:223-299`）：`extract_text(extraction_mode="layout")` 给文本（间距保留成空格串），`extract_text(visitor_operand_after=…)` 给实时坐标。**两者不可兼得** —— layout 模式从不调用 visitor，而 `visitor_text` 的坐标带记忆化矩阵、滞后一拍（两栏页右栏坐标全 `(0,0)`）。代价实测仅 +几秒（6 个文件 10.6 s，含全部几何与重排）。
@@ -344,7 +344,7 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 
 31. **解析在指纹升级之后**（`tasks.py:538` → `:551`）：判成重复 / 非主版本的论文在 `_resolve_target_paper` / `_discard_duplicate_paper` 就结束了，**不付一次 docling**。顺序反了会让每次重复上传都白跑一次远程解析 —— 这是接线时唯一不能调换的两步。
 32. **markdown → 结构的反推必须与写出侧对称**（`markdown.py:311`；写出侧 `:441`）：`pages_and_sections_from_markdown` 只读页标记、`#` 层级与注释行，产出 `PageText` 与 `Section` 后交给**同一个** `chunk_document`。往方言里加新语法（新注释占位、新层级记号）必须同时改写出侧与反推侧，否则 chunk 页码/章节会静默偏移（`tests/test_markdown_sections.py` 是回归网）。
-33. **两侧都自报版本**：docling 报 `docling-serve <ver> / docling <ver>`（`GET /version`，回落镜像 tag），pypdf 报 `pypdf <ver>`（`parser_service.py:307`）。空版本落 NULL 而不是空串（`:591`）—— 混库排查靠这个字段，别让「未知」和「没有」混在一起。
+33. **两侧都自报版本**：docling 报 `docling-serve <ver> / docling <ver>`（`GET /version`，回落镜像 tag），pypdf 报 `pypdf <ver>`（`parser_service.py:308`）。空版本落 NULL 而不是空串（`:616`）—— 混库排查靠这个字段，别让「未知」和「没有」混在一起。
 34. **同一份 PDF 换后端不能靠重导入**：指纹阶梯里 DOI/arXiv 是**身份**不是字节（`AGENTS.md` §3.9），同一篇论文再导一次会被判重复、**不会**换后端；换后端只有 `POST /api/papers/{id}/reindex`（产物缓存按 backend 分目录，换后端必然未命中 = 真解析）。2026-09-30 真机：docling 重索引用缓存重放 61.11 s，pypdf 重索引真跑 56.11 s。
 35. **`PARSER_BACKEND` 只影响新解析与 reindex**：存量 chunk 的后端戳不会因改配置而变化（`GET /api/consistency` 的 `parser_backends` 就是拿来看这种混合状态的；它只报不修）。批量换后端的入口是**按戳选**：`scripts/reindex.py --parser-backend pypdf|docling|unknown`（`unknown` = 无戳，即 `refresh_index_metadata.py` 故意不写的存量论文），先 `--dry-run` 看清单；`GET /api/consistency?parser_papers=true` / `check_consistency.py --parser-papers` 给同一份论文 id 清单（`with_parser_papers`，`app/services/consistency_service.py:492`）。
 36. **解析耗时算进 `chunking` 阶段**：`_advance_stage(STAGE_CHUNKING)` 之后才解析（`tasks.py:545` `:551`）—— 看作业进度时别把 docling 的几百秒当成切块慢。
@@ -381,10 +381,10 @@ run_ingestion_job(tasks.py:141) / run_reindex_job(:121)
 | `CHUNK_MODE` | `length` | 切块边界策略（`length` / `semantic`，T7.2） | `config.py:221`；`chunking.py:48-50`；`tasks.py:545-580` |
 | `CHUNK_SEMANTIC_THRESHOLD` | 0.80 | 语义模式：判定低谷的余弦阈值 | `config.py:226`；`chunking.py:58` |
 | `CHUNK_SEMANTIC_MIN_TOKENS` | 200 | 语义模式：低谷处允许 flush 的最小块长 | `config.py:231`；`chunking.py:65` |
-| `PARSER_BACKEND` | **`docling`** | `docling`（主后端）/ `pypdf`（降级侧）；非法值启动即报错（`config.py:24` 的 `PARSER_BACKENDS`）。2026-09-30 接线时翻默认 | `config.py:203`；`parser_service.py:250` |
-| `PARSER_CONCURRENCY` | 1 | docling 转换的在途上限（模块级 `Semaphore`；**别调大** —— docling 是 CPU-bound 且容器有上限，并发只会一起变慢并撞内存天花板） | `config.py:207`；`parser_service.py:300` |
-| `PARSER_CACHE` | true | 解析产物是否缓存到 MinIO（T7.1）；**部分解析既不读也不写**（§5.28） | `config.py:209`；`parser_service.py:332` |
-| `PARSER_MAX_PAGES` | 0（不限） | >0 时 **docling 分支**只解析前 N 页（`page_range="1-N"` + `pages=1-N` + 账本 `pagination_truncated`）；pypdf 分支不截断 | `config.py:212`；`parser_service.py:213` |
+| `PARSER_BACKEND` | **`docling`** | `docling`（主后端）/ `pypdf`（降级侧）；非法值启动即报错（`config.py:24` 的 `PARSER_BACKENDS`）。2026-09-30 接线时翻默认 | `config.py:203`；`parser_service.py:251` |
+| `PARSER_CONCURRENCY` | 1 | docling 转换的在途上限（模块级 `Semaphore`；**别调大** —— docling 是 CPU-bound 且容器有上限，并发只会一起变慢并撞内存天花板） | `config.py:207`；`parser_service.py:301` |
+| `PARSER_CACHE` | true | 解析产物是否缓存到 MinIO（T7.1）；**部分解析既不读也不写**（§5.28） | `config.py:209`；`parser_service.py:333` |
+| `PARSER_MAX_PAGES` | 0（不限） | >0 时 **docling 分支**只解析前 N 页（`page_range="1-N"` + `pages=1-N` + 账本 `pagination_truncated`）；pypdf 分支不截断 | `config.py:212`；`parser_service.py:214` |
 
 docling 侧（T4；语义与部署值见 `.env.example` 的 docling 块与 `README.md` §3.6）：
 

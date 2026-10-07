@@ -21,6 +21,7 @@ belongs to the task layer (T9), not here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -403,11 +404,16 @@ def parse_paper_file(
         enabled = False
 
     if enabled:
+        # The source digest joins the cache identity (review 2026-10-05, P3):
+        # if the object behind a paper id was ever replaced (restore, manual
+        # fix), the cached markdown of the OLD bytes must not replay.
+        source_sha256 = hashlib.sha256(data).hexdigest()
         cached = _load_cached_bundle(
             paper_id,
             backend=resolved,
             storage=storage,
             version_probe=version_probe,
+            source_sha256=source_sha256,
         )
         if cached is not None:
             return cached
@@ -428,6 +434,7 @@ def parse_paper_file(
             filename=filename,
             page_range=page_range,
             now=now,
+            source_sha256=hashlib.sha256(data).hexdigest(),
         )
     return bundle
 
@@ -463,6 +470,7 @@ def _load_cached_bundle(
     backend: str,
     storage: ArtifactStore,
     version_probe: Callable[[], str | None] | None,
+    source_sha256: str | None = None,
 ) -> ParseBundle | None:
     started = time.perf_counter()
     meta_key = _artifact_key(paper_id, PARSE_META_ARTIFACT)
@@ -500,6 +508,23 @@ def _load_cached_bundle(
                     "backend": backend,
                     "cached": meta.get("options"),
                     "current": parse_options(),
+                }
+            },
+        )
+        return None
+    if source_sha256 is not None and meta.get("source_sha256") != source_sha256:
+        # The stored artifact was produced from DIFFERENT bytes than the ones
+        # now behind this paper id (restore, manual object fix) -- replaying
+        # the old markdown would index the wrong text (review 2026-10-05, P3).
+        # Meta files from before this field also miss: one re-parse aligns
+        # them with the bytes they were built from.
+        logger.info(
+            "parse cache is stale: source bytes changed",
+            extra={
+                "extra_fields": {
+                    "paper_id": paper_id,
+                    "cached_sha256": meta.get("source_sha256"),
+                    "current_sha256": source_sha256,
                 }
             },
         )
@@ -593,6 +618,7 @@ def _store_bundle(
     filename: str,
     page_range: str | None,
     now: datetime | None,
+    source_sha256: str | None = None,
 ) -> None:
     """Write the parse artifacts; the meta file goes last, so a partial write is a miss."""
     markdown_key = _artifact_key(paper_id, PARSE_MARKDOWN_ARTIFACT, backend=bundle.backend)
@@ -610,6 +636,7 @@ def _store_bundle(
         "filename": filename,
         "page_range": page_range,
         "options": parse_options(),
+        "source_sha256": source_sha256,
         "created_at": (now or datetime.now(timezone.utc)).isoformat(),
         "timings": dict(bundle.timings),
         "headings": [list(item) for item in bundle.headings],

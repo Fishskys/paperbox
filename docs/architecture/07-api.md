@@ -194,7 +194,7 @@
 **`POST /api/papers/ingest/files`**（`ingestion.py:281`）：
 `request_id_middleware`(`main.py:71`) → router 级 `require_api_key`(`security.py:64`) → `Depends(get_db)` 开请求 session(`session.py:70`) → 文件数/总字节检查(`ingestion.py:305-328`) → `upload_admission.get_admission()` + `should_throttle_batch`(`:315-317`) → `admission.slot()`(`:321`) → 逐文件 `stage_and_queue`(`:134`)：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(`:96` → `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`(`:247-255`) → `job_queue.submit`(`:261` → `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py:301`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py:323`) → 返回 `summarize()` 的 202 响应(`:345`)。
 
-**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:212`) → `_maybe_rewrite`(`search.py:167`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:150`) → 逐结果构造 `SearchResult`(`:181`) → `_log_search` 另开 `SessionLocal()` 写日志(`:210`, `:208`) → `SearchResponse`(`:223`)。
+**`POST /api/search`**（`app/api/search.py:50`）：中间件 → `require_api_key` → `SearchRequest` 校验(`schemas/search.py:234`) → `_maybe_rewrite`(`search.py:167`，线程化 `:65`) → `asyncio.to_thread(search_service.search_papers)`(`:150`) → 逐结果构造 `SearchResult`(`:181`) → `_log_search` 另开 `SessionLocal()` 写日志(`:210`, `:208`) → `SearchResponse`(`:223`)。
 
 **`GET /api/papers/{id}/file`**（`papers.py:103`）：`_load_paper`(`:49`) → `papers.original_file`（主版本）→ `object_storage.open_stream`(`:121`) → `StreamingResponse` 64 KiB 分块 + `Content-Disposition: attachment`(`:134-146`)。
 

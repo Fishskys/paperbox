@@ -25,7 +25,7 @@
 
 - 精排模型调用细节、候选窗内降级策略、查询改写的 prompt/模型选择 → 见 06 号文档；本文只写**调用点与响应字段**。
 - PDF 解析/切块（03）、embedding 容器（04）、元数据合并与 provenance（08）。
-- 分页偏移：请求体没有 `offset`/`page`/`from`，只有 `top_k`（`app/schemas/search.py:212`）。这是设计选择而非缺口，但客户端无法翻页。
+- 分页偏移：请求体没有 `offset`/`page`/`from`，只有 `top_k`（`app/schemas/search.py:234`）。这是设计选择而非缺口，但客户端无法翻页。
 - 过滤不走 PostgreSQL：所有过滤都在 OpenSearch 文档上做（见 §5 第 2 条）。
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用，带行号）
@@ -68,7 +68,7 @@
 | `app/api/search_logs.py` | `list_search_logs` `:28` | `GET /api/search-logs` |
 | `app/workers/tasks.py` | `_index_rows` `:1226` | chunk 文档的**唯一构造点**（元数据部分来自 `snapshot.paper_metadata_snapshot`，`tasks.py:1239`） |
 | `app/search/snapshot.py` | `paper_metadata_snapshot` `:85`、`tag_names_by_kind` `:39` | 元数据快照的**单一来源**（流水线 + 刷新脚本共用） |
-| `app/db/models.py` | `SearchQuery` `:699` | `search_queries` 表 |
+| `app/db/models.py` | `SearchQuery` `:704` | `search_queries` 表 |
 
 ## 3. 数据结构（表/字段/索引，或内存结构）
 
@@ -97,7 +97,7 @@
 - `PaperResult` / `Evidence`（`search_service.py:52`、`:74`）：论文分、`relevance`、`evidence`、`matched_chunks`、`retrieval_score`、`rerank_score`。
 - 融合中间态：`by_id: dict[str, ChunkHit]`（`hybrid.py:763`）先按 chunk 去重合并两腿分数，再按 RRF 顺序重建列表。
 
-**`search_queries` 表**（`app/db/models.py:771`，索引 `created_at`、`mode`）：
+**`search_queries` 表**（`app/db/models.py:776`，索引 `created_at`、`mode`）：
 
 | 列 | 类型 | 内容 |
 |---|---|---|
@@ -115,8 +115,8 @@
 
 ```
 POST /api/search                                    app/api/search.py:50（路由挂载 app/main.py:89）
- ├─ SearchRequest 校验（mode 白名单、strip、top_k 1..50）  app/schemas/search.py:212
- ├─ request.filters.to_query_filters()              app/schemas/search.py:207
+ ├─ SearchRequest 校验（mode 白名单、strip、top_k 1..50）  app/schemas/search.py:234
+ ├─ request.filters.to_query_filters()              app/schemas/search.py:229
  ├─ asyncio.to_thread(_maybe_rewrite, query)        app/api/search.py:65 → :167
  │    └─ query_rewrite_service.rewrite_query()      （细节见 06；未启用时零外部调用）
  ├─ asyncio.to_thread(search_service.search_papers) app/api/search.py:81
@@ -158,7 +158,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 (`app/search/native.py:269` ← `app/search/hybrid.py:741`)
 
 **开关**：`SEARCH_BACKEND`（`app/core/config.py:120`，**默认 `native`，2026-10-01 定档**）是部署默认；请求体 `backend` 可**逐次覆盖**
-（`app/schemas/search.py:247`），响应回显实际跑的那条（`app/schemas/search.py:417`、`app/api/search.py:158`）。
+（`app/schemas/search.py:269`），响应回显实际跑的那条（`app/schemas/search.py:439`、`app/api/search.py:158`）。
 只影响 `mode=hybrid`：keyword/semantic 是单腿，永远走应用侧（`app/search/hybrid.py:789`）。
 
 **关键事实（真机实测，改这块前先读）**：
@@ -217,9 +217,9 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 7. **精排降级不报错**：`rerank_texts` 返回 `None` 时按一阶段顺序返回 `top_k*2`，`rerank_score` 保持 `None`，不抛异常（`hybrid.py:971-974`）；API 的 `rerank.model/took_ms` 也据"是否有论文带 `rerank_score`"决定是否为 `null`（`api/search.py:106-111`）。
 8. **`top_k × RERANK_CANDIDATES` 是一阶段候选窗，但日志字段不是**：`_first_stage_k = top_k × RERANK_CANDIDATES`（默认 5，`hybrid.py:882`），hybrid 模式每条腿再乘 `CANDIDATE_MULTIPLIER=5`（`:751`）。而日志里的 `candidates` 恒为 `top_k × CANDIDATE_FACTOR(5)`（`api/search.py:47`、`:150`）且**只用于日志**，未传给检索——`rerank=true` 时它与真实候选池不符。
 9. **`_semantic_hits` 的 k 是过取后的值**：`k = fetch_k × SEMANTIC_K_MULTIPLIER(3)`，同时作为 ES `size` 与 `knn.k` 传入（`hybrid.py:721`、`:656`），之后截回 `fetch_k`（`:725`）。代码里**没有 `num_candidates` 参数**（Lucene engine 只用 `k` + 可选 `filter`，`hybrid.py:331-334`）。
-10. **空查询短路**：`search_chunks` 在 `strip()` 后为空时返回 `[]`，不报错（`hybrid.py:708-710`）；上层 schema 已用 `min_length=1` + strip 校验挡住（`schemas/search.py:257-273`）。
+10. **空查询短路**：`search_chunks` 在 `strip()` 后为空时返回 `[]`，不报错（`hybrid.py:708-710`）；上层 schema 已用 `min_length=1` + strip 校验挡住（`schemas/search.py:279-295`）。
 11. **别名是唯一读写入口**：`ALIAS`/`INDEX` 直接取配置（`opensearch.py:25-27`），`_search`/`bulk_index_chunks`/`delete_by_paper_id`/`index_stats` 默认都走 `ALIAS`。`is_write_index` 只在迁移的别名切换里设置（`opensearch.py:392`）；`ensure_index` 首次绑别名**不设**该属性（`:97`），单索引下仍可写入。
-12. **`top_k` 有两套边界**：schema 限制 1..50（`schemas/search.py:43-44`），`search_chunks` 只要求 `> 0`（`hybrid.py:706`）；非法 mode 在 schema 与 `search_chunks` 两处各校验一次（`hybrid.py:705-706`）。
+12. **`top_k` 有两套边界**：schema 限制 1..50（`schemas/search.py:46-47`），`search_chunks` 只要求 `> 0`（`hybrid.py:706`）；非法 mode 在 schema 与 `search_chunks` 两处各校验一次（`hybrid.py:705-706`）。
 13. **`SearchError` 的 503 映射曾完全失效（2026-09-22 已修，有回归测试）**：`app/api/search.py:89` 捕获 `search_service.SearchError`，而类只定义在 `app/search/hybrid.py:100`——原先 `search_service` 只导入 `ChunkHit`，该 `except` 被触发时会先抛 `AttributeError`（**实测**：`uv run python -c "from app.services import search_service; search_service.SearchError"` → `AttributeError`），于是后端故障返回 **500** 而不是 503。修法：`app/services/search_service.py:28` 一并导入 `SearchError` 并加入 `__all__`；回归 `tests/test_search_api.py`（后端抛错 → 503、`ValueError` → 422、`search_service.SearchError is hybrid.SearchError`）。
 14. ~~**`total` 语义与 docstring 不一致**~~ → **2026-09-30 已修（T-A2）**：原先 `search_papers` 的 docstring 说返回 "chunk candidate pool"，实现却返回 `len(results)`，API 直接当 `total`，于是 `total` = 被 `top_k` 截断后的论文数。现在是两个数：`total` = **本次查询 + 过滤条件下命中的论文数真值**（`hybrid.count_papers`：`size: 0` + `cardinality(paper_id)`，hybrid 模式用 `bool.should` 把关键词腿与 kNN 腿合起来数，否则向量独有命中会被漏掉；聚合在 `precision_threshold=3000` 以内是精确值，超过是 HLL 估计），`candidates` = 喂给论文聚合的 chunk 数。计数是**额外一次往返**（semantic/hybrid 还多一次 embedding），失败只记 warning 并退回候选池，绝不把能用的搜索变成 503（单测 `tests/test_search_total.py`）。
 15. **`by_id` 合并顺序敏感**：先 `keyword_hits` 后 `semantic_hits` 用 `setdefault` 去重（`hybrid.py:763-769`），因此两腿都命中的 chunk 其**基础字段取自 keyword 腿**，语义腿只补 `semantic_score`。
@@ -255,7 +255,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 | `DEFAULT_INNER_HITS` / `INNER_HITS_NAME` | `3` / `evidence` | native 每篇论文附带的兄弟 chunk 数（**必须等于** `MAX_EVIDENCE`，`tests/test_native_hybrid.py` 钉住）与其 `inner_hits` 名 | `native.py:124` / `:118` |
 | `PIPELINE_RRF` / `PIPELINE_NORM` | `paperbox-rrf60` / `paperbox-norm-minmax` | 管道名（部署态对象，见 §4b） | `native.py:82` |
 | `HIGH_THRESHOLD` / `MEDIUM_THRESHOLD` | `0.9` / `0.6` | `relevance` 分档 | `search_service.py:44-45` |
-| `MIN_TOP_K` / `MAX_TOP_K` | `1` / `50` | `top_k` 边界 | `schemas/search.py:43-44` |
+| `MIN_TOP_K` / `MAX_TOP_K` | `1` / `50` | `top_k` 边界 | `schemas/search.py:46-47` |
 | `CANDIDATE_FACTOR` | `5` | 日志 `candidates` 的系数 | `api/search.py:47` |
 | `BULK_BATCH_SIZE` | `200` | 写入批量 | `opensearch.py:30` |
 | `DEFAULT_LIMIT` / `MAX_LIMIT` | `50` / `200` | `GET /api/search-logs` 的 limit | `search_log_service.py:42-43` |

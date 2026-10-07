@@ -33,11 +33,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.logging import get_logger
 from app.search.hybrid import DEFAULT_MODE, MODES
 from app.search.native import BACKENDS, DEFAULT_BACKEND
 from app.services.metadata_identifiers import SCHEMES
+
+logger = get_logger(__name__)
 
 #: ``top_k`` bounds from the spec.
 MIN_TOP_K = 1
@@ -63,6 +66,25 @@ class SearchFilters(BaseModel):
     """Optional metadata filters; every field is optional."""
 
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_unknown_keys(cls, value):
+        """Log (never reject) filter keys this model does not know.
+
+        ``extra="ignore"`` keeps the API compatible (a typo must not break an
+        existing caller); the WARNING makes a silent zero-result visible in the
+        logs instead (review 2026-10-05, P3 -- owner kept the ignore behavior).
+        """
+        if isinstance(value, dict):
+            known = cls.model_fields.keys()
+            unknown = sorted(str(key) for key in value if str(key) not in known)
+            if unknown:
+                logger.warning(
+                    "unknown filter keys ignored",
+                    extra={"extra_fields": {"unknown_filter_keys": unknown}},
+                )
+        return value
 
     #: Year of the paper itself.
     year_from: int | None = None

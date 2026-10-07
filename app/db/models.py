@@ -429,6 +429,11 @@ class PaperChunk(TimestampMixin, Base):
     embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     doc_metadata: Mapped[dict | None] = mapped_column(JSONB)
+    #: Dead column BY DESIGN (review 2026-10-05, P3): the pipeline hard-deletes
+    #: and re-inserts chunks (``_replace_chunks``) and no reader filters this
+    #: column. Nobody may start writing it without also teaching every chunk
+    #: reader the filter -- otherwise soft-deleted rows silently re-enter
+    #: results.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     paper: Mapped["Paper"] = relationship(back_populates="chunks")
