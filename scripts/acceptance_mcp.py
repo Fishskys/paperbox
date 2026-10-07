@@ -655,14 +655,25 @@ class Snapshot:
     original_ids: set[str] = field(default_factory=set)
 
     def take(self, mcp: "Mcp") -> set[str]:
-        response = mcp.client.get(
-            f"{mcp.base_url}/api/papers",
-            params={"limit": 500},
-            headers={"Authorization": f"Bearer {mcp.token}"} if mcp.token else {},
-        )
-        response.raise_for_status()
-        body = response.json()
-        self.ids = {row["paper_id"] for row in body.get("papers", [])}
+        # Page through the whole list (review 2026-10-05, P3): a single
+        # limit=500 page silently truncated the snapshot, which would have
+        # broken both the "one paper fewer" assertion and the cleanup decision
+        # once the corpus passed 500.
+        self.ids: set[str] = set()
+        offset = 0
+        while True:
+            response = mcp.client.get(
+                f"{mcp.base_url}/api/papers",
+                params={"limit": 500, "offset": offset},
+                headers={"Authorization": f"Bearer {mcp.token}"} if mcp.token else {},
+            )
+            response.raise_for_status()
+            body = response.json()
+            page = {row["paper_id"] for row in body.get("papers", [])}
+            self.ids |= page
+            offset += 500
+            if len(page) < 500 or offset >= 10000:
+                break
         if not self.original_ids:
             self.original_ids = set(self.ids)
         return set(self.ids)

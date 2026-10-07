@@ -103,7 +103,15 @@ class IngestDirRequest(BaseModel):
     root: str = Field(description="Absolute directory to scan.")
     glob: str = Field(default="**/*.pdf", description="Pattern relative to root.")
     recursive: bool = Field(default=True, description="Walk subdirectories.")
-    limit: int = Field(default=2000, ge=1, description="Stop after N matched files.")
+    limit: int = Field(
+        default=2000,
+        ge=1,
+        # Same ceiling the endpoint's own default documents (review 2026-10-05,
+        # P3): an unbounded walk + hash of a huge directory would hold a worker
+        # thread for a very long time.
+        le=2000,
+        description="Stop after N matched files.",
+    )
     dry_run: bool = Field(
         default=False,
         description="Report what would be imported without creating any job.",

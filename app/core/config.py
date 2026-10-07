@@ -59,31 +59,31 @@ class Settings(BaseSettings):
 
     # --- PostgreSQL (fact source for paper metadata) ---
     postgres_dsn: str = Field(
-        default="postgresql+psycopg://postgres:postgres@localhost:5432/paperbox",
+        default="postgresql+psycopg://postgres:postgres@127.0.0.1:5432/paperbox",
         alias="POSTGRES_DSN",
     )
-    postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
+    postgres_host: str = Field(default="127.0.0.1", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     postgres_user: str = Field(default="postgres", alias="POSTGRES_USER")
     postgres_password: str = Field(default="postgres", alias="POSTGRES_PASSWORD")
     postgres_db: str = Field(default="paperbox", alias="POSTGRES_DB")
 
     # --- OpenSearch (full-text + vector index) ---
-    opensearch_url: str = Field(default="http://localhost:9200", alias="OPENSEARCH_URL")
+    opensearch_url: str = Field(default="http://127.0.0.1:9200", alias="OPENSEARCH_URL")
     # `.env` 是唯一真源（AGENTS §3.4）；这里的默认值只是没配 .env 时的兜底，
     # 必须跟着当前物理索引走 —— v1/v2 已于 2026-09-30 drop。
     opensearch_index: str = Field(default="paper_chunks_v3", alias="OPENSEARCH_INDEX")
     opensearch_alias: str = Field(default="paper_chunks_current", alias="OPENSEARCH_ALIAS")
 
     # --- MinIO (raw object storage) ---
-    minio_endpoint: str = Field(default="localhost:9000", alias="MINIO_ENDPOINT")
+    minio_endpoint: str = Field(default="127.0.0.1:9000", alias="MINIO_ENDPOINT")
     minio_access_key: str = Field(default="minioadmin", alias="MINIO_ACCESS_KEY")
     minio_secret_key: str = Field(default="minioadmin", alias="MINIO_SECRET_KEY")
     minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
     minio_bucket: str = Field(default="paperbox", alias="MINIO_BUCKET")
 
     # --- Embedding Server (external service, BAAI/bge-m3) ---
-    embedding_url: str = Field(default="http://localhost:8090", alias="EMBEDDING_URL")
+    embedding_url: str = Field(default="http://127.0.0.1:8090", alias="EMBEDDING_URL")
     embedding_model: str = Field(default="BAAI/bge-m3", alias="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=1024, alias="EMBEDDING_DIMENSION")
     embedding_batch_size: int = Field(default=32, alias="EMBEDDING_BATCH_SIZE")
@@ -297,7 +297,11 @@ class Settings(BaseSettings):
     #: (``http://192.168.31.53:8091``); the local WSL container is the rollback.
     #: **Empty disables the backend**: the client raises ``DoclingUnavailable``
     #: without dialing, so "no docling configured" degrades instead of timing out.
-    docling_url: str = Field(default="http://127.0.0.1:8091", alias="DOCLING_URL")
+    #: Empty (the default) = the docling backend is off and parses fall back to
+    #: pypdf immediately. Deleting the line from .env and leaving it blank are
+    #: now the same thing (review 2026-10-05, P3 -- the old default pointed at
+    #: 127.0.0.1:8091 and contradicted the documented "empty = off").
+    docling_url: str = Field(default="", alias="DOCLING_URL")
     #: Client-side timeout. Must stay *above* ``DOCLING_DOCUMENT_TIMEOUT``: the
     #: server aborts the document itself, and a shorter client timeout would throw
     #: away a parse that was about to finish.

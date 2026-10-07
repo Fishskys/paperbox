@@ -318,7 +318,9 @@ class SearchResult(BaseModel):
     relevance: str
     #: First-stage (BM25 / kNN / RRF) score; ``null`` when reranking was off.
     retrieval_score: float | None = None
-    #: Normalized cross-encoder score; ``null`` when the reranker did not run.
+    #: Raw cross-encoder logit (NOT normalized to 0..1 -- the normalization
+    #: lives on the aggregated paper score); ``null`` when the reranker did not
+    #: run.
     rerank_score: float | None = None
     evidence: list[SearchEvidence] = Field(default_factory=list)
 

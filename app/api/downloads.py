@@ -45,8 +45,10 @@ def disposition(filename: str) -> str:
     2026-10-04). The fix is the standard two-part header: an ASCII fallback plus a
     percent-encoded UTF-8 ``filename*`` that every real client prefers.
     """
-    name = filename or object_storage.ORIGINAL_FILENAME
+    name = (filename or object_storage.ORIGINAL_FILENAME).replace('"', "")
     if name.isascii():
+        # A double quote inside a quoted filename would end the token early and
+        # produce a malformed header (review 2026-10-05, P3).
         return f'attachment; filename="{name}"'
     fallback = _ASCII_SAFE.sub("_", name) or object_storage.ORIGINAL_FILENAME
     return (

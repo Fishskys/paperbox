@@ -17,6 +17,11 @@ services:
     image: postgres:15.2-alpine
     container_name: paperbox-postgres
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -35,6 +40,11 @@ services:
     image: opensearchproject/opensearch:3.6.0
     container_name: paperbox-opensearch
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - discovery.type=single-node
       - bootstrap.memory_lock=false
@@ -67,6 +77,11 @@ services:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
     container_name: paperbox-minio
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -87,6 +102,11 @@ services:
     image: paperbox/embedding-server:0.1
     container_name: paperbox-embedding
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
       RERANK_MODEL: ${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
@@ -159,6 +179,11 @@ services:
     profiles: ["local-docling"]
     container_name: paperbox-docling
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       UVICORN_WORKERS: "1"
       DOCLING_SERVE_LOG_LEVEL: "WARNING"

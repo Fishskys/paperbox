@@ -159,7 +159,7 @@ class MemWatch:
 
     The docling container may live in WSL (``--mem-ssh`` unset) or on another
     host -- the NAS deployment is reached over SSH, e.g.
-    ``--mem-ssh fishsky@192.168.31.53:65422``.
+    ``--mem-ssh fishsky@<nas-host>:65422``.
     """
 
     def __init__(
