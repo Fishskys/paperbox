@@ -139,9 +139,9 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | `EMBEDDING_URL` | `http://localhost:8090`（`.env` 实为 `http://127.0.0.1:8090`） | 应用侧 `/embed` base | `app/core/config.py:79`、`.env:19` |
 | `EMBEDDING_MODEL` | 代码 `BAAI/bge-m3`；`.env`/compose `intfloat/multilingual-e5-large` | 容器加载的模型名；应用仅作为请求字段与溯源值 | `config.py:80`、`server.py:40`、`infra/docker-compose.yml:111`、`.env:20` |
 | `EMBEDDING_DIMENSION` | 1024 | 应用侧维度校验 + mapping `dimension` | `config.py:81`、`.env:21` |
-| `EMBEDDING_BATCH_SIZE` | 代码 32；`.env`/`.env.example` 16 | 单次 `/embed` 的 texts 数 | `config.py:82`、:292-297（正数校验）、`.env:22`、`.env.example:32` |
-| `EMBEDDING_TIMEOUT` | **300.0**（T7.3 由 120 上调） | 单批 HTTP 超时；必须大于服务端最坏排队时间 | `config.py:83-87`、`.env.example:35` |
-| `EMBEDDING_MAX_RETRIES` | 2 | 每批额外重试次数 | `config.py:88`、`.env.example:36` |
+| `EMBEDDING_BATCH_SIZE` | 代码 32；`.env`/`.env.example` 16 | 单次 `/embed` 的 texts 数 | `config.py:82`、:292-297（正数校验）、`.env:22`、`.env.example:43` |
+| `EMBEDDING_TIMEOUT` | **300.0**（T7.3 由 120 上调） | 单批 HTTP 超时；必须大于服务端最坏排队时间 | `config.py:83-87`、`.env.example:49` |
+| `EMBEDDING_MAX_RETRIES` | 2 | 每批额外重试次数 | `config.py:88`、`.env.example:50` |
 | `MAX_BATCH` | 代码 64；compose `16`（`infra/.env` 未设） | `/embed` 入参上限（超批 422） | `server.py:42`、`infra/docker-compose.yml:128` |
 | `RERANK_MAX_BATCH` | 代码 = `MAX_BATCH`；compose 兜底 `16`；`infra/.env` **4** | 单次精排推理的候选上限（服务内分片）。**批越大越慢越占内存**：50 候选实测批 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB（int8 档） | `server.py:47`、`infra/docker-compose.yml:123`、`infra/.env:22` |
 | `ORT_THREADS` | 代码 2；compose `4` | ONNX Runtime 线程数（embedding 与 rerank 共用） | `server.py:53`、`infra/docker-compose.yml:127` |
