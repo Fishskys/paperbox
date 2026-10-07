@@ -107,9 +107,10 @@ uv run python scripts/healthcheck.py
 | `EMBEDDING_MAX_RETRIES` | 每批额外重试次数 | `2` | 退避 `0.5 × 2^n` 秒 |
 | `RERANK_ENABLED` | 是否具备精排能力 | `true` | 设为 `false` 时精排请求直接跳过（`rerank=true` 也无效） |
 | `RERANK_MODEL` | 精排（交叉编码器）模型名 | `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8` | 可换内置档：`jinaai/jina-reranker-v2-base-multilingual`（中文优先、更重）、`Xenova/ms-marco-MiniLM-L-6-v2`（英文轻量） |
-| `RERANK_MODEL_FILE` | 非内置模型的仓库内 ONNX 文件 | `model.onnx` | 内置档请注释掉；多数导出在 `onnx/model.onnx`，量化导出常在仓库根 |
-| `RERANK_MAX_BATCH` | 单次精排的候选上限 | `4` | 交叉编码器内存随「token × 候选数」增长：多语言/int8 档用 `4`，轻量英文档可回 `16` |
 | `RERANK_URL` | 精排服务地址 | `http://127.0.0.1:8090` | 与 `EMBEDDING_URL` 同服务 |
+
+> ⚠️ `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`，见 §1.4.4）——应用进程不读，
+> 写进根 `.env` 是空操作（2026-10-07 审查更正）。
 | `RERANK_TIMEOUT` | 精排请求超时（秒） | `10` | 候选数 = `top_k × RERANK_CANDIDATES`；**设小了会让精排静默降级**（多语言档建议 `60`） |
 | `RERANK_CANDIDATES` | 精排候选过取倍数 | `5` | 合法值 ≥1；候选池 = `top_k × 此值`，同时决定 native 路径每篇进精排的块数上限 |
 
@@ -652,7 +653,7 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 「不许静默失效」）；其次是 `PARSER_BACKEND` / `SEARCH_BACKEND` 填了非法值（只接受 `docling|pypdf` 与 `native|python`）。
 
 **Q13 想换精排模型或向量模型？**
-精排：改 `RERANK_MODEL`（非内置档还要给 `RERANK_MODEL_FILE`）—— **根 `.env` 与 `infra/.env` 两处都要改**，
+精排：改 `RERANK_MODEL`（写根 `.env`，改完重启应用）；非内置档的 `RERANK_MODEL_FILE` 与限批 `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`），
 然后重建容器并重启应用；只改一边会出现「容器跑新模型、响应报旧模型名」。
 向量：换模型必须**新建索引**并切换别名（向量维度/空间不可原地替换），然后重算向量（`reindex`）。
 

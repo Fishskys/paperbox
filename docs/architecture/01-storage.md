@@ -129,7 +129,7 @@ venues ──CASCADE──> venue_editions
 - `knn_vector` 映射无法原地修改：`ensure_index` 从不在已存在的索引上重写 mapping（`app/search/opensearch.py:69-82`），换分词器/维度只能新建索引 + `_reindex`（`scripts/create_index.py:1-27`）。
 - **但给活索引「加」新字段是允许的**：`opensearch.update_mapping()`（`opensearch.py:113`）走 `PUT _mapping`，只补 `build_mapping()` 里新增的 properties；存量文档用 `scripts/refresh_index_metadata.py`（→ `bulk_update_documents`，`opensearch.py:145`）批量 partial update，不重算向量。**必须赶在第一个带该字段的文档之前**，否则 `dynamic: true` 会先把它映成 `text`（`pages`/`paper_type` 这类要按 keyword 过滤的字段就废了）；改**已有**字段的类型仍然只能新建索引。
 - 别名切换有闸门：只有新旧索引文档数完全相等才允许切（`opensearch.py:231-233`，`create_index.py` 第 3 步），失败时不动别名。
-- 单节点 OpenSearch 无副本（`number_of_replicas: 0`，`mappings.py:160`）且安全插件关闭（`infra/docker-compose.yml:42`）。
+- 单节点 OpenSearch 无副本（`number_of_replicas: 0`，`mappings.py:160`）且安全插件关闭（`infra/docker-compose.yml:52`）。
 - MinIO 的 `move_object` 是"拷贝+删除"，best effort；失败时调用方保留旧 key，只有路径异常（`object_storage.py:389-423`）——shell 论文场景下意味着对象可能不在 `papers/<paper_id>/`，`delete_prefix` 会漏删。
 - 解包目录 TTL 24h、GC 每 300s 一次且启动即跑（`housekeeping.py:217`、`:257-286`、`:419-430`）；staging 对象只要被"活"作业引用就绝不删（`:249`）。
 - `_HashingReader` 只拦截 `read`/`readinto`，其余属性透传（`object_storage.py:72-106`）。
@@ -147,13 +147,13 @@ venues ──CASCADE──> venue_editions
 | `MINIO_SECURE` | `False` | 明文 HTTP | `app/core/config.py:71` |
 | `papers` / `uploads` / `original.pdf` | 常量 | 正式前缀、暂存前缀、正式文件名 | `app/services/object_storage.py:37-41` |
 | `BULK_BATCH_SIZE` | `200` | 批量索引批大小 | `app/search/opensearch.py:30` |
-| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:186`、`:250-254`；`.env.example:182` |
+| `INGEST_ARCHIVE_TMP_DIR` | `""` → 系统 temp | 解包根目录 | `app/core/config.py:186`、`:250-254`；`.env.example:184` |
 | `INGEST_ARCHIVE_TTL_HOURS` | `24` | 解包目录保留期 | `app/core/config.py:188` |
 | `INGEST_GC_INTERVAL_S` | `300` | GC 间隔，启动即跑一次 | `app/core/config.py:192`；`app/workers/housekeeping.py:419-430` |
-| `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:41` |
-| `OPENSEARCH_BACKUP_DIR` | `./data/opensearch-backups` | 快照仓库落点（挂到容器 `/mnt/backups`，与 `-Epath.repo` 成对） | `infra/docker-compose.yml:60-65`；`infra/.env:15` |
+| `OPENSEARCH_JAVA_OPTS` | `-Xms1g -Xmx1g` | 单节点 JVM 堆 | `infra/docker-compose.yml:51` |
+| `OPENSEARCH_BACKUP_DIR` | `./data/opensearch-backups` | 快照仓库落点（挂到容器 `/mnt/backups`，与 `-Epath.repo` 成对） | `infra/docker-compose.yml:70-75`；`infra/.env:15` |
 | 快照策略 | `paperbox-daily`（`30 3 * * *` Asia/Shanghai，留 14 份/30 天） | SM 定时快照：`paper_chunks_*,search-relevance-*` | `scripts/setup_snapshots.py:41-56`；真机 `_plugins/_sm/policies` |
-| 镜像/端口 | `postgres:15.2-alpine:5432`、`opensearchproject/opensearch:3.6.0:9200`、`minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1:9000/9001` | 依赖版本与端口 | `infra/docker-compose.yml:17`、`:35`、`:67`、`:24-25`、`:51-52`、`:74-76` |
+| 镜像/端口 | `postgres:15.2-alpine:5432`、`opensearchproject/opensearch:3.6.0:9200`、`minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1:9000/9001` | 依赖版本与端口 | `infra/docker-compose.yml:17`、`:40`、`:77`、`:29-30`、`:61-62`、`:89-91` |
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 

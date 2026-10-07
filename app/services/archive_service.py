@@ -267,7 +267,14 @@ def extract_archive(
     dest.mkdir(parents=True, exist_ok=True)
     result = ExtractResult(root=dest)
 
-    with zipfile.ZipFile(source) as archive:
+    try:
+        archive = zipfile.ZipFile(source)
+    except zipfile.BadZipFile as exc:
+        # A file whose head looks like a zip but whose directory is corrupt:
+        # answer 422 with a stable message instead of a 500 echoing the
+        # internals (review 2026-10-05, P3).
+        raise NotAnArchive(f"the archive directory is corrupt: {exc}") from exc
+    with archive:
         infos = [info for info in archive.infolist() if not info.is_dir()]
         result.total_entries = len(infos)
         total_uncompressed = sum(int(info.file_size) for info in infos)
@@ -328,6 +335,14 @@ def extract_archive(
                 ExtractedEntry(path=target, name=info.filename, size_bytes=written)
             )
             result.total_uncompressed += written
+            if result.total_uncompressed > limits.max_uncompressed_bytes:
+                # Defense in depth (review 2026-10-05, P3): the pre-flight check
+                # trusts the central directory; this running total measures what
+                # was actually written.
+                raise ArchiveUnsafe(
+                    f"archive unpacks past {limits.max_uncompressed_bytes} bytes "
+                    "while extracting (running total)"
+                )
 
     logger.info(
         "archive extracted",

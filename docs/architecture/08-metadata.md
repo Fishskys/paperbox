@@ -348,7 +348,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 |---|---|---|
 | `OPENSEARCH_URL` | 验收脚本直查文档数 | `app/core/config.py:61` |
 | `PAPER_API_KEY` | 验收脚本调 API 的鉴权头 | `:78` |
-| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | 写进 chunk 文档，随过滤字段进索引 | `:71-72` |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | 写进 chunk 文档，随过滤字段进索引 | `:71` |
 
 CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_metadata.py --apply/--limit/--source-type/--report`、`acceptance_metadata.py --base-url/--cleanup/--opensearch-url`。
 

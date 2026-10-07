@@ -355,13 +355,16 @@ def main() -> int:
     references = sum(len(report.references) for report in reports)
     drift = [problem for problem in problems if "->" in problem]
     broken = [problem for problem in problems if "->" not in problem]
-    print(f"checked {references} reference(s) in {len(reports)} document(s)")
-    print(f"  drifted : {len(drift)}")
-    print(f"  broken  : {len(broken)}")
+    # --json consumers want stdout to carry ONLY the payload: the human
+    # summary goes to stderr (review 2026-10-05, P3).
+    stream = sys.stderr if args.json else sys.stdout
+    print(f"checked {references} reference(s) in {len(reports)} document(s)", file=stream)
+    print(f"  drifted : {len(drift)}", file=stream)
+    print(f"  broken  : {len(broken)}", file=stream)
     for problem in drift:
-        print(f"    {problem}")
+        print(f"    {problem}", file=stream)
     for problem in broken:
-        print(f"    {problem}")
+        print(f"    {problem}", file=stream)
 
     if args.apply and drift:
         changed = sum(apply_fixes(report) for report in reports)

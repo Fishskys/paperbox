@@ -158,7 +158,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 (`app/search/native.py:269` ← `app/search/hybrid.py:741`)
 
 **开关**：`SEARCH_BACKEND`（`app/core/config.py:120`，**默认 `native`，2026-10-01 定档**）是部署默认；请求体 `backend` 可**逐次覆盖**
-（`app/schemas/search.py:247`），响应回显实际跑的那条（`app/schemas/search.py:415`、`app/api/search.py:158`）。
+（`app/schemas/search.py:247`），响应回显实际跑的那条（`app/schemas/search.py:417`、`app/api/search.py:158`）。
 只影响 `mode=hybrid`：keyword/semantic 是单腿，永远走应用侧（`app/search/hybrid.py:789`）。
 
 **关键事实（真机实测，改这块前先读）**：

@@ -2,7 +2,9 @@
 FROM python:3.12-slim
 
 # 依赖与虚拟环境统一由 uv 管理（与本机开发环境同一套 pyproject/uv.lock）
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# Pinned (review 2026-10-05, P3): a floating tag made every rebuild a
+# dependency lottery for a --frozen sync.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /uvx /usr/local/bin/
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

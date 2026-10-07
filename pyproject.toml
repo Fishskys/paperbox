@@ -16,7 +16,6 @@ dependencies = [
     "python-multipart==0.0.32",
     "pypdf==6.18.0",
     "minio==7.2.20",
-    "fonttools>=4.60",
     "mcp==2.3.0",
 ]
 

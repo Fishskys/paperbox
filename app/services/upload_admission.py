@@ -148,13 +148,19 @@ class UploadAdmission:
 
 
 _admission: UploadAdmission | None = None
+#: Guards the lazy singleton's check-then-act (review 2026-10-05, P3): two cold
+#: requests racing used to be able to build two gates, each with its own
+#: in-flight counter (halving the effective limit until process restart).
+_admission_lock = threading.Lock()
 
 
 def get_admission() -> UploadAdmission:
     """Return the process-wide admission gate, creating it on first use."""
     global _admission
     if _admission is None:
-        _admission = UploadAdmission()
+        with _admission_lock:
+            if _admission is None:
+                _admission = UploadAdmission()
     return _admission
 
 

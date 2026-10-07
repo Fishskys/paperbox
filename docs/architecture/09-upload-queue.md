@@ -120,7 +120,7 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 4. **判重靠内容哈希**：`/files` 必须把重复字节整份传完才能知道重复，随后立即删除已建的 staging 对象（172-175）；`/ingest/dir` 有传输前预哈希（`scan` 300-319）。
 5. **`dry_run` 零副作用**：不建作业、不入队（425-435、474 的 `and not payload.dry_run`）。
 6. **必须用 `local_scan.is_link()` 判链接**：`os.walk(followlinks=False)` 仍会进入 Windows 目录 junction，`Path.is_symlink()` 对 junction 返回 False；junction 是非特权用户（`mklink /J`）唯一能造的 reparse point，因此是最现实的逃逸口（`local_scan.py:186-198`、`AGENTS.md` §3.8）。本机实测：`os.path.isjunction` 在项目解释器 3.12.10 上存在（`pyproject.toml:5` 要求 `>=3.12,<3.13`）。
-7. **zip bomb 在建条目前判定**：三上限全部取自 `archive.infolist()` 的中央目录（`archive_service.py:271-293`），超限时 `dest` 里一个字节都没写；条目级上限在写入过程中再兜一层（346-370）。
+7. **zip bomb 在建条目前判定**：三上限全部取自 `archive.infolist()` 的中央目录（`archive_service.py:278-300`），超限时 `dest` 里一个字节都没写；条目级上限在写入过程中再兜一层（346-370）。
 8. **zip-slip 双保险**：`unsafe_reason` 逐条拒（217-234：空名、绝对路径、盘符路径、`..`、符号链接、设备文件），写出前再用 `is_within(target, dest)` 复核一次（315-320）。
 9. **嵌套压缩包不递归**（304-306，计入 `entries_ignored`）；`.pdf` 后缀只是候选，最终靠 `%PDF` 魔数（前 1 KiB，`PDF_MAGIC_WINDOW=1024`，173-180），无魔数即 `UNSUPPORTED_TYPE` 拒收并删文件（697-707）。
 10. **GC 只删文件、不碰作业行**：`run_gc` 只对作业表做 `select`（85-115），测试用真实作业行验证 stage 与 `error_code` 不变（`tests/test_upload_gc.py:315-332`）；失败只进 `GcReport.errors`，绝不抛（156-159、215-222）。
@@ -138,9 +138,9 @@ staging 键与哈希（`stage_and_queue` → `_stage_upload` → `object_storage
 | `INGEST_MAX_REQUEST_MB` | 200 | 单请求总字节上限 → 413 | `config.py:158`；`ingestion.py:315-328` |
 | `INGEST_LOCAL_ROOTS` | 空 | 目录导入白名单（`;`/`,`/`os.pathsep` 分隔，realpath 归一化去重）；空 = 端点 404 | `config.py:164`、`241-265`；`local_scan.py:131-134` |
 | `INGEST_ARCHIVE_MAX_MB` | 500 | 压缩包本体上限 → 422 | `config.py:168`；`archive_service.py:186-211` |
-| `INGEST_ARCHIVE_MAX_FILES` | 2000 | 解包条目数上限（zip bomb #1） | `config.py:170`；`archive_service.py:276-280` |
-| `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:172-174`；`archive_service.py:281-286` |
-| `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:176`；`archive_service.py:287-293` |
+| `INGEST_ARCHIVE_MAX_FILES` | 2000 | 解包条目数上限（zip bomb #1） | `config.py:170`；`archive_service.py:283-287` |
+| `INGEST_ARCHIVE_MAX_UNCOMPRESSED_MB` | 5000 | 解压总量上限（#2） | `config.py:172-174`；`archive_service.py:288-293` |
+| `INGEST_ARCHIVE_MAX_RATIO` | 100 | 压缩比上限（#3），0 关闭 | `config.py:176`；`archive_service.py:294-300` |
 | `INGEST_ARCHIVE_TMP_DIR` | 空 | 解包目录（空 = 系统 temp） | `config.py:178`；`archive_service.py:127-135` |
 | `INGEST_ARCHIVE_TTL_HOURS` | 24 | 解包目录与残留压缩包保留上限 | `config.py:180`；`housekeeping.py:217`、`:247-271` |
 | `INGEST_GC_INTERVAL_S` | 300 | GC 间隔（启动必跑一次） | `config.py:184`；`housekeeping.py:403`、`323-334` |
