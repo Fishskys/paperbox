@@ -66,6 +66,31 @@ def alias_targets(client: OpenSearch | None = None, alias: str = ALIAS) -> list[
     return sorted(response.keys())
 
 
+def mapping_embedding_dimension(mapping: dict[str, Any]) -> int | None:
+    """Extract ``embedding.dimension`` from a mapping document.
+
+    Accepts both shapes that carry a mapping: an ``indices.get_mapping()``
+    answer (nests the body under the index name) and ``build_mapping()``'s
+    body itself. ``None`` means "cannot verify" -- no ``embedding`` field or an
+    unexpected shape -- never a mismatch; callers must treat it that way.
+    """
+    body = mapping
+    if not isinstance(body, dict):
+        return None
+    if "mappings" not in body:
+        try:
+            body = next(iter(body.values()))
+        except (StopIteration, TypeError, AttributeError):
+            return None
+    try:
+        dimension = body["mappings"]["properties"]["embedding"]["dimension"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(dimension, int):
+        return None
+    return dimension
+
+
 def ensure_index(
     client: OpenSearch | None = None,
     *,

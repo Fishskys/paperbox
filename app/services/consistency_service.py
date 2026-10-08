@@ -15,6 +15,10 @@ What is compared, per paper:
   exact ``object_key``, not by count, so a leftover figure or a hand-uploaded file
   shows up as an orphan instead of skewing the totals.
 * ``paper_chunks`` (rows) against documents grouped by ``paper_id`` in the index.
+* The embedding model that produced the vectors, on both sides (the
+  ``embedding_model`` column and the document field): one paper must not
+  straddle two models, and a model switch that only reached part of the
+  library shows up in the census.
 
 A store that cannot be reached is reported in ``errors`` and that side is marked
 missing rather than raising: an unreachable MinIO must not make the endpoint
@@ -61,6 +65,14 @@ ISSUE_DELETED_RESIDUE = "deleted_paper_residue"
 #: §6.1 step 2). A missing stamp on either side counts as ``unknown``, so papers
 #: indexed before the stamp existed are *not* reported.
 ISSUE_PARSER_STAMP_MISMATCH = "parser_stamp_mismatch"
+#: One paper's vectors were embedded by more than one model (its PostgreSQL
+#: chunk rows, its index documents, or the two sides disagree). Vectors from
+#: different models are not comparable, so one paper -- and one index -- must
+#: never straddle two. Rows/documents with no model recorded count as
+#: ``unknown`` and are never a mismatch on their own: the library indexed
+#: before the column existed looks like that, and a model switch that has not
+#: started yet is a *census* fact, not per-paper drift.
+ISSUE_EMBEDDING_MODEL_MISMATCH = "embedding_model_mismatch"
 
 #: Prefixes owned by a paper / by the upload staging area.
 OBJECT_PREFIX = f"{object_storage.ORIGINAL_PREFIX}/"
@@ -116,6 +128,10 @@ class PaperConsistency:
     #: What the paper's index documents carry, sorted. Empty = no documents, or
     #: documents written before the stamp existed.
     index_backends: tuple[str, ...] = ()
+    #: Every *known* embedding model seen on the paper's chunk rows and index
+    #: documents, sorted. One entry = agree; two or more =
+    #: :data:`ISSUE_EMBEDDING_MODEL_MISMATCH`.
+    embedding_models: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +149,7 @@ class PaperConsistency:
             "cache_objects": self.cache_objects,
             "parser_backend": self.parser_backend,
             "index_backends": list(self.index_backends),
+            "embedding_models": list(self.embedding_models),
         }
 
 
@@ -163,9 +180,15 @@ class ConsistencyReport:
     #: stamps for its live papers, and what the index documents carry.
     parser_backends_papers: dict[str, int]
     parser_backends_documents: dict[str, int]
-    errors: list[str]
-    truncated: bool
-    took_ms: float
+    #: Embedding-model census: chunk rows in PostgreSQL vs index documents,
+    #: keyed by model (or ``unknown``). A split here means a model switch that
+    #: only reached part of the library -- the vectors are not comparable.
+    embedding_models_chunks: dict[str, int] = field(default_factory=dict)
+    embedding_models_documents: dict[str, int] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    #: True when the ``paper_id`` terms aggregation hit :data:`AGG_SIZE`.
+    truncated: bool = False
+    took_ms: float = 0.0
     #: Opt-in (``with_parser_papers``): the live paper ids behind each stamp, so
     #: "docling is back, re-parse the fallbacks" has a worklist, not just a count.
     parser_backends_paper_ids: dict[str, list[str]] = field(default_factory=dict)
@@ -213,6 +236,10 @@ class ConsistencyReport:
                 },
                 "paper_ids_truncated": self.parser_backends_paper_ids_truncated,
             },
+            "embedding_models": {
+                "chunks": dict(sorted(self.embedding_models_chunks.items())),
+                "documents": dict(sorted(self.embedding_models_documents.items())),
+            },
             "problems": [problem.as_dict() for problem in self.problems],
             "orphan_objects": list(self.orphan_objects),
             "orphan_documents": list(self.orphan_documents),
@@ -237,8 +264,16 @@ class _PaperRow:
     parser_version: str | None = None
 
 
-def _load_papers(session_factory: Callable[[], Any]) -> tuple[dict[str, _PaperRow], dict[str, list[str]], dict[str, int]]:
-    """PostgreSQL side: papers, their live file object keys and chunk counts."""
+def _load_papers(
+    session_factory: Callable[[], Any],
+) -> tuple[
+    dict[str, _PaperRow],
+    dict[str, list[str]],
+    dict[str, int],
+    dict[str, dict[str | None, int]],
+]:
+    """PostgreSQL side: papers, their live file object keys, chunk counts and
+    the embedding model each paper's chunk rows carry."""
     session = session_factory()
     try:
         papers: dict[str, _PaperRow] = {}
@@ -267,15 +302,25 @@ def _load_papers(session_factory: Callable[[], Any]) -> tuple[dict[str, _PaperRo
             )
         ).all():
             files.setdefault(str(paper_id), []).append(str(object_key))
+        # One group-by feeds both the chunk counts and the embedding-model
+        # census: count per (paper, model), then sum per paper.
+        chunk_models: dict[str, dict[str | None, int]] = {}
+        model_rows = session.execute(
+            select(
+                PaperChunk.paper_id,
+                PaperChunk.embedding_model,
+                func.count(),
+            ).group_by(PaperChunk.paper_id, PaperChunk.embedding_model)
+        ).all()
+        for paper_id, model, count in model_rows:
+            per_paper = chunk_models.setdefault(str(paper_id), {})
+            per_paper[model] = per_paper.get(model, 0) + int(count)
         chunks: dict[str, int] = {
-            str(paper_id): int(count)
-            for paper_id, count in session.execute(
-                select(PaperChunk.paper_id, func.count()).group_by(PaperChunk.paper_id)
-            ).all()
+            paper_id: sum(models.values()) for paper_id, models in chunk_models.items()
         }
     finally:
         session.close()
-    return papers, files, chunks
+    return papers, files, chunks, chunk_models
 
 
 def _load_objects(storage: Any) -> tuple[dict[str, list[str]], int]:
@@ -297,18 +342,19 @@ def _load_objects(storage: Any) -> tuple[dict[str, list[str]], int]:
 
 def _load_documents(
     client: Any, alias: str
-) -> tuple[dict[str, int], dict[str, dict[str, int]], bool, bool]:
-    """OpenSearch side: documents per ``paper_id``, split by parser backend.
+) -> tuple[dict[str, int], dict[str, dict[str, int]], dict[str, dict[str, int]], bool, bool]:
+    """OpenSearch side: documents per ``paper_id``, split by parser backend and
+    by the embedding model the documents carry.
 
-    Returns ``(counts, backends, index_exists, truncated)``. One ``terms``
-    aggregation with a ``parser_backend`` sub-aggregation is enough for the whole
+    Returns ``(counts, backends, models, index_exists, truncated)``. One
+    ``terms`` aggregation with two sub-aggregations is enough for the whole
     corpus, so this stays a single round trip. A paper whose documents predate
-    the stamp comes back with an empty mapping -- "no backend", not "unknown
-    backend of a known kind".
+    a stamp comes back with an empty mapping -- "no backend / no model", not
+    "unknown of a known kind".
     """
     exists = opensearch.index_exists(client, alias)
     if not exists:
-        return {}, {}, False, False
+        return {}, {}, {}, False, False
     client = client or opensearch.get_client()
     response = client.search(
         index=alias,
@@ -317,7 +363,10 @@ def _load_documents(
             "aggs": {
                 "by_paper": {
                     "terms": {"field": "paper_id", "size": AGG_SIZE},
-                    "aggs": {"by_backend": {"terms": {"field": "parser_backend"}}},
+                    "aggs": {
+                        "by_backend": {"terms": {"field": "parser_backend"}},
+                        "by_model": {"terms": {"field": "embedding_model"}},
+                    },
                 }
             },
         },
@@ -325,16 +374,18 @@ def _load_documents(
     buckets = response.get("aggregations", {}).get("by_paper", {}).get("buckets", [])
     counts: dict[str, int] = {}
     backends: dict[str, dict[str, int]] = {}
+    models: dict[str, dict[str, int]] = {}
     for bucket in buckets:
         paper_id = str(bucket["key"])
         counts[paper_id] = int(bucket["doc_count"])
-        by_backend = bucket.get("by_backend", {}).get("buckets", [])
-        backends[paper_id] = {
-            str(entry["key"]): int(entry["doc_count"])
-            for entry in by_backend
-            if str(entry["key"])
-        }
-    return counts, backends, True, len(buckets) >= AGG_SIZE
+        for target, key in ((backends, "by_backend"), (models, "by_model")):
+            sub = bucket.get(key, {}).get("buckets", [])
+            target[paper_id] = {
+                str(entry["key"]): int(entry["doc_count"])
+                for entry in sub
+                if str(entry["key"])
+            }
+    return counts, backends, models, True, len(buckets) >= AGG_SIZE
 
 
 # --------------------------------------------------------------------------- #
@@ -390,6 +441,18 @@ def _document_census(
     return counts
 
 
+def _chunk_census(
+    chunk_models: Mapping[str, Mapping[str | None, int]],
+) -> dict[str, int]:
+    """Count *chunk rows* per embedding model (``unknown`` covers NULL)."""
+    counts: dict[str, int] = {}
+    for per_paper in chunk_models.values():
+        for model, count in per_paper.items():
+            key = str(model or UNKNOWN_BACKEND)
+            counts[key] = counts.get(key, 0) + int(count)
+    return counts
+
+
 def _compare_paper(
     row: _PaperRow,
     *,
@@ -398,6 +461,8 @@ def _compare_paper(
     chunks_pg: int,
     chunks_os: int,
     index_backends: Mapping[str, int] | None = None,
+    chunk_models: Mapping[str | None, int] | None = None,
+    index_models: Mapping[str, int] | None = None,
 ) -> PaperConsistency | None:
     """Compare one paper across the three stores; ``None`` when it agrees."""
     expected = set(file_keys)
@@ -407,6 +472,17 @@ def _compare_paper(
     # comparison and report their count instead of calling them orphans.
     cache_objects = {key for key in all_objects if CACHE_SEGMENT in key}
     actual = all_objects - cache_objects
+
+    # The embedding model must be one per paper across both sides: vectors from
+    # different models are not comparable. Rows/documents written before the
+    # model was recorded have none -- "unknown", never a mismatch on its own.
+    known_models = sorted(
+        {
+            str(value)
+            for value in [*(chunk_models or {}), *(index_models or {})]
+            if value
+        }
+    )
 
     if row.deleted:
         # Deletion purges documents and objects inline (``DELETE /api/papers/{id}``)
@@ -434,6 +510,7 @@ def _compare_paper(
             cache_objects=len(cache_objects),
             parser_backend=row.parser_backend,
             index_backends=tuple(sorted(index_backends or {})),
+            embedding_models=tuple(known_models),
         )
 
     missing_objects = sorted(expected - actual)
@@ -462,6 +539,9 @@ def _compare_paper(
     if chunks_os and index_stamped != expected_backends:
         issues.append(ISSUE_PARSER_STAMP_MISMATCH)
 
+    if len(known_models) >= 2:
+        issues.append(ISSUE_EMBEDDING_MODEL_MISMATCH)
+
     if not issues:
         return None
     return PaperConsistency(
@@ -479,6 +559,7 @@ def _compare_paper(
         cache_objects=len(cache_objects),
         parser_backend=row.parser_backend,
         index_backends=tuple(index_stamped),
+        embedding_models=tuple(known_models),
     )
 
 
@@ -507,8 +588,9 @@ def check_consistency(
     papers: dict[str, _PaperRow] = {}
     files: dict[str, list[str]] = {}
     chunks: dict[str, int] = {}
+    chunk_models: dict[str, dict[str | None, int]] = {}
     try:
-        papers, files, chunks = _load_papers(session_factory)
+        papers, files, chunks, chunk_models = _load_papers(session_factory)
     except Exception as exc:  # noqa: BLE001 - one broken store must not hide the rest
         logger.warning("consistency: could not read PostgreSQL: %s", exc)
         errors.append(f"postgres: {type(exc).__name__}: {exc}")
@@ -523,11 +605,12 @@ def check_consistency(
 
     documents: dict[str, int] = {}
     document_backends: dict[str, dict[str, int]] = {}
+    document_models: dict[str, dict[str, int]] = {}
     index_exists = False
     truncated = False
     try:
-        documents, document_backends, index_exists, truncated = _load_documents(
-            client, alias
+        documents, document_backends, document_models, index_exists, truncated = (
+            _load_documents(client, alias)
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("consistency: could not read OpenSearch: %s", exc)
@@ -547,6 +630,8 @@ def check_consistency(
             chunks_pg=chunks.get(paper_id, 0),
             chunks_os=documents.get(paper_id, 0),
             index_backends=document_backends.get(paper_id, {}),
+            chunk_models=chunk_models.get(paper_id, {}),
+            index_models=document_models.get(paper_id, {}),
         )
         if problem is not None:
             problems.append(problem)
@@ -602,6 +687,8 @@ def check_consistency(
             row.parser_backend for row in papers.values() if not row.deleted
         ),
         parser_backends_documents=_document_census(documents, document_backends),
+        embedding_models_chunks=_chunk_census(chunk_models),
+        embedding_models_documents=_document_census(documents, document_models),
         parser_backends_paper_ids=paper_ids,
         parser_backends_paper_ids_truncated=paper_ids_truncated,
         errors=errors,
@@ -619,6 +706,8 @@ def check_consistency(
                 "orphan_documents": report.orphan_documents_total,
                 "parser_backends_papers": report.parser_backends_papers,
                 "parser_backends_documents": report.parser_backends_documents,
+                "embedding_models_chunks": report.embedding_models_chunks,
+                "embedding_models_documents": report.embedding_models_documents,
                 "errors": len(errors),
                 "took_ms": took_ms,
             }
@@ -631,6 +720,7 @@ __all__ = [
     "DEFAULT_PROBLEM_LIMIT",
     "ISSUE_CHUNK_MISMATCH",
     "ISSUE_DELETED_RESIDUE",
+    "ISSUE_EMBEDDING_MODEL_MISMATCH",
     "ISSUE_MISSING_CHUNKS",
     "ISSUE_MISSING_INDEX",
     "ISSUE_MISSING_OBJECT",

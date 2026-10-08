@@ -29,6 +29,8 @@ get_object(storage_key) -> BytesIO / delete_object(storage_key) / bucket 存在�
 GET    /health
 GET    /api/consistency             三端只读对账（PG / MinIO / OpenSearch）：逐篇核对文件行↔对象、
                                     chunk 行↔文档，报缺失/孤儿/删除残留；只读且永不抛（store 故障进 errors）（2026-09-22）
+                                    另含两份普查：parser_backends 与 embedding_models（2026-10-07；
+                                    单篇跨两个 embedding 模型 → embedding_model_mismatch）
 GET    /api/papers                  论文列表（分页 / 按状态 / 标题搜索；另支持 venue、year_from/year_to、
                                     paper_type、tag 过滤，读 PG 当前值）（2026-09-22）
 POST   /api/papers/ingest           {"source_type":"url","source":"https://…/x.pdf"}

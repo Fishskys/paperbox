@@ -158,7 +158,11 @@ def test_registration_happens_once_on_first_use(monkeypatch) -> None:
 
 
 def test_health_and_info_expose_the_resolved_model_pair(monkeypatch) -> None:
-    """The running container's model *and* file must be checkable without logs."""
+    """The running container's model *and* file must be checkable without logs.
+
+    The embedding dimension stays null here on purpose: the model was never
+    loaded in this test, and the container reports measured values only.
+    """
     server = load_server(monkeypatch, RERANK_MODEL=CUSTOM, RERANK_MODEL_FILE="model.onnx")
     client = TestClient(server.app)
 
@@ -166,3 +170,4 @@ def test_health_and_info_expose_the_resolved_model_pair(monkeypatch) -> None:
         body = client.get(path).json()
         assert body["rerank_model"] == CUSTOM, path
         assert body["rerank_model_file"] == "model.onnx", path
+        assert body["dimension"] is None, path

@@ -101,7 +101,7 @@ uv run python scripts/healthcheck.py
 |---|---|---|---|
 | `EMBEDDING_URL` | 向量/精排推理服务地址 | `http://127.0.0.1:8090` | 与容器 `embedding` 的端口一致 |
 | `EMBEDDING_MODEL` | 向量模型名 | `intfloat/multilingual-e5-large` | 只作为记录与溯源（真正加载的模型由容器侧决定） |
-| `EMBEDDING_DIMENSION` | 向量维度 | `1024` | 必须与索引 `knn_vector.dimension` 一致 |
+| `EMBEDDING_DIMENSION` | 向量维度 | `1024` | 必须与索引 `knn_vector.dimension` **和容器模型的实测输出维度**一致；启动时三方对账，不符拒绝启动（见 §3.5 Q19） |
 | `EMBEDDING_BATCH_SIZE` | 单次 `/embed` 的文本数 | `16` | **必须与容器 `MAX_BATCH` 相同**（超批 422） |
 | `EMBEDDING_TIMEOUT` | 单批 HTTP 超时（秒） | `300` | 必须大于最坏排队时间；容器把推理串在一条 FIFO 队列后 |
 | `EMBEDDING_MAX_RETRIES` | 每批额外重试次数 | `2` | 退避 `0.5 × 2^n` 秒 |
@@ -392,7 +392,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 |---|---|---|---|
 | GET | `/` | 服务名、版本、文档地址 | 无 |
 | GET | `/health` | 应用与四个依赖（PG / OpenSearch / MinIO / Embedding）健康状态，免鉴权 | 无 |
-| GET | `/api/consistency` | 三端只读对账：逐篇核对「文件记录 ↔ 对象存储对象」「切块记录 ↔ 索引文档」 | `limit`（默认 200，1–1000）、`parser_papers`（默认 `false`，为 `true` 时附上每个解析后端下的存活论文清单） |
+| GET | `/api/consistency` | 三端只读对账：逐篇核对「文件记录 ↔ 对象存储对象」「切块记录 ↔ 索引文档」；响应另含两份普查 `parser_backends`（解析后端）与 `embedding_models.{chunks,documents}`（切块与索引文档各按 embedding 模型计数，`unknown` = 记录该列之前入库的） | `limit`（默认 200，1–1000）、`parser_papers`（默认 `false`，为 `true` 时附上每个解析后端下的存活论文清单） |
 
 ### 2.3 导入（五个入口）
 
@@ -683,3 +683,16 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 它自带清理：导入一份**每次运行内容都不同**的合成 PDF，跑完按快照 diff 删掉**自己新建的那篇**，
 并断言既有论文一篇没少；探针必须落在 `INGEST_LOCAL_ROOTS` 内。
 带写模式因产品删除是软删，会留一条 `deleted` 状态的探针记录，需要时用 `scripts/purge_deleted.py --hard` 清掉。
+
+**Q19 启动时报 embedding 维度不一致（`RuntimeError ... EMBEDDING_DIMENSION`）？**
+应用启动时会做三方对账：容器模型的**实测输出维度** ↔ `.env` 的 `EMBEDDING_DIMENSION` ↔ 活索引
+`knn_vector` 的 dimension。报错说明三处至少有一处与另两处不符，改完重启即可：
+换过模型就同步 `EMBEDDING_DIMENSION`；索引是旧维度就指向新索引并整库重嵌。
+**换 embedding 模型 = 整库重嵌（同维度也一样）**，完整步骤见 `docs/architecture/04-embedding.md` §9。
+顺带：`GET http://127.0.0.1:8090/info` 的 `dimension` 是模型加载时实测的真实值（模型还没加载时为 `null`）。
+
+**Q20 怎么确认库里没有「换模型换一半」的残留？**
+`GET /api/consistency`（或 `scripts/check_consistency.py`）看 `embedding_models.{chunks,documents}`：
+应只有一个模型名加若干 `unknown`（`unknown` = 记录该列之前入库的旧数据，不是错误）。
+若出现两个模型名，说明上次换模型只重嵌了一部分；单篇论文两侧模型不一致会直接报
+`embedding_model_mismatch` 问题。修复方式：对名单里的论文跑 `reindex` 重嵌。

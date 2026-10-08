@@ -2,8 +2,14 @@
 
 The worker talks to the standalone embedding server (``EMBEDDING_URL``) which
 exposes ``POST /embed`` with ``{"texts": [...]}`` and answers
-``{"embeddings": [[...]], "dimension": 1024}``. Every vector is validated
-against ``EMBEDDING_DIMENSION`` before it reaches PostgreSQL or OpenSearch.
+``{"embeddings": [[...]], "dimension": <actual width>}``. Every vector is
+validated against ``EMBEDDING_DIMENSION`` before it reaches PostgreSQL or
+OpenSearch.
+
+This module also owns the startup three-way dimension check (``2026-10-07``):
+``check_dimension_consistency`` compares the container's measured output width
+against ``EMBEDDING_DIMENSION`` and against the live index mapping, so a
+misconfigured deployment fails at startup instead of at the first embed batch.
 """
 
 from __future__ import annotations
@@ -157,11 +163,135 @@ def embedding_metadata() -> dict[str, object]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# startup three-way dimension check (2026-10-07)
+#
+# The dimension used to be stated in three places that never talked: the
+# container's model (its real output width), ``EMBEDDING_DIMENSION`` (what the
+# app validates against) and the live index mapping (what ``knn_vector`` was
+# built for). A mismatch surfaced only as the first failed embed batch, or --
+# worse -- as a silently degraded kNN search. The check runs once at startup
+# (``app.main`` lifespan): a *verified* mismatch stops the process, an
+# unreachable piece only warns (the app may legitimately start before its
+# containers, and ``validate_dimension`` still guards every write).
+# --------------------------------------------------------------------------- #
+
+#: HTTP timeout of the one ``/info`` probe against the embedding container.
+STARTUP_PROBE_TIMEOUT = 5.0
+
+
+def container_dimension(timeout: float = STARTUP_PROBE_TIMEOUT) -> int | None:
+    """The embedding container's *measured* dimension, or ``None`` if unknown.
+
+    Reads ``GET /info``, whose ``dimension`` is what the loaded model actually
+    produces (it is null until the model is lazily loaded). Every failure --
+    connection refused, timeout, non-200, unexpected body -- is a warning and
+    ``None``: "cannot verify", never a mismatch.
+    """
+    url = f"{settings.embedding_url.rstrip('/')}/info"
+    try:
+        response = httpx.get(url, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - unreachable is a warning, not a crash
+        logger.warning(
+            "embedding container not reachable for the dimension check (%s): %s",
+            url,
+            exc,
+        )
+        return None
+    if response.status_code != 200:
+        logger.warning(
+            "embedding container answered HTTP %s to the dimension check: %s",
+            response.status_code,
+            url,
+        )
+        return None
+    try:
+        dimension = response.json().get("dimension")
+    except ValueError:
+        logger.warning("embedding container returned a non-JSON /info body")
+        return None
+    if not isinstance(dimension, int):
+        logger.warning(
+            "embedding container has no measured dimension yet (model not loaded?)"
+        )
+        return None
+    return dimension
+
+
+def index_dimension(index: str | None = None) -> int | None:
+    """The ``knn_vector`` dimension the live physical index was built for.
+
+    ``None`` when the index does not exist yet (``ensure_index`` will create it
+    from ``EMBEDDING_DIMENSION``), or when OpenSearch cannot be reached, or the
+    mapping carries no ``embedding`` field -- all "cannot verify".
+    """
+    from app.search import opensearch  # local: keeps the client import lazy
+
+    name = index or opensearch.INDEX
+    try:
+        client = opensearch.get_client()
+        if not opensearch.index_exists(client, name):
+            return None
+        mapping = client.indices.get_mapping(index=name)
+    except Exception as exc:  # noqa: BLE001 - unreachable is a warning, not a crash
+        logger.warning(
+            "OpenSearch not reachable for the dimension check (%s): %s",
+            settings.opensearch_url,
+            exc,
+        )
+        return None
+    return opensearch.mapping_embedding_dimension(mapping)
+
+
+def check_dimension_consistency() -> dict[str, int | None]:
+    """Compare the three dimension statements; raise on a verified mismatch.
+
+    Returns the small report that gets logged. Raises :class:`RuntimeError`
+    only on a mismatch that was actually measured -- a deployment whose
+    ``EMBEDDING_DIMENSION`` disagrees with its model or with its index cannot
+    embed or search correctly, so it must not come up at all.
+    """
+    expected = settings.embedding_dimension
+    container = container_dimension()
+    live = index_dimension()
+    if container is not None and container != expected:
+        raise RuntimeError(
+            f"EMBEDDING_DIMENSION={expected} but the embedding model "
+            f"{settings.embedding_model!r} produces {container}-dim vectors. "
+            "Fix EMBEDDING_DIMENSION (or deploy the model you meant), and note "
+            "that every existing chunk was embedded with the old model: after "
+            "a model switch the whole library must be re-embedded "
+            "(scripts/reindex.py), whatever the dimension is."
+        )
+    if live is not None and live != expected:
+        raise RuntimeError(
+            f"EMBEDDING_DIMENSION={expected} but the live index "
+            f"{settings.opensearch_index!r} was built for {live}-dim vectors. "
+            "A knn_vector dimension cannot be changed in place: point "
+            "OPENSEARCH_INDEX at a new index and re-embed every paper "
+            "(scripts/reindex.py)."
+        )
+    logger.info(
+        "embedding dimension check passed",
+        extra={
+            "extra_fields": {
+                "expected": expected,
+                "container": container,
+                "index": live,
+            }
+        },
+    )
+    return {"expected": expected, "container": container, "index": live}
+
+
 __all__ = [
     "EMBED_PATH",
     "EmbeddingError",
+    "check_dimension_consistency",
+    "container_dimension",
     "embed_text",
     "embed_texts",
     "embedding_metadata",
+    "index_dimension",
     "validate_dimension",
 ]

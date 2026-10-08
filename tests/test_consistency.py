@@ -38,8 +38,14 @@ def add_paper(
     title: str = "A Paper",
     parser_backend: str | None = None,
     parser_version: str | None = None,
+    embedding_model: str | None = None,
+    mixed_embedding_models: tuple[str, ...] | None = None,
 ) -> str:
-    """Insert one paper with ``file_names`` rows and ``chunks`` chunk rows."""
+    """Insert one paper with ``file_names`` rows and ``chunks`` chunk rows.
+
+    ``mixed_embedding_models`` splits the chunk rows across the given models
+    (round-robin); otherwise every chunk carries ``embedding_model``.
+    """
     session = session_factory()
     try:
         paper = Paper(
@@ -68,6 +74,10 @@ def add_paper(
                 )
             )
         for index in range(chunks):
+            if mixed_embedding_models:
+                model = mixed_embedding_models[index % len(mixed_embedding_models)]
+            else:
+                model = embedding_model
             session.add(
                 PaperChunk(
                     id=new_uuid(),
@@ -79,6 +89,8 @@ def add_paper(
                     text=f"chunk {index}",
                     token_count=3,
                     char_count=7,
+                    embedding_model=model,
+                    embedding_dimension=1024 if model else None,
                 )
             )
         session.commit()
@@ -124,7 +136,8 @@ class FakeClient:
 
     ``backends`` gives a paper's documents a parser provenance: it becomes the
     ``by_backend`` sub-aggregation, which is what the stamp check reads. A paper
-    missing from it has documents written before the stamp existed.
+    missing from it has documents written before the stamp existed. ``models``
+    is the same idea for the embedding model (``by_model``).
     """
 
     def __init__(
@@ -132,9 +145,11 @@ class FakeClient:
         counts: dict[str, int] | None = None,
         exists: bool = True,
         backends: dict[str, dict[str, int]] | None = None,
+        models: dict[str, dict[str, int]] | None = None,
     ) -> None:
         self.counts = dict(counts or {})
         self.backends = {key: dict(value) for key, value in (backends or {}).items()}
+        self.models = {key: dict(value) for key, value in (models or {}).items()}
         self.indices = FakeIndices(exists)
         self.requests: list[dict] = []
 
@@ -145,14 +160,15 @@ class FakeClient:
             if count <= 0:
                 continue
             bucket: dict = {"key": key, "doc_count": count}
-            by_backend = self.backends.get(key)
-            if by_backend:
-                bucket["by_backend"] = {
-                    "buckets": [
-                        {"key": name, "doc_count": docs}
-                        for name, docs in by_backend.items()
-                    ]
-                }
+            for attr, sub_key in (("backends", "by_backend"), ("models", "by_model")):
+                per_paper = getattr(self, attr).get(key)
+                if per_paper:
+                    bucket[sub_key] = {
+                        "buckets": [
+                            {"key": name, "doc_count": docs}
+                            for name, docs in per_paper.items()
+                        ]
+                    }
             buckets.append(bucket)
         return {"aggregations": {"by_paper": {"buckets": buckets}}}
 
@@ -374,13 +390,14 @@ def test_the_check_resolves_the_module_client_when_none_is_passed(monkeypatch) -
     """A live run passes ``client=None``; that must not become ``None.search``."""
     sentinel = FakeClient({"paper-1": 4})
     monkeypatch.setattr(consistency_service.opensearch, "get_client", lambda: sentinel)
-    counts, backends, exists, truncated = consistency_service._load_documents(
+    counts, backends, models, exists, truncated = consistency_service._load_documents(
         None, "an-alias"
     )
     assert counts == {"paper-1": 4}
-    # No ``by_backend`` sub-aggregation in the fake answer: documents written
-    # before the stamp existed.
+    # No ``by_backend``/``by_model`` sub-aggregations in the fake answer:
+    # documents written before the stamps existed.
     assert backends == {"paper-1": {}}
+    assert models == {"paper-1": {}}
     assert exists is True
     assert truncated is False
 
@@ -686,3 +703,99 @@ def test_the_endpoint_passes_the_paper_id_flag_through(client, factory) -> None:
     assert response.json()["parser_backends"]["paper_ids"] == {"pypdf": [paper_id]}
 
     assert client.get("/api/consistency").json()["parser_backends"]["paper_ids"] == {}
+
+
+# --------------------------------------------------------------------------- #
+# the embedding-model census (2026-10-07): one paper, one model, both sides
+# --------------------------------------------------------------------------- #
+
+MODEL_A = "intfloat/multilingual-e5-large"
+MODEL_B = "BAAI/bge-m3"
+
+
+def test_a_uniform_model_census_is_not_a_problem(factory) -> None:  # noqa: F811
+    """Every chunk and document carrying the same model is the healthy state."""
+    paper_id = add_paper(factory, chunks=2, embedding_model=MODEL_A)
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 2}, models={paper_id: {MODEL_A: 2}}),
+    )
+    assert report.problems_total == 0
+    assert report.consistent is True
+    assert report.as_dict()["embedding_models"] == {
+        "chunks": {MODEL_A: 2},
+        "documents": {MODEL_A: 2},
+    }
+
+
+def test_chunks_written_before_the_model_column_existed_are_unknown(factory) -> None:  # noqa: F811
+    """The pre-census library (NULL model) must stay green, just counted."""
+    paper_id = add_paper(factory, chunks=2)  # no embedding_model
+    report = run(factory, FakeStorage([object_key(paper_id)]), FakeClient({paper_id: 2}))
+    assert report.problems_total == 0
+    assert report.consistent is True
+    assert report.as_dict()["embedding_models"]["chunks"] == {
+        consistency_service.UNKNOWN_BACKEND: 2
+    }
+
+
+def test_a_paper_straddling_two_models_in_pg_is_reported(factory) -> None:  # noqa: F811
+    paper_id = add_paper(
+        factory, chunks=4, mixed_embedding_models=(MODEL_A, MODEL_B)
+    )
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 4}, models={paper_id: {MODEL_A: 4}}),
+    )
+    assert problems_by_paper(report)[paper_id] == [
+        consistency_service.ISSUE_EMBEDDING_MODEL_MISMATCH
+    ]
+    # Sorted, so the tuple is deterministic regardless of which model came first.
+    assert report.problems[0].embedding_models == tuple(sorted((MODEL_A, MODEL_B)))
+
+
+def test_pg_and_documents_disagreeing_about_the_model_is_reported(factory) -> None:  # noqa: F811
+    """A switch that re-embedded PostgreSQL but never reindexed (or the reverse)."""
+    paper_id = add_paper(factory, chunks=2, embedding_model=MODEL_B)
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 2}, models={paper_id: {MODEL_A: 2}}),
+    )
+    assert problems_by_paper(report)[paper_id] == [
+        consistency_service.ISSUE_EMBEDDING_MODEL_MISMATCH
+    ]
+    assert report.problems[0].embedding_models == tuple(sorted((MODEL_A, MODEL_B)))
+
+
+def test_a_model_split_across_papers_is_a_census_fact_not_drift(factory) -> None:  # noqa: F811
+    """A half-applied model switch must be visible without going red per paper."""
+    old_model = add_paper(factory, chunks=2, embedding_model=MODEL_A)
+    new_model = add_paper(factory, chunks=2, embedding_model=MODEL_B)
+    storage = FakeStorage([object_key(old_model), object_key(new_model)])
+    fake_os = FakeClient(
+        {old_model: 2, new_model: 2},
+        models={old_model: {MODEL_A: 2}, new_model: {MODEL_B: 2}},
+    )
+    report = run(factory, storage, fake_os)
+    assert report.problems_total == 0
+    assert report.consistent is True
+    assert report.as_dict()["embedding_models"] == {
+        "chunks": {MODEL_A: 2, MODEL_B: 2},
+        "documents": {MODEL_A: 2, MODEL_B: 2},
+    }
+
+
+def test_documents_of_another_model_alone_do_not_flag_a_paper(factory) -> None:  # noqa: F811
+    """PG rows say nothing (pre-census), documents say one model: one known."""
+    paper_id = add_paper(factory, chunks=2)  # NULL model on the rows
+    report = run(
+        factory,
+        FakeStorage([object_key(paper_id)]),
+        FakeClient({paper_id: 2}, models={paper_id: {MODEL_A: 2}}),
+    )
+    assert report.problems_total == 0
+    assert report.problems == []
+    assert report.as_dict()["embedding_models"]["documents"] == {MODEL_A: 2}

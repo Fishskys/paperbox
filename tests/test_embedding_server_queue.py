@@ -198,6 +198,30 @@ def test_embed_and_rerank_share_the_queue(monkeypatch) -> None:
     assert server.QUEUE.stats()["completed"] == 3
 
 
+def test_dimension_is_measured_at_load_not_hardcoded(monkeypatch) -> None:
+    """/info and /health must report what the loaded model actually produces.
+
+    The app's startup check reads exactly this value, so a stubbed 2-dim model
+    must surface as 2 -- the old literal 1024 lied the moment a different model
+    was deployed.
+    """
+    server = load_server(monkeypatch)
+    client = TestClient(server.app)
+
+    # Before the first inference the model is not loaded and the dimension is
+    # simply unknown: null, never a made-up number.
+    assert client.get("/info").json()["dimension"] is None
+    assert client.get("/health").json()["dimension"] is None
+
+    embedded = client.post("/embed", json={"texts": ["hello"]}).json()
+    assert embedded["dimension"] == 2  # the fake model's honest width
+
+    assert client.get("/info").json()["dimension"] == 2
+    health = client.get("/health").json()
+    assert health["dimension"] == 2
+    assert health["loaded"] is True
+
+
 def test_info_reports_the_queue(monkeypatch) -> None:
     server = load_server(monkeypatch, workers=2, depth=5)
     client = TestClient(server.app)

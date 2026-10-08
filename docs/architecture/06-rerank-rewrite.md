@@ -38,7 +38,7 @@
 | `app/api/search.py` | `search(request)` `:29` | 入口：改写 → 检索 → 响应块 |
 | 同上 | `maybe_rewrite(query)` `app/services/search_pipeline.py:38` | 门控（开关 + `needs_rewrite`），关闭时零 HTTP 调用 |
 | `app/schemas/search.py` | `SearchRerankInfo` `:349` / `SearchRewriteInfo` `:362` / `SearchResponse` `:402` | 响应契约 |
-| `infra/embedding/server.py` | `rerank(req)` `:272` | 容器实现：按 `RERANK_MAX_BATCH` 分批并还原原始下标（`:284-294`），经队列 `QUEUE.submit`（`:296`）、队满转 503（`:298`）、推理异常转 503（`:302`），支持 `top_n`（`:309-310`） |
+| `infra/embedding/server.py` | `rerank(req)` `:283` | 容器实现：按 `RERANK_MAX_BATCH` 分批并还原原始下标（`:295-305`），经队列 `QUEUE.submit`（`:307`）、队满转 503（`:309`）、推理异常转 503（`:313`），支持 `top_n`（`:320-321`） |
 
 ## 3. 数据结构
 
@@ -73,7 +73,7 @@
 4. `search_service.search_papers(retrieval_query, ..., rerank=request.rerank, telemetry=...)`（`:80-88`）。
 5. → `hybrid.search_chunks(...)`（`search_service.py:370-382`）→ `_first_stage_k(top_k, rerank)`（`hybrid.py:713`）：非精排 = `top_k`，精排 = `top_k × RERANK_CANDIDATES`。
 6. 一阶段：`keyword` → `_keyword_hits`；`semantic` → `_semantic_hits`（k 再 ×3）；`hybrid` → 两腿各取候选 ×5 后 `rrf_fuse`（`hybrid.py:751-784`）。
-7. `rerank=True` → `_apply_rerank(query, ordered, top_k)`（`app/search/hybrid.py:793`）→ `rerank_service.rerank_texts`（`app/search/hybrid.py:967`，**不传 `top_n`**）→ `httpx.post(RERANK_URL + "/rerank")`（`rerank_service.py:85-89`，超时 `RERANK_TIMEOUT`）→ 容器 `rerank()` 分批推理（`infra/embedding/server.py:271-315`）→ `_parse_scores` 校验并降序（`rerank_service.py:111-147`）。
+7. `rerank=True` → `_apply_rerank(query, ordered, top_k)`（`app/search/hybrid.py:793`）→ `rerank_service.rerank_texts`（`app/search/hybrid.py:967`，**不传 `top_n`**）→ `httpx.post(RERANK_URL + "/rerank")`（`rerank_service.py:85-89`，超时 `RERANK_TIMEOUT`）→ 容器 `rerank()` 分批推理（`infra/embedding/server.py:282-326`）→ `_parse_scores` 校验并降序（`rerank_service.py:111-147`）。
 8. 回程：按 `rerank_score` 降序、同分回退一阶段位次（`hybrid.py:987-991`）；未被容器打分的 hit 追加到窗口尾部（`:996-1002`）；`_normalize_rerank_scores`（`:1004`）→ 截断 `top_k*2`（`:1005`）；`telemetry` 回填（`:800-802`）；`hit.rank` 赋值与 `chunk search finished` 日志（`:807-822`）。
 9. `aggregate_papers(hits, top_k=top_k)`（`search_service.py:383`）→ `normalize_scores`（`:272`）→ `api.search` 组装 `SearchResult`/`SearchResponse`（`app/services/search_pipeline.py:68-136`）→ `_log_search` 落库（含 `rewritten_query`，`:206-219`）。
 
@@ -95,9 +95,9 @@
 | 默认超时偏小 | `RERANK_TIMEOUT` 默认 10s，但多语言档 ≈0.4–0.47 s/候选，`top_k=10`（50 候选）≈20s → **静默降级**（`rerank.model=null`、`rerank_score=null`），不报错 | `.env.example:130-132`；`evals/report-jina-rerank-comparison.md:47-57` |
 | 日志文案 | 降级 warning：`rerank request failed, falling back to first-stage order`（`:113`）、`rerank response was not JSON, falling back`（`:107`）、`rerank response was not an object`/`missing 'results'`/`returned %d scores for %d documents`/`index %s is out of range`（`:127-162`）；正常 info：`chunk search finished` 带 `rerank`/`rerank_took_ms`（`hybrid.py:809-822`） | 同上 |
 | `rerank_took_ms` 口径 | 客户端整段耗时（含网络与容器排队），容器自己的 `took_ms` 未被读取（只取 `results`） | `hybrid.py:966-968`；`rerank_service.py:105-108` |
-| `RERANK_MODEL` 不参与调用 | 它只出现在响应 `rerank.model` 里；实际模型由容器环境变量决定，两侧不一致不会被发现 | `config.py:83-88`；`app/services/search_pipeline.py:123`；`infra/embedding/server.py:41` |
-| 候选数放不大 | 容器单批上限 `RERANK_MAX_BATCH`；交叉编码器激活内存随 `token × 候选数` 增长，故 `RERANK_CANDIDATES` 调大只会线性拉长批次数与总时长，不能靠堆候选换精度。**批大小也有反效果**（2026-10-01 真机，50 候选）：jina 档 4 → 2.4GB / 8 → 3.3GB / 16 → 5.1GB（旧数字，3GB 封顶即 OOM-kill）；现在部署的 int8 档按 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB —— 更大的批更慢**也更占内存**（批内按最长补齐），所以仍用 4 | `infra/embedding/server.py:47`、`:284-294`；`AGENTS.md` §3.3；`infra/.env.example:26-31`；`logs/eval/rerank-model-*.json` |
-| 容器侧无候选上限 | `RerankRequest.documents` 不设 `max_length`（对比 `/embed` 的 `MAX_BATCH` 限批），长候选清单由容器内部切批，不会 422 | `infra/embedding/server.py:218-222`、`:78`、`:149-150` |
+| `RERANK_MODEL` 不参与调用 | 它只出现在响应 `rerank.model` 里；实际模型由容器环境变量决定，两侧不一致不会被发现 | `config.py:83-88`；`app/services/search_pipeline.py:123`；`infra/embedding/server.py:45` |
+| 候选数放不大 | 容器单批上限 `RERANK_MAX_BATCH`；交叉编码器激活内存随 `token × 候选数` 增长，故 `RERANK_CANDIDATES` 调大只会线性拉长批次数与总时长，不能靠堆候选换精度。**批大小也有反效果**（2026-10-01 真机，50 候选）：jina 档 4 → 2.4GB / 8 → 3.3GB / 16 → 5.1GB（旧数字，3GB 封顶即 OOM-kill）；现在部署的 int8 档按 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB —— 更大的批更慢**也更占内存**（批内按最长补齐），所以仍用 4 | `infra/embedding/server.py:51`、`:295-305`；`AGENTS.md` §3.3；`infra/.env.example:26-31`；`logs/eval/rerank-model-*.json` |
+| 容器侧无候选上限 | `RerankRequest.documents` 不设 `max_length`（对比 `/embed` 的 `MAX_BATCH` 限批），长候选清单由容器内部切批，不会 422 | `infra/embedding/server.py:229-233`、`:82`、`:153-154` |
 | 改写触发条件 | 需同时满足：`QUERY_REWRITE_ENABLED=true`、查询非空、长度 ≤ `QUERY_REWRITE_MAX_CHARS`、命中 CJK 正则；**纯 ASCII 查询即使开启也不改** | `app/services/search_pipeline.py:38-46`；`query_rewrite_service.py:56-68`；`tests/test_query_rewrite.py:362-374` |
 | 改写失败降级 | 非 200、JSON 解析失败、无 `choices`/`content`、清洗后为空、改写结果与原查询相同 → `applied=false`、原查询继续检索 | `query_rewrite_service.py:149-196`；`tests/test_query_rewrite.py:177-263` |
 | 启动即校验 | `QUERY_REWRITE_ENABLED=true` 时 `URL`/`MODEL`/`API_KEY` 任一为空 → `Settings()` 抛 `ValueError`，进程起不来（不静默降级） | `config.py:230-248`；`tests/test_query_rewrite.py:322-326` |
@@ -116,8 +116,8 @@
 | `RERANK_URL` | `http://127.0.0.1:8090` | 精排容器基址，拼 `/rerank`、`/health` | `app/core/config.py:97` |
 | `RERANK_TIMEOUT` | `10.0`（本机 `.env`=60） | httpx 超时（秒）；超时即静默降级。现役 int8 档 0.064 s/候选 ⇒ `top_k=10` ≈3.2s，默认值够用；保留 60 是因为推理队列单线程，排队时间由队列而非模型速度决定（换回 jina 0.276 s/候选时更是必需） | `app/core/config.py:98`、`.env:50` |
 | `RERANK_CANDIDATES` | `5` | 一阶段过取倍数，候选数 = `top_k × 此值` | `app/core/config.py:100` |
-| `RERANK_MAX_BATCH` | 无 app 侧默认；`infra/.env` 与 `.env.example` 为 `4`，`docker-compose.yml` 兜底 `16` | 容器单次推理的文档上限，超出则切批。**批越大越慢越占内存**（int8 档 50 候选：批 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB） | `infra/embedding/server.py:49`、`infra/.env:17`、`infra/docker-compose.yml:119` |
-| `RERANK_MODEL_FILE` | 无 app 侧；`infra/.env` `model.onnx`（compose 兜底 `onnx/model.onnx`） | 容器侧：**不在 fastembed 内置清单里的**交叉编码器的仓库内 ONNX 文件路径；应用侧不读 | `infra/embedding/server.py:52`、`infra/.env:14`、`infra/docker-compose.yml:116` |
+| `RERANK_MAX_BATCH` | 无 app 侧默认；`infra/.env` 与 `.env.example` 为 `4`，`docker-compose.yml` 兜底 `16` | 容器单次推理的文档上限，超出则切批。**批越大越慢越占内存**（int8 档 50 候选：批 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB） | `infra/embedding/server.py:53`、`infra/.env:17`、`infra/docker-compose.yml:119` |
+| `RERANK_MODEL_FILE` | 无 app 侧；`infra/.env` `model.onnx`（compose 兜底 `onnx/model.onnx`） | 容器侧：**不在 fastembed 内置清单里的**交叉编码器的仓库内 ONNX 文件路径；应用侧不读 | `infra/embedding/server.py:56`、`infra/.env:14`、`infra/docker-compose.yml:116` |
 | `QUERY_REWRITE_ENABLED` | `false` | 改写总开关；关闭时零 HTTP 调用 | `app/core/config.py:119` |
 | `QUERY_REWRITE_URL` | `""` | OpenAI 兼容基址，拼 `/chat/completions` | `app/core/config.py:120` |
 | `QUERY_REWRITE_API_KEY` | `""` | Bearer 凭证 | `app/core/config.py:121` |
