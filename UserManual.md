@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.4.0**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.4.1**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.4.0 starting`；`curl http://127.0.0.1:8077/health` 四个依赖都是 `ok` |
+| 6) 启动 | 日志出现 `paperbox 0.4.1 starting`；`curl http://127.0.0.1:8077/health` 四个依赖都是 `ok` |
 
 一键自检（推荐）：
 

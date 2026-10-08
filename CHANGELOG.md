@@ -4,6 +4,29 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-10-08
+
+### Added
+
+- **向量维度不再写死，embedding 模型可更换**：
+  - 容器 `/info`、`/health` 上报**实测**输出宽度 —— 模型加载时用一条探针文本测一次并缓存，加载前报 `null`，不再是硬编码的 1024；`/embed` 行为不变。
+  - **启动期三方对账**（`embedding_service.check_dimension_consistency`，lifespan 里、作业队列启动前）：
+    容器实测维度 ↔ `EMBEDDING_DIMENSION` ↔ 活索引 `knn_vector` mapping。**只有"实测到"的不一致才拒绝启动**，
+    错误信息直接写出修复路径；容器/索引不可达、模型未加载、索引不存在都只 WARN 放行（应用可以先于容器启动，
+    写侧 `validate_dimension` 仍是兜底）。读 mapping 的纯函数 `mapping_embedding_dimension` 放在 `app/search/opensearch.py`，与迁移脚本共用一份。
+  - `scripts/create_index.py --migrate-from` 增加**维度护栏**：新旧索引 dimension 不同时，在创建任何索引之前以退出码 2 拒绝，
+    并提示正确路径是整库重嵌（`scripts/reindex.py`）而非 `_reindex` 拷贝（拷贝只能逐字节搬向量，跨维度必然出事）。
+  - `/api/consistency` 新增 **embedding 模型普查** `embedding_models.{chunks,documents}`（PG 切块行 vs 索引文档各按模型计数，
+    无记录 = `unknown`）与问题码 `embedding_model_mismatch`（单篇论文跨两个已知模型 = "换模型只换一半"的现场）；CLI 输出与 schema 同步。
+- 文档同步：`04-embedding` §5b（三方对账）、§9（**换模型 runbook**：重建容器镜像 → 重启 uvicorn → 维度变了就换新索引 →
+  整库重嵌 → 用普查验证 → 重跑 `srw_setup.py build`）、`UserManual` Q19/Q20、
+  `.env.example` 中英注释、MVP-SPEC；SRW 口径补「换模型后 `paper_repr` 作废」。
+
+### Tests
+
+- 新增 `tests/test_dimension_startup_check.py`、`tests/test_create_index_guard.py`，`test_consistency.py` 扩 6 例，
+  容器侧维度断言（`test_embedding_server_queue.py`、`test_embedding_rerank_model.py`）；全量 pytest exit 0。
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

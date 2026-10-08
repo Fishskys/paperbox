@@ -1,6 +1,6 @@
 [project]
 name = "paperbox"
-version = "0.4.0"
+version = "0.4.1"
 description = "Paper knowledge service: ingest, parse, chunk, embed, index and search papers over REST"
 requires-python = ">=3.12,<3.13"
 dependencies = [
