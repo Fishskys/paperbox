@@ -15,16 +15,19 @@ server-side, so the stored embeddings are never recomputed::
 
 The migration is idempotent and safe:
 
-1. create ``--index`` (idempotent; ``knn_vector`` mappings cannot be changed in
+1. refuse up front when the old index's ``embedding.dimension`` differs from
+   the mapping that would be created (``_reindex`` copies vectors verbatim, so
+   a model change means a full re-embed, never a copy);
+2. create ``--index`` (idempotent; ``knn_vector`` mappings cannot be changed in
    place, so a new analyzer always means a new index);
-2. ``_reindex`` every document from the old index, started with
+3. ``_reindex`` every document from the old index, started with
    ``wait_for_completion=false`` and polled through ``GET _tasks/<id>`` so a
    2883-document copy does not time out;
-3. compare document counts - they must match exactly, otherwise the script
+4. compare document counts - they must match exactly, otherwise the script
    exits non-zero **without** touching the alias;
-4. move the alias atomically (remove from old, add to new with
+5. move the alias atomically (remove from old, add to new with
    ``is_write_index``);
-5. print the counts on both sides. The old index is kept for rollback; nothing
+6. print the counts on both sides. The old index is kept for rollback; nothing
    is ever deleted here.
 """
 
@@ -39,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings  # noqa: E402
+from app.search.mappings import build_mapping  # noqa: E402
 from app.search.opensearch import (  # noqa: E402
     ALIAS,
     INDEX,
@@ -50,6 +54,7 @@ from app.search.opensearch import (  # noqa: E402
     get_client,
     index_exists,
     index_stats,
+    mapping_embedding_dimension,
 )
 
 DEFAULT_POLL_INTERVAL = 2.0
@@ -157,6 +162,25 @@ def migrate(
         return 2
     if not index_exists(client, old_index):
         print(f"source index {old_index!r} does not exist", file=sys.stderr)
+        return 2
+
+    # Dimensions must agree before anything is created: _reindex copies vectors
+    # verbatim, so a copy across dimensions either fails mid-flight or, if it
+    # did not, would fill a fresh index with vectors from the wrong model. The
+    # honest path for a new embedding model is a full re-embed, not a copy.
+    old_dim = mapping_embedding_dimension(client.indices.get_mapping(index=old_index))
+    new_dim = mapping_embedding_dimension(build_mapping())
+    if old_dim is not None and new_dim is not None and old_dim != new_dim:
+        print(
+            f"ABORT: {old_index} carries {old_dim}-dim embeddings but {new_index} "
+            f"would be built for {new_dim} (EMBEDDING_DIMENSION). Server-side "
+            "_reindex copies vectors verbatim and cannot cross dimensions: "
+            "vectors from two models must never share one index. Re-embed the "
+            "whole library instead -- scripts/reindex.py (per paper: "
+            "POST /api/papers/{id}/reindex) -- after pointing OPENSEARCH_INDEX "
+            "at the new index.",
+            file=sys.stderr,
+        )
         return 2
 
     report = ensure_index(client, index=new_index, alias=None)

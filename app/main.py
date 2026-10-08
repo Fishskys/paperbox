@@ -38,6 +38,7 @@ from app.core.logging import (
 )
 from app.db.session import SessionLocal
 from app.services import api_key_service
+from app.services import embedding_service
 from app.services.api_key_service import AuthIdentity
 from app.workers import housekeeping
 from mcp.server import MCPServer
@@ -85,6 +86,12 @@ async def lifespan(_: FastAPI):
                 "no download-signing secret (set MCP_DOWNLOAD_SECRET or "
                 "PAPER_API_KEY): signed download links will fail at creation"
             )
+    # The dimension check runs before the queue starts: a deployment whose
+    # EMBEDDING_DIMENSION disagrees with its model or its live index cannot
+    # embed or search correctly, so it must fail while no pipeline exists yet.
+    # Unreachable dependencies only warn here (the app may start before its
+    # containers); a *measured* mismatch raises and stops the process.
+    embedding_service.check_dimension_consistency()
     # The ingestion queue owns every pipeline run: start the workers, then
     # reconcile whatever a previous process left behind (re-queue jobs that never
     # started, fail the ones that were mid-pipeline with INTERRUPTED).

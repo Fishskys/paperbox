@@ -55,9 +55,9 @@
 | | `native_search` `:268`、`ensure_pipelines` `:331` | 一次 pipelined 检索 / 幂等 upsert 管道对象 |
 | `app/search/opensearch.py` | `ALIAS` `:25` / `INDEX` `:27` | 别名与物理索引名（来自配置） |
 | | `get_client` `:39` | 进程级客户端（无鉴权、无 TLS、timeout=60） |
-| | `ensure_index` `:69` | 幂等建索引 + 把别名指过来 |
-| | `build_reindex_body` `:113` / `build_alias_swap_body` `:122` / `alias_swap_is_safe` `:136` | 迁移三件套（服务端拷贝、原子切别名、计数校验） |
-| | `build_chunk_document` `:141` / `bulk_index_chunks` `:176` / `delete_by_paper_id` `:238` | 写入路径 |
+| | `ensure_index` `:94` | 幂等建索引 + 把别名指过来 |
+| | `build_reindex_body` `:138` / `build_alias_swap_body` `:147` / `alias_swap_is_safe` `:161` | 迁移三件套（服务端拷贝、原子切别名、计数校验） |
+| | `build_chunk_document` `:166` / `bulk_index_chunks` `:201` / `delete_by_paper_id` `:263` | 写入路径 |
 | `app/search/mappings.py` | `build_mapping` `:104` | 索引 body（分词器 + `knn_vector` + settings） |
 | `app/services/search_service.py` | `aggregate_papers` `:195` | 论文级聚合（分/evidence/`matched_chunks`） |
 | | `_select_evidence` `:151` | evidence 选取规则（噪声段降权） |
@@ -87,7 +87,7 @@
 | `embedding_model` / `embedding_dimension` / `created_at` | `keyword` / `integer` / `date` | |
 | `parser_backend` / `parser_version` | `keyword` | **哪条解析器产出了这条 chunk**（`mappings.py:137-138`，值来自 `papers` 的两个戳列，`tasks.py:1297-1298`）。可以按它筛出「后端切换没覆盖到」的论文（`parser_backend: pypdf`）；同一个字段也是 `GET /api/consistency` 的 `parser_backends` 普查依据（加 `?parser_papers=true` 连论文 id 清单一起给，`scripts/reindex.py --parser-backend pypdf\|unknown` 直接吃这份清单） |
 
-索引 settings：`index.knn=true`、1 shard、0 replica；**`dynamic: "strict"`**（`mappings.py:164`，2026-09-30 由 `true` 收紧）。原来是靠纪律：新过滤字段必须**赶在第一个带该字段的文档之前**加进 `build_mapping()`，否则 `true` 会先把它映成 `text`（`pages`/`paper_type` 都踩过），而且**不会报错**；`strict` 让这种漂移变成写入报错（真机验证：往 `paper_chunks_v3` 写未声明字段 → HTTP 400）。配套不变量：`tests/test_index_snapshot.py::test_every_field_the_document_emits_is_declared` 钉住「`build_chunk_document` 吐出的每个字段都在 mapping 里声明」，所以 strict 不会误伤正常写入。文档 `_id` = `chunk_id`（`opensearch.py:320`）。
+索引 settings：`index.knn=true`、1 shard、0 replica；**`dynamic: "strict"`**（`mappings.py:164`，2026-09-30 由 `true` 收紧）。原来是靠纪律：新过滤字段必须**赶在第一个带该字段的文档之前**加进 `build_mapping()`，否则 `true` 会先把它映成 `text`（`pages`/`paper_type` 都踩过），而且**不会报错**；`strict` 让这种漂移变成写入报错（真机验证：往 `paper_chunks_v3` 写未声明字段 → HTTP 400）。配套不变量：`tests/test_index_snapshot.py::test_every_field_the_document_emits_is_declared` 钉住「`build_chunk_document` 吐出的每个字段都在 mapping 里声明」，所以 strict 不会误伤正常写入。文档 `_id` = `chunk_id`（`opensearch.py:345`）。
 
 **命中回传字段**：`SOURCE_FIELDS`（`hybrid.py:81`）显式列出 15 个字段，**不含 `embedding`**——向量不会被检出。
 
@@ -114,7 +114,7 @@
 ## 4. 调用链（从入口到落地，逐跳）
 
 ```
-POST /api/search                                    app/api/search.py:29（路由挂载 app/main.py:89）
+POST /api/search                                    app/api/search.py:29（路由挂载 app/main.py:96）
  ├─ SearchRequest 校验（mode 白名单、strip、top_k 1..50）  app/schemas/search.py:234
  ├─ request.filters.to_query_filters()              app/schemas/search.py:229
  ├─ asyncio.to_thread(_maybe_rewrite, query)        app/services/search_pipeline.py:189 → :38
@@ -128,7 +128,7 @@ POST /api/search                                    app/api/search.py:29（路�
  │         │    └─ _search → client.search          hybrid.py:556 → :564
  │         │         └─ rank_hits                   hybrid.py:571
  │         ├─ semantic 腿：_semantic_hits           hybrid.py:640
- │         │    ├─ embedding_service.embed_text     app/services/embedding_service.py:149（1 条文本）
+ │         │    ├─ embedding_service.embed_text     app/services/embedding_service.py:155（1 条文本）
  │         │    └─ build_semantic_query(k=..., filter=...)  hybrid.py:325
  │         ├─ 融合：rrf_fuse([kw_ids, sem_ids], k, weights)  hybrid.py:773 → ranking.py:31
  │         │    └─ 按融合序回填 by_id 与 hit.score   hybrid.py:778-784
@@ -145,9 +145,9 @@ POST /api/search                                    app/api/search.py:29（路�
  └─ 返回 SearchResponse{query, rewritten_query, mode, total, candidates, took_ms, rerank, rewrite, results}
 ```
 
-**快照刷新（不重算向量）**：`uv run python scripts/refresh_index_metadata.py` → `opensearch.update_mapping()`（`opensearch.py:145`，给活索引**加**新字段）→ `opensearch.bulk_update_documents()`（`opensearch.py:113`，每个 chunk 一条 partial update，不动 `embedding`/`text`）。2026-09-22 真机：2883 文档全部更新、0 失败。
+**快照刷新（不重算向量）**：`uv run python scripts/refresh_index_metadata.py` → `opensearch.update_mapping()`（`opensearch.py:170`，给活索引**加**新字段）→ `opensearch.bulk_update_documents()`（`opensearch.py:138`，每个 chunk 一条 partial update，不动 `embedding`/`text`）。2026-09-22 真机：2883 文档全部更新、0 失败。
 
-**写入链（元数据快照的产生点）**：`POST /api/papers/{paper_id}/reindex`（`app/api/papers.py:266`）→ `job_queue.KIND_REINDEX` → `workers/tasks.py::_run_pipeline` → `_index_rows`（`app/workers/tasks.py:1253`）→ `opensearch.bulk_index_chunks`（`app/search/opensearch.py:302`，默认写 `ALIAS`）。
+**写入链（元数据快照的产生点）**：`POST /api/papers/{paper_id}/reindex`（`app/api/papers.py:266`）→ `job_queue.KIND_REINDEX` → `workers/tasks.py::_run_pipeline` → `_index_rows`（`app/workers/tasks.py:1253`）→ `opensearch.bulk_index_chunks`（`app/search/opensearch.py:327`，默认写 `ALIAS`）。
 
 ## 4b. 原生 hybrid 后端（`SEARCH_BACKEND=native`，2026-10-01 M5）
 
@@ -218,7 +218,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 8. **`top_k × RERANK_CANDIDATES` 是一阶段候选窗，但日志字段不是**：`_first_stage_k = top_k × RERANK_CANDIDATES`（默认 5，`hybrid.py:882`），hybrid 模式每条腿再乘 `CANDIDATE_MULTIPLIER=5`（`:751`）。而日志里的 `candidates` 恒为 `top_k × CANDIDATE_FACTOR(5)`（`api/search.py:47`、`:150`）且**只用于日志**，未传给检索——`rerank=true` 时它与真实候选池不符。
 9. **`_semantic_hits` 的 k 是过取后的值**：`k = fetch_k × SEMANTIC_K_MULTIPLIER(3)`，同时作为 ES `size` 与 `knn.k` 传入（`hybrid.py:721`、`:656`），之后截回 `fetch_k`（`:725`）。代码里**没有 `num_candidates` 参数**（Lucene engine 只用 `k` + 可选 `filter`，`hybrid.py:331-334`）。
 10. **空查询短路**：`search_chunks` 在 `strip()` 后为空时返回 `[]`，不报错（`hybrid.py:708-710`）；上层 schema 已用 `min_length=1` + strip 校验挡住（`schemas/search.py:279-295`）。
-11. **别名是唯一读写入口**：`ALIAS`/`INDEX` 直接取配置（`opensearch.py:25-27`），`_search`/`bulk_index_chunks`/`delete_by_paper_id`/`index_stats` 默认都走 `ALIAS`。`is_write_index` 只在迁移的别名切换里设置（`opensearch.py:392`）；`ensure_index` 首次绑别名**不设**该属性（`:97`），单索引下仍可写入。
+11. **别名是唯一读写入口**：`ALIAS`/`INDEX` 直接取配置（`opensearch.py:25-27`），`_search`/`bulk_index_chunks`/`delete_by_paper_id`/`index_stats` 默认都走 `ALIAS`。`is_write_index` 只在迁移的别名切换里设置（`opensearch.py:417`）；`ensure_index` 首次绑别名**不设**该属性（`:122`），单索引下仍可写入。
 12. **`top_k` 有两套边界**：schema 限制 1..50（`schemas/search.py:46-47`），`search_chunks` 只要求 `> 0`（`hybrid.py:706`）；非法 mode 在 schema 与 `search_chunks` 两处各校验一次（`hybrid.py:705-706`）。
 13. **`SearchError` 的 503 映射曾完全失效（2026-09-22 已修，有回归测试）**：`app/api/search.py:43` 捕获 `search_service.SearchError`，而类只定义在 `app/search/hybrid.py:100`——原先 `search_service` 只导入 `ChunkHit`，该 `except` 被触发时会先抛 `AttributeError`（**实测**：`uv run python -c "from app.services import search_service; search_service.SearchError"` → `AttributeError`），于是后端故障返回 **500** 而不是 503。修法：`app/services/search_service.py:28` 一并导入 `SearchError` 并加入 `__all__`；回归 `tests/test_search_api.py`（后端抛错 → 503、`ValueError` → 422、`search_service.SearchError is hybrid.SearchError`）。
 14. ~~**`total` 语义与 docstring 不一致**~~ → **2026-09-30 已修（T-A2）**：原先 `search_papers` 的 docstring 说返回 "chunk candidate pool"，实现却返回 `len(results)`，API 直接当 `total`，于是 `total` = 被 `top_k` 截断后的论文数。现在是两个数：`total` = **本次查询 + 过滤条件下命中的论文数真值**（`hybrid.count_papers`：`size: 0` + `cardinality(paper_id)`，hybrid 模式用 `bool.should` 把关键词腿与 kNN 腿合起来数，否则向量独有命中会被漏掉；聚合在 `precision_threshold=3000` 以内是精确值，超过是 HLL 估计），`candidates` = 喂给论文聚合的 chunk 数。计数是**额外一次往返**（semantic/hybrid 还多一次 embedding），失败只记 warning 并退回候选池，绝不把能用的搜索变成 503（单测 `tests/test_search_total.py`）。

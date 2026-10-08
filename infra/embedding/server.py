@@ -10,10 +10,14 @@ Rerank 模型: 由 RERANK_MODEL 指定, 默认 Xenova/ms-marco-MiniLM-L-6-v2。
 (交叉编码器精排, 供 app 侧两阶段检索使用)。
 
 API:
-  GET  /health                     -> {"status":"ok","model":...,"dimension":...,
+  GET  /health                     -> {"status":"ok","model":...,"dimension":<int|null>,
                                        "rerank_model":...,"queue":{...}}
-  GET  /info                       -> {"model":...,"dimension":...,"max_batch":...,
+  GET  /info                       -> {"model":...,"dimension":<int|null>,"max_batch":...,
                                        "rerank_model":...,"inference":{...}}
+
+  dimension 是模型加载时用一条探针文本**实测**的输出宽度（加载前为 null），
+  不再是写死的 1024 —— 换模型后 /info /health 报告的就是真实值，
+  应用侧启动期对账（app/services/embedding_service.check_dimension_consistency）读它。
 
 并发: 所有推理（embed / rerank）都排进一个 FIFO 队列，由 INFERENCE_WORKERS 个
   工作线程串行执行；队列积压超过 INFERENCE_QUEUE_DEPTH 直接 503 + Retry-After，
@@ -149,17 +153,24 @@ def _busy(exc: QueueFull) -> HTTPException:
 app = FastAPI(title="paperbox embedding server", version="0.1.0")
 
 _model: TextEmbedding | None = None
+#: 输出维度，模型加载时实测一次；加载前 None（/info /health 报 null）。
+_dimension: int | None = None
 _reranker: TextCrossEncoder | None = None
 
 
 def get_model() -> TextEmbedding:
-    global _model
+    global _model, _dimension
     if _model is None:
         _model = TextEmbedding(
             model_name=MODEL,
             cache_dir=os.environ.get("FASTEMBED_CACHE_PATH", "~/.cache/fastembed"),
             threads=THREADS,
         )
+        # 用一条探针文本把维度钉在加载时刻：/info 与 /health 必须报告这个模型
+        # 真正产出的宽度，而不是任何人写死的数字（换模型后 1024 就是错的）。
+        # 探针失败说明模型本身不可用，让它随推理路径一起报 500。
+        probe = list(_model.embed(["dimension probe"]))
+        _dimension = len(probe[0]) if probe else None
     return _model
 
 
@@ -227,7 +238,7 @@ def health():
     return {
         "status": "ok",
         "model": MODEL,
-        "dimension": 1024,
+        "dimension": _dimension,
         "loaded": _model is not None,
         "rerank_model": RERANK_MODEL,
         "rerank_model_file": RERANK_MODEL_FILE,
@@ -240,7 +251,7 @@ def health():
 def info():
     return {
         "model": MODEL,
-        "dimension": 1024,
+        "dimension": _dimension,
         "max_batch": MAX_BATCH,
         "rerank_model": RERANK_MODEL,
         "rerank_model_file": RERANK_MODEL_FILE,

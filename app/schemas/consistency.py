@@ -26,6 +26,9 @@ class PaperConsistencyOut(BaseModel):
     #: Parser provenance: what PostgreSQL stamps vs what the documents carry.
     parser_backend: str | None = None
     index_backends: list[str] = Field(default_factory=list)
+    #: Every *known* embedding model seen on this paper's chunk rows and index
+    #: documents. Two or more entries = ``embedding_model_mismatch``.
+    embedding_models: list[str] = Field(default_factory=list)
 
 
 class ConsistencyTotalsOut(BaseModel):
@@ -69,6 +72,23 @@ class ParserBackendsOut(BaseModel):
     paper_ids_truncated: bool = False
 
 
+class EmbeddingModelsOut(BaseModel):
+    """Which embedding model produced the vectors, counted on both sides.
+
+    ``chunks`` counts PostgreSQL chunk rows by their ``embedding_model``;
+    ``documents`` counts index documents by theirs. ``unknown`` = recorded
+    before the column/field existed. A model that appears in only one side (or
+    a paper that straddles two -- the ``embedding_model_mismatch`` issue) means
+    a model switch only reached part of the library: the vectors are not
+    comparable and the minority must be re-embedded.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    chunks: dict[str, int] = Field(default_factory=dict)
+    documents: dict[str, int] = Field(default_factory=dict)
+
+
 class ConsistencyOut(BaseModel):
     """The full report: totals, per-paper problems, store-level orphans, errors."""
 
@@ -80,6 +100,7 @@ class ConsistencyOut(BaseModel):
     index_exists: bool
     totals: ConsistencyTotalsOut
     parser_backends: ParserBackendsOut = Field(default_factory=ParserBackendsOut)
+    embedding_models: EmbeddingModelsOut = Field(default_factory=EmbeddingModelsOut)
     problems: list[PaperConsistencyOut] = Field(default_factory=list)
     orphan_objects: list[str] = Field(default_factory=list)
     orphan_documents: list[str] = Field(default_factory=list)

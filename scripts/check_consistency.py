@@ -54,6 +54,11 @@ def print_report(report) -> None:
             print(f"      {paper_id}")
     if census.get("paper_ids_truncated"):
         print("    note: the paper id list hit its cap")
+    models = data.get("embedding_models") or {}
+    print(
+        f"  embedding : chunks {models.get('chunks') or {}}  "
+        f"documents {models.get('documents') or {}}"
+    )
     print(
         "consistent: "
         + ("yes" if data["consistent"] else "NO")

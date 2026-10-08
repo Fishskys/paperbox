@@ -21,7 +21,7 @@
 - 评测**不跑在应用进程里**：`scripts/eval.py` 是独立客户端，只发 `POST /api/search`（`scripts/eval.py:2-31`）。
 - 单元测试**不碰真机**：pytest 全程不连 PostgreSQL/OpenSearch/MinIO，真机验证只放 `scripts/`（`AGENTS.md` §6）。
 - 根 `docker-compose.yml` 只打包**应用**，四个依赖在 `infra/docker-compose.yml`（两份 compose 明确分离，`docker-compose.yml:1`、`infra/docker-compose.yml:2`）。
-- 不自动删数据：`create_index.py` 只切别名、旧索引保留供回滚（`scripts/create_index.py:23-28`）；`purge_deleted.py` 默认**只**清索引文档与对象、保留 PostgreSQL 行，只有显式 `--hard` 才删 PG 行（`scripts/purge_deleted.py:83`）。
+- 不自动删数据：`create_index.py` 只切别名、旧索引保留供回滚（`scripts/create_index.py:30-31`）；维度不同的迁移直接在**建任何索引之前**拒绝（`:18-20`，2026-10-07）；`purge_deleted.py` 默认**只**清索引文档与对象、保留 PostgreSQL 行，只有显式 `--hard` 才删 PG 行（`scripts/purge_deleted.py:83`）。
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用，带行号）
 
@@ -224,11 +224,11 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `acceptance.py` | plan §38 端到端验收 9 项 | `--api`、`--url` | 否（会真导入一篇 arXiv PDF，判重则复用） | **写**：导入论文 | `0` 全 PASS / `1` 有 FAIL（`acceptance.py:61, 118`） |
 | `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing`、`--degraded`（+`--degraded-stage`/`--degraded-code`）、`--degradations`、`--parser-backend`、`--dry-run` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引（`--dry-run`/`--degradations` 只读不写） | `0` 无失败 / `1` 有失败（`reindex.py:222, 228`） |
 | `purge_deleted.py` | 清已删论文的索引文档与 MinIO 对象 | `--dry-run` | 是 | **写**：删索引文档 + 对象（PG 行保留） | 无残留 `0`；有失败 `1`；`--dry-run` 恒 `0`（`purge_deleted.py:128-130, 96, 101`） |
-| `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留（解析产物单列 `cache objects`，不算 problem） | `--no-fail`、`--parser-papers` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:98-134`） |
+| `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留（解析产物单列 `cache objects`，不算 problem） | `--no-fail`、`--parser-papers` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:103-139`） |
 | `refresh_index_metadata.py` | 批量改写已索引文档的元数据快照（不重算向量） | `--dry-run`、`--paper-id`、`--limit`、`--no-mapping` | 是（同元数据同输出） | **写**：`PUT _mapping` + 每个 chunk 一条 partial update | 全成功 `0` / 有失败 `1`（`refresh_index_metadata.py:94-141`） |
 | `bulk_ingest.py` | 按 arXiv 清单串行导入 | `--file`、`--limit`、`--resume`、`--dry-run`、`--out`、`--timeout`、`--poll-interval`、`--base-url`、`--api-key` | 否（`--resume` 靠 `arxiv_id` 跳过） | **写**：批量导入 | 无失败 `0`；有失败 `1`；`--dry-run` `0`；`--limit<=0` `2`（`bulk_ingest.py:260-262, 289, 393`） |
 | `bulk_ingest_dir.py` | 导入一个文件夹 | `--root`(必需)、`--glob`、`--no-recursive`、`--limit`、`--via-http`、`--resume`、`--dry-run`、`--max-file-mb`、`--out`、`--timeout`、`--poll-interval` | 否（`--resume` 按相对路径跳过） | **写**：批量导入 | 无 error 且 `failed=0` 且 `rejected=0` → `0`，否则 `1`；root 非目录 / `--limit<=0` → `2`（`bulk_ingest_dir.py:482-484, 503-505, 591`） |
-| `create_index.py` | 幂等建索引/别名；`--migrate-from` 迁移并切别名 | `--index`、`--alias`、`--migrate-from`、`--poll-interval`、`--task-timeout` | 是 | **写**：建索引/切别名（**不删旧索引**） | `verify` `0/1`（`create_index.py:117`）；`migrate` `0/1/2`（`:156-160, 246`） |
+| `create_index.py` | 幂等建索引/别名；`--migrate-from` 迁移并切别名 | `--index`、`--alias`、`--migrate-from`、`--poll-interval`、`--task-timeout` | 是 | **写**：建索引/切别名（**不删旧索引**） | `verify` `0/1`（`create_index.py:122`）；`migrate` `0/1/2`（`:161-184, 246`） |
 | `build_eval_set.py` | 由 spec 生成定标集 | `--spec` | 是（同输入逐字节同输出） | 只读（`psql` 只发 select） | 正常 `0`；`psql` 失败抛 `RuntimeError`（`:58-59`） |
 | `build_arxiv_ids.py` | 从 arXiv API 生成语料清单 | 无 | 否（话题/条数为常量，结果随 arXiv 变化） | 否（只打外网 + 写文件） | 正常 `0` |
 
@@ -336,6 +336,8 @@ en 的权重曲线（`l2 + arithmetic_mean`，`[词法, 语义]`）：
 - **LLM-as-a-Judge（T-D6）未做**：需要一条 LLM connector，而根 `.env` 里目前没有可用的 LLM 凭据
   （`QUERY_REWRITE_*` 键不存在，只有 `PAPER_API_KEY`）。
 - **`paper_repr` 是合成物**：它比真实 chunk 索引好检索，任何来自 SRW 的绝对数字都不进 progress/验收。
+- **换 embedding 模型后 `paper_repr` 整体作废**：它的向量与 connector 的 `model` 参数都是旧模型的 ——
+  重跑 `uv run python scripts/srw_setup.py build` 幂等刷新（runbook：`docs/architecture/04-embedding.md` §9）。
 - **不支持 `size` 查询参数**（要放 body）、**等待时间不可观测**（只有计数）。
 
 ---
