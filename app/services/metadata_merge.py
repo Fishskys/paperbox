@@ -5,16 +5,20 @@ The rules, in order:
 1. **Fill blanks only.** When ``papers`` already holds a value, the incoming
    record does not replace it; its claim is still recorded (as history) and the
    disagreement is reported as a conflict.
-2. **One exception.** A value that came from ``pdf_heuristic`` may be replaced by
-   any *structured* source (``ieee_api`` / ``arxiv_api`` / ``crossref`` /
-   ``import_file`` / ``pdf_embedded`` / ``manual``). That is the whole point of
-   the layer: the 68 existing papers were described by heuristics, so a real
-   record from IEEE has to be able to correct them.
+2. **One exception, both directions.** A value that came from ``pdf_heuristic`` may
+   be replaced by any *structured* source (``ieee_api`` / ``arxiv_api`` /
+   ``crossref`` / ``import_file`` / ``pdf_embedded`` / ``manual``). That is the
+   whole point of the layer: the 68 existing papers were described by heuristics,
+   so a real record from IEEE has to be able to correct them. The same rule read
+   backwards stops a weak source from *winning* against a structured one -- in
+   particular it may not win rule 4 by being longer (see ``_special_winner``).
 3. **No authority ranking between structured sources.** IEEE vs. arXiv: first
    writer keeps the field, the other one is logged.
 4. **Field specifics.** ``abstract`` keeps the longest text (sources truncate
    differently), ``authors`` keeps the longest list, ``year`` keeps the current
-   value on a conflict.
+   value on a conflict. These tie-breaks apply between *structured* records only:
+   the "sources truncate differently" premise is what makes "longer" a reason to
+   prefer one, and a weak source does not truncate, it misreads.
 5. Nothing is ever deleted: the loser is a row in ``paper_field_provenance`` with
    ``is_current=false``, so anything can be rolled back.
 
@@ -169,7 +173,12 @@ def _is_blank(value: Any) -> bool:
 
 
 def _special_winner(field_name: str, current: Any, incoming: Any) -> bool:
-    """Whether a field-specific rule prefers the incoming value on a conflict."""
+    """Whether a field-specific rule prefers the incoming value on a conflict.
+
+    Only ever consulted when both sides are of comparable strength: ``decide``
+    rejects a weak incoming value against a structured current one before it gets
+    here, so "longer" cannot be bought by misreading the page.
+    """
     if field_name == ABSTRACT_FIELD:
         return len(str(incoming)) > len(str(current))
     if field_name == AUTHORS_FIELD:
@@ -234,6 +243,35 @@ def decide(
             kept=value,
             rejected=current_value,
             reason="structured source overrides a weak source",
+            source_type=incoming_type,
+        )
+    if is_heuristic(incoming_type) and is_structured(existing_type):
+        # Rule 2, the other direction -- it used to only say "a structured source
+        # may correct a weak one", which silently left the mirror case to the field
+        # specifics below. Those read "longer is more complete" and assume every
+        # candidate is the same list, truncated differently; a weak source does not
+        # truncate, it *misreads*, so a broken page parse (title fragments, abstract
+        # sentences) produces the longer ``authors`` list and wins. Longer is not
+        # better when the source is the one that cannot be trusted.
+        return MergeDecision(
+            field=field_name,
+            action=ACTION_CONFLICT,
+            kept=current_value,
+            rejected=value,
+            reason="a weak source cannot outgrow a structured one",
+            source_type=incoming_type,
+        )
+    if is_heuristic(incoming_type) and is_heuristic(existing_type):
+        # Rule 3 already says two weak sources do not get compared -- and rule 4's
+        # field specifics are how they used to get compared anyway, by length. That
+        # also meant a re-parse with a *better* heuristic could never correct a bad
+        # one: the bad list was longer.
+        return MergeDecision(
+            field=field_name,
+            action=ACTION_CONFLICT,
+            kept=current_value,
+            rejected=value,
+            reason="two weak sources disagree; the current value stays",
             source_type=incoming_type,
         )
     if _special_winner(field_name, current_value, value):

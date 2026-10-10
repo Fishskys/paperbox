@@ -355,3 +355,72 @@ def test_summary_counts_by_action(db_session) -> None:
 
     assert merge.decisions_summary(report.decisions) == {"unchanged": 1, "filled": 2}
     assert merge.field_values_from_paper(paper)["pages"] == "631-635"
+
+# --------------------------------------------------------------------------- #
+# 规则 4 的适用面（2026-10-10）：只在结构化来源之间按"更长/更多"定胜负
+# --------------------------------------------------------------------------- #
+def test_a_heuristic_list_cannot_outgrow_a_structured_one(db_session) -> None:
+    """真机事故（2604.01520）：PDF 启发式把标题碎片当作者，列表更长就赢了内嵌元数据。
+
+    修复前 `authors` 走规则 4「取最长列表」，而启发式的错抽列表恰好更长（10 项含
+    `Collaborative Platform`），于是盖住了内嵌 PDF 的干净 7 个人名。
+    """
+    paper = make_paper(db_session)
+    clean = ["Lei Wang", "Yuanzi Li", "Jinchao Wu"]
+    seed(db_session, paper, "authors", clean, "pdf_embedded")
+
+    junk = ["Collaborative Platform", "for Social", *clean]
+    report = merge.merge_values(
+        db_session, paper, {"authors": junk}, source_type="pdf_heuristic"
+    )
+
+    decision = report.decisions[0]
+    assert decision.action == merge.ACTION_CONFLICT
+    assert decision.reason == "a weak source cannot outgrow a structured one"
+    assert prov.read_field(paper, "authors") == clean, "干净的那份必须留下"
+
+
+def test_a_heuristic_abstract_cannot_outgrow_a_structured_one(db_session) -> None:
+    """`abstract` 同理：启发式读到的是整页乱码，比结构化摘要长。"""
+    paper = make_paper(db_session)
+    seed(db_session, paper, "abstract", "Short but structured.", "ieee_api")
+
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {"abstract": "Short but structured. " + "junk " * 50},
+        source_type="pdf_heuristic",
+    )
+
+    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert prov.read_field(paper, "abstract") == "Short but structured."
+
+
+def test_two_weak_sources_keep_the_current_value(db_session) -> None:
+    """规则 3 说弱来源之间不比较可信度 —— 规则 4 也不该替它们比长度。
+
+    否则修好抽取器后重新解析也救不回来：旧的那份垃圾更长，永远赢。
+    """
+    paper = make_paper(db_session)
+    seed(db_session, paper, "authors", ["Alice", "Bob"], "pdf_heuristic")
+
+    report = merge.merge_values(
+        db_session, paper, {"authors": ["Alice"]}, source_type="pdf_heuristic"
+    )
+
+    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert report.decisions[0].reason == "two weak sources disagree; the current value stays"
+    assert prov.read_field(paper, "authors") == ["Alice", "Bob"]
+
+
+def test_structured_sources_still_let_the_longer_list_win(db_session) -> None:
+    """回归护栏：规则 4 在结构化来源之间照旧生效（两个真实 API 的列表长度不同）。"""
+    paper = make_paper(db_session)
+    seed(db_session, paper, "authors", ["Alice"], "ieee_api")
+
+    report = merge.merge_values(
+        db_session, paper, {"authors": ["Alice", "Bob", "Carol"]}, source_type="arxiv_api"
+    )
+
+    assert report.decisions[0].action == merge.ACTION_SPECIAL
+    assert prov.read_field(paper, "authors") == ["Alice", "Bob", "Carol"]
