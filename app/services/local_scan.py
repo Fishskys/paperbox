@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
 from app.core.logging import get_logger
@@ -159,7 +159,10 @@ def _match_parts(relative: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
         return bool(relative) and _match_parts(relative[1:], pattern)
     if not relative:
         return False
-    if not fnmatch(relative[0], head):
+    # 大小写不敏感是**契约**，不是平台巧合：``fnmatch`` 只在 Windows 上经
+    # ``os.path.normcase`` 折叠大小写，Linux 上退化成区分大小写，于是同一份
+    # ``**/*.pdf`` 在 Linux 上匹配不到 ``d.PDF``（2026-10-10 修）。
+    if not fnmatchcase(relative[0].casefold(), head.casefold()):
         return False
     return _match_parts(relative[1:], rest)
 
@@ -167,8 +170,13 @@ def _match_parts(relative: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
 def matches_glob(relative: str, pattern: str) -> bool:
     """Whether a POSIX-style relative path matches ``pattern``.
 
-    ``fnmatch`` (not ``fnmatchcase``) is used on purpose: Windows paths are
-    case-insensitive, so ``*.pdf`` must match ``D.PDF``.
+    Matching is case-insensitive on every platform on purpose: ``*.pdf`` must
+    match ``D.PDF``. That used to ride on ``fnmatch`` + ``os.path.normcase``,
+    which only folds case on Windows -- on Linux the same pattern silently
+    stopped matching, so the comparison is now explicit (``fnmatchcase`` on
+    casefolded strings). ``scripts/bulk_ingest_dir.py`` keeps a standalone copy
+    of this matcher; the two are asserted to agree in
+    ``tests/test_bulk_ingest_dir.py``.
     """
     return _match_parts(
         PurePosixPath(relative).parts, PurePosixPath(pattern).parts
