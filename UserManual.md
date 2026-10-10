@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.4.1**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.5.0**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.4.1 starting`；`curl http://127.0.0.1:8077/health` 五个依赖都是 `ok`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空） |
+| 6) 启动 | 日志出现 `paperbox 0.5.0 starting`；`curl http://127.0.0.1:8077/health` 五个依赖都是 `ok`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空） |
 
 一键自检（推荐）：
 
@@ -384,7 +384,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 |---|---|
 | 免鉴权 | `GET /health`、`GET /`、`GET /docs`；`GET /api/downloads/{paper_id}`（只认签名） |
 | read | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review` |
-| write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/reindex`（批量）、`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
+| write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/reindex`（批量）、`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
 | admin | `DELETE /api/papers/{paper_id}` |
 
 ### 2.2 服务与自检
@@ -519,7 +519,8 @@ curl -X POST http://127.0.0.1:8077/api/search \
 |---|---|---|---|
 | GET | `/api/papers/{paper_id}/metadata` | 元数据 + 每个字段的来源账本（谁在何时写入） | `paper_id`（**必填**） |
 | PATCH | `/api/papers/{paper_id}/metadata` | 手动修正元数据 | `paper_id`（**必填**）；body 可含 `title`、`abstract`、`language`、`year`、`venue`、`venue_year`、`volume`、`issue`、`pages`、`paper_type`、`publication_date`、`doi`、`arxiv_id`、`authors`、`tags`、`url`（只提交要改的字段） |
-| POST | `/api/papers/{paper_id}/metadata/rollback` | 回滚某字段到历史版本 | `paper_id`（**必填**）；body `field`（**必填**）、`provenance_id`（**必填**，来自 GET metadata 的账本） |
+| POST | `/api/papers/{paper_id}/metadata/rollback` | 裁决「采纳被拒值」：把某字段回滚到那条历史主张（即当前被顶掉的值） | `paper_id`（**必填**）；body `field`（**必填**）、`provenance_id`（**必填**，来自 GET metadata 的账本或 `/api/metadata/review`） |
+| POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把这条分歧标成已裁决，从此不进复核清单 | `paper_id`（**必填**）；body `field`（**必填**）、`provenance_id`（**必填**） |
 | GET | `/api/metadata/review` | 待复核清单（冲突 / 歧义） | `status`（可重复）、`limit`（默认 50） |
 | POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL-JSON / 通用 JSON） | `source_type`（默认 `import_file`）、`dry_run`（默认 `true`，只看不写）、`apply`、`limit` |
 | POST | `/api/metadata/apply` | 提交复核决定 | body `entries`（复核条目）、`mode`（`fill` 默认 / `overwrite`）、`fields`（限定字段） |

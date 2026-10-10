@@ -190,7 +190,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:577-582 → 轮询终止
 | `dedupe=False` 还顺带跳过 `_resolve_target_paper`（条件是 `dedupe and file_record is not None`，reindex 两者都不满足）→ reindex 不会走非主版本分支 | `tasks.py:500-500`；`reindex_paper` 未传 `file_record`（L111） |
 | **`stage` 无 DB 级约束**，是 `String(32)`；写错值不会报错 | `app/db/models.py:466-468` |
 | **同名常量两处定义**：`tasks.py:56-63` 定义了自己的 `STAGE_DOWNLOADING`/`STAGE_STORED`/`PROGRESS_DOWNLOADING`/`PROGRESS_STORED`，但这两阶段实际用的是 `ingest.*`（L227、L274-275）；两处值相同，暂无行为差异，但改一处会漏另一处 | `tasks.py:56-63` vs `226-228`、`273-275` |
-| 队列是**进程内**的：只有 `--workers 1` 的前提下成立 | `queue.py:20-24`；`README.md:170-172` |
+| 队列是**进程内**的：只有 `--workers 1` 的前提下成立 | `queue.py:20-24`；`README.md:98` |
 | `stop()` 不会杀线程里的流水线；该作业行停在中间态，下次启动被 `recover` 标 `INTERRUPTED` | `queue.py:139-154` |
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处文件:行）
@@ -227,7 +227,7 @@ COMPLETED(100) 直接赋值 + commit tasks.py:577-582 → 轮询终止
 
 ## 8. 未做 / 已知缺口
 
-- **无外部队列**：队列在进程内，横向扩 worker/多副本必须先换外部队列（当前明确不做）。`queue.py:20-24`；`README.md:170-172`；`docs/progress/project.md:583`。
+- **无外部队列**：队列在进程内，横向扩 worker/多副本必须先换外部队列（当前明确不做）。`queue.py:20-24`；`README.md:98`；`docs/progress/project.md:583`。
 - **重启恢复只处理 `ingestion_jobs` 行，不做 MinIO/OpenSearch 对账**：`recover_jobs` 不检查"论文行有、对象缺失"这类不一致；对账仍是 `scripts/purge_deleted.py`。`ingestion_service.py:455-491`；`docs/progress/project.md:584`。
 - **`INTERRUPTED` 不会自动重跑**：恢复只是把作业标成 `FAILED`，重新驱动必须人工 `POST /api/jobs/{id}/retry`。`ingestion_service.py:481-487`、`api/jobs.py:53-59`。
 - **`run_reindex_job` 的"无 paper_id"失败不带错误码**：`mark_failed` 未传 `code`，于是 `stage=FAILED` 而 `error_code=NULL`，与其它失败不一致。`tasks.py:129-132`。

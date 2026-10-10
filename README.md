@@ -159,7 +159,8 @@ paperbox/
 | 作业 | POST | `/api/jobs/{job_id}/retry` | 重试失败的作业 |
 | 元数据 | GET | `/api/papers/{paper_id}/metadata` | 论文元数据与字段来源账本 |
 | 元数据 | PATCH | `/api/papers/{paper_id}/metadata` | 手动修正元数据 |
-| 元数据 | POST | `/api/papers/{paper_id}/metadata/rollback` | 回滚到某个历史版本 |
+| 元数据 | POST | `/api/papers/{paper_id}/metadata/rollback` | 裁决「采纳被拒值」：回滚到某个历史主张 |
+| 元数据 | POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只关掉这条分歧 |
 | 元数据 | GET | `/api/metadata/review` | 待复核清单（冲突 / 歧义） |
 | 元数据 | POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL-JSON / JSON） |
 | 元数据 | POST | `/api/metadata/apply` | 提交复核决定 |
@@ -169,7 +170,7 @@ paperbox/
 
 ## 6. 声明
 
-本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.4.1**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.5.0**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 使用中遇到问题或有想法，欢迎提 [Issue](https://github.com/Fishskys/paperbox/issues) 与 Pull Request；
 如果它对你的工作有帮助，欢迎点一个 ⭐ [Star](https://github.com/Fishskys/paperbox)。
