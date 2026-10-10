@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-10
+
+**这一版把两件「只能在终端里做」的事交给了 API 与界面**：整库重建索引，以及字段冲突的人工裁决。
+另外把解析后端的健康纳入总检查，并修掉五处真机数据问题（含一处会静默漏文件、一处会让整份 IEEE
+批次被拒收）。
+
+- **整库重建索引有了端点**（`POST /api/papers/reindex`）：换 embedding 模型、从 pypdf 换 docling
+  这两种真场景，端点自己检测得出来，不必靠人记住"这次该全跑"。
+- **复核清单终于能清空**：每个冲突条目带 `provenance_id`，配两个裁决动词
+  （「采纳被拒值」= rollback、「保留现值」= dismiss），裁决过的分歧退出清单。
+- **`/health` 五依赖**：新增 `docling` 探针；只用 pypdf 的部署报 `disabled`，不算故障。
+- **真机数据修复**：IEEE 日期区间、glob 大小写、PDF 启发式作者名、弱来源不得盖过结构化来源。
+  最后一项让 30 篇语料里 23 篇的作者名单立刻变干净（回归 0）。
+
+paperbox-webui 同步发布 0.5.0（论文库的「重建全库索引」按钮、冲突操作列、导入报告分页）。
+
 ### Added
 
 - **批量/整库重建索引的端点**（`POST /api/papers/reindex`、`app/services/reindex_service.py`）。
@@ -36,6 +52,22 @@
   **人工裁决过的字段不再进冲突清单**（清单是"未决分歧"队列，否则点了按钮行还挂在那儿，永远清不空），
   以及**回滚也会关掉分歧**（否则回滚只是把分歧翻个面：新现值 vs 旧现值）。
 
+- **`/health` 增加解析后端 docling 探针**（`app/api/health.py`、`scripts/healthcheck.py`）。`services`
+  从四项变五项：`postgres` / `opensearch` / `minio` / `embedding` / `docling`。docling **走 HTTP 探**，
+  因为生产上解析后端跑在 NAS 上、并不在本机 docker 里；判据是 `{DOCLING_URL}/health` 返回 **200**
+  —— 与两份 compose（`infra/docker-compose.yml`、`infra/docling/fnos/docker-compose.yml`）的容器
+  healthcheck 是同一个端点、同一个口径（要求 200 而非"小于 500 就算活着"：404 说明那个端口上站的
+  不是 docling）。`DOCLING_URL` 为空时该项报 `"disabled"` —— 只用 pypdf 解析的部署没有坏掉，
+  `/health` 的 `status` 也不因此变脸。`scripts/healthcheck.py` 同步：配了才探，没配打印
+  `skip docling` 一行说明原因。WebUI（paperbox-webui）状态条增加 `docling` 一格，并把 `disabled`
+  渲染成中性色 —— 此前前端只有"绿 = ok / 红 = 其它"，会把"没配"误报成故障。
+
+- **新增 `scripts/repair_heuristic_authors.py`**：把上面那个规则缺口已经造成的落库结果按修好的
+  规则重放一遍。默认 dry-run，`--apply` 才写库；只处理"当前作者声明来自弱来源、且有结构化备选"
+  的论文，并且**两重证据门槛**——当前名单确实含形状不合法的项，且备选值本身干净（真机上见过
+  内嵌值是 `msi`、而启发式那份是 14 个真名，硬修过去就是毁数据）。跑完在
+  `logs/app/repair-heuristic-authors.json` 落一份报告，含"维持原判"与"需人工复核"两栏。
+
 ### Fixed
 
 - **PDF 启发式不再把标题碎片与摘要句子当成人名**（`app/services/metadata_service.py`）。
@@ -56,26 +88,6 @@
   却是内嵌的赢（那里没有字段特例，走"保现值"）。现在补上镜像的一支：弱来源对结构化值 → 保留现值、
   登记冲突（`a weak source cannot outgrow a structured one`）；弱来源对弱来源 → 同样保留现值
   （否则修好的抽取器重新解析也救不回来：旧的垃圾更长，永远赢）。规则 4 只在结构化来源之间生效。
-
-- **新增 `scripts/repair_heuristic_authors.py`**：把上面那个规则缺口已经造成的落库结果按修好的
-  规则重放一遍。默认 dry-run，`--apply` 才写库；只处理"当前作者声明来自弱来源、且有结构化备选"
-  的论文，并且**两重证据门槛**——当前名单确实含形状不合法的项，且备选值本身干净（真机上见过
-  内嵌值是 `msi`、而启发式那份是 14 个真名，硬修过去就是毁数据）。跑完在
-  `logs/app/repair-heuristic-authors.json` 落一份报告，含"维持原判"与"需人工复核"两栏。
-
-### Added
-
-- **`/health` 增加解析后端 docling 探针**（`app/api/health.py`、`scripts/healthcheck.py`）。`services`
-  从四项变五项：`postgres` / `opensearch` / `minio` / `embedding` / `docling`。docling **走 HTTP 探**，
-  因为生产上解析后端跑在 NAS 上、并不在本机 docker 里；判据是 `{DOCLING_URL}/health` 返回 **200**
-  —— 与两份 compose（`infra/docker-compose.yml`、`infra/docling/fnos/docker-compose.yml`）的容器
-  healthcheck 是同一个端点、同一个口径（要求 200 而非"小于 500 就算活着"：404 说明那个端口上站的
-  不是 docling）。`DOCLING_URL` 为空时该项报 `"disabled"` —— 只用 pypdf 解析的部署没有坏掉，
-  `/health` 的 `status` 也不因此变脸。`scripts/healthcheck.py` 同步：配了才探，没配打印
-  `skip docling` 一行说明原因。WebUI（paperbox-webui）状态条增加 `docling` 一格，并把 `disabled`
-  渲染成中性色 —— 此前前端只有"绿 = ok / 红 = 其它"，会把"没配"误报成故障。
-
-### Fixed
 
 - **元数据导入：单条解析失败不再让整批 422**（`app/services/metadata_import.py`、`app/schemas/metadata.py`、
   `scripts/import_metadata.py`）。回执从"一个总数"变成三层数字：
@@ -150,6 +162,12 @@
   （MCP SDK 的 session manager 每进程只能进一次，第二个 `TestClient` 会启动失败；单测要 MCP 的
   case 自行显式打开）。
 
+- **新增 `scripts/repair_heuristic_authors.py`**：把上面那个规则缺口已经造成的落库结果按修好的
+  规则重放一遍。默认 dry-run，`--apply` 才写库；只处理"当前作者声明来自弱来源、且有结构化备选"
+  的论文，并且**两重证据门槛**——当前名单确实含形状不合法的项，且备选值本身干净（真机上见过
+  内嵌值是 `msi`、而启发式那份是 14 个真名，硬修过去就是毁数据）。跑完在
+  `logs/app/repair-heuristic-authors.json` 落一份报告，含"维持原判"与"需人工复核"两栏。
+
 ### Fixed
 
 - **P1-16 收尾：`Content-Length` 之外的路也封了**。JSON 请求体现在由 `BodyLimitMiddleware`
@@ -217,6 +235,12 @@ paperbox 从"只有 REST 接口"变成"REST + MCP 双面服务"：agent 可以�
   不向未通过鉴权的调用方透露本机接受哪些 Host；已鉴权请求的白名单外 Host 仍是 421。
   `MCP_ENABLED=true` 但一个凭据都没配 → **启动报错**。
 
+- **新增 `scripts/repair_heuristic_authors.py`**：把上面那个规则缺口已经造成的落库结果按修好的
+  规则重放一遍。默认 dry-run，`--apply` 才写库；只处理"当前作者声明来自弱来源、且有结构化备选"
+  的论文，并且**两重证据门槛**——当前名单确实含形状不合法的项，且备选值本身干净（真机上见过
+  内嵌值是 `msi`、而启发式那份是 14 个真名，硬修过去就是毁数据）。跑完在
+  `logs/app/repair-heuristic-authors.json` 落一份报告，含"维持原判"与"需人工复核"两栏。
+
 ### Fixed
 
 - **`POST /mcp` 被 307 重定向到 `/mcp/`**：Starlette 的 `Mount("/mcp")` 正则要求尾斜杠，而文档与所有客户端
@@ -275,6 +299,12 @@ paperbox 从"只有 REST 接口"变成"REST + MCP 双面服务"：agent 可以�
 - **解析侧省钱开关默认关**：docling 的公式转 LaTeX（实测 5 页 5.9s → 39.2s，正文最坏 252s）默认关闭，
   需要时按部署打开；语义切块模式同样默认关闭。
 - 工作目录与数据落位从 D: 盘迁到 C:（D: 盘已弃用），OpenSearch/MinIO/模型缓存目录一并迁移并逐字节核对。
+
+- **新增 `scripts/repair_heuristic_authors.py`**：把上面那个规则缺口已经造成的落库结果按修好的
+  规则重放一遍。默认 dry-run，`--apply` 才写库；只处理"当前作者声明来自弱来源、且有结构化备选"
+  的论文，并且**两重证据门槛**——当前名单确实含形状不合法的项，且备选值本身干净（真机上见过
+  内嵌值是 `msi`、而启发式那份是 14 个真名，硬修过去就是毁数据）。跑完在
+  `logs/app/repair-heuristic-authors.json` 落一份报告，含"维持原判"与"需人工复核"两栏。
 
 ### Fixed
 

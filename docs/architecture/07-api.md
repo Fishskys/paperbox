@@ -49,7 +49,8 @@
 | GET | `/api/papers/{paper_id}/degradations` | **T7.3** 降级账本：该论文各阶段「能用但更薄」的原因 | 是 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py:201` |
 | GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 是 | — | `app/api/papers.py:242` |
 | PATCH | `/api/papers/{paper_id}/metadata` | 手动改元数据 | 是 | — | `app/api/papers.py:256` |
-| POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张 | 是 | — | `app/api/papers.py:276` |
+| POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张（裁决「采纳被拒值」） | 是 | — | `app/api/papers.py:276` |
+| POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把该分歧标为已裁决 | 是 | — | `app/api/papers.py:276` |
 | DELETE | `/api/papers/{paper_id}` | 删除（204） | 是 | — | `app/api/papers.py:240` |
 | POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | 是 | — | `app/api/papers.py:266` |
 | POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | 是 | — | `app/api/papers.py:266` |
