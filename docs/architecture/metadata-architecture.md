@@ -214,6 +214,11 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
    列表反而更长。所以规则 2 必须双向成立：弱来源既不能靠"更新"覆盖结构化值，也不能靠"更长"赢它；
    两个弱来源之间按规则 3 处理（保现值 + 登记冲突），规则 4 不替它们比长度。
 5. **回滚**：把某条历史 provenance 置回 `is_current=true`，并把当时的 `papers` 列写回；不删历史。
+   **人工裁决的两个出口（2026-10-10）**：`POST /api/papers/{id}/metadata/rollback` = 「采纳被拒值」
+   （落败那条恢复为当前值），`POST /api/papers/{id}/metadata/conflicts/dismiss` = 「保留现值」
+   （现值不动，把落败那条标 `decided_by='dismissed'`）。两者都**不删任何声明**，所以裁决完仍可回滚。
+   裁决过的字段不再进 `GET /api/metadata/review` 的冲突清单（清单是"未决分歧"队列，必须有出口），
+   冲突条目同时带上落败声明的 `provenance_id`，界面不必再查一次。
 
 > 为什么这样：现有 68 篇的历史元数据全部由启发式写入（回填时统一标 `pdf_heuristic`），因此 IEEE 导入能修正它们；
 > 同时避免了维护一张"谁比谁权威"的排序表。

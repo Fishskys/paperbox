@@ -315,6 +315,22 @@ def rollback_metadata(
     return row
 
 
+def dismiss_conflict(
+    session: Session, paper: Paper, field: str, provenance_id: str
+) -> prov.PaperFieldProvenance:
+    """Human verdict on one field conflict: keep what is current, stop asking.
+
+    The counterpart of :func:`rollback_metadata` (which is "the rejected value was
+    right after all"). Both leave every claim in the ledger; they only change which
+    one is current, or whether the disagreement is still open.
+    """
+    row = prov.dismiss_claim(
+        session, paper_id=paper.id, field=field, provenance_id=provenance_id
+    )
+    session.flush()
+    return row
+
+
 def metadata_view(session: Session, paper: Paper) -> dict[str, Any]:
     """Current values plus, per field, who claimed what and when."""
     history = prov.provenance_summary(session, paper.id)

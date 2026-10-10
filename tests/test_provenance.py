@@ -454,3 +454,101 @@ def test_read_field_mirrors_the_column(db_session) -> None:
     assert prov.read_field(paper, "year") == 2015
     assert prov.read_field(paper, "identifier:doi") == "10.1/x"
     assert prov.read_field(paper, "venue") is None
+
+def test_a_conflict_carries_the_losing_provenance_id(db_session) -> None:
+    """界面靠这个 id 直接调 rollback「采纳被拒值」，不用再查一次（2026-10-10）。"""
+    paper = make_paper(db_session)
+    first = make_source(db_session, paper.id, "ieee_api")
+    second = make_source(db_session, paper.id, "import_file")
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="volume",
+        value="62",
+        source_id=first.id,
+        decided_by="initial",
+        make_current=True,
+    )
+    losing = prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="volume",
+        value="63",
+        source_id=second.id,
+        decided_by="conflict",
+        make_current=False,
+    )
+
+    conflicts = prov.recorded_conflicts(db_session)
+
+    assert conflicts[0]["provenance_id"] == losing.id
+
+
+def test_a_field_a_human_edited_drops_off_the_list(db_session) -> None:
+    """人工改过这一格之后，旧值不再算"待裁决的分歧"。
+
+    注意「保留现值」不走这条路：``record_claim`` 对"重复当前值"是空操作（防重复导入灌账本），
+    所以那条走 ``decided_by='dismissed'`` 的显式裁决，见 test_manual_metadata.py。
+    """
+    paper = make_paper(db_session)
+    structured = make_source(db_session, paper.id, "pdf_embedded")
+    human = make_source(db_session, paper.id, "manual")
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="authors",
+        value=["Zhuocheng Zhang"],
+        source_id=structured.id,
+        decided_by="initial",
+        make_current=True,
+    )
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="authors",
+        value=["msi"],
+        source_id=structured.id,
+        decided_by="conflict",
+        make_current=False,
+    )
+    assert len(prov.recorded_conflicts(db_session)) == 1, "先确认它本来是一处冲突"
+
+    # 人工把这一格改成别的值：现值来源变成 manual，旧值不该再挂成分歧
+    prov.set_field(
+        db_session,
+        paper,
+        "authors",
+        ["Zhuocheng Zhang", "Lei Wang"],
+        source_id=human.id,
+        decided_by="manual",
+        override=True,
+    )
+
+    assert prov.recorded_conflicts(db_session) == []
+
+
+def test_an_earlier_manual_edit_is_not_an_open_dispute(db_session) -> None:
+    """人工改了两次、旧值落败：那是历史，不是待裁决的分歧。"""
+    paper = make_paper(db_session)
+    human = make_source(db_session, paper.id, "manual")
+    other = make_source(db_session, paper.id, "import_file")
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="year",
+        value=2023,
+        source_id=human.id,
+        decided_by="manual",
+        make_current=False,
+    )
+    prov.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="year",
+        value=2024,
+        source_id=other.id,
+        decided_by="initial",
+        make_current=True,
+    )
+
+    assert prov.recorded_conflicts(db_session) == []

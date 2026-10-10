@@ -37,6 +37,9 @@ logger = get_logger(__name__)
 DECIDED_INITIAL = "initial"
 DECIDED_STRUCTURED_OVERRIDE = "structured_override"
 DECIDED_MANUAL = "manual"
+#: 人工看过一条落败声明并决定维持现值。用 ``decided_by`` 记，不新增列 —— 值/source
+#: 都不动，所以仍然可回滚（规则 5），只是它不再是"待裁决的分歧"（2026-10-10）。
+DECIDED_DISMISSED = "dismissed"
 
 DECIDED_BY_VALUES: tuple[str, ...] = (
     DECIDED_INITIAL,
@@ -263,7 +266,17 @@ def rollback_field(
         raise LookupError(
             f"provenance {provenance_id} does not belong to paper {paper.id} field {field}"
         )
+    superseded = current_claim(session, paper.id, field)
     promote(session, row)
+    # 人工回滚就是"这一格我裁决过了"：被顶掉的那条不该再作为**待裁决的分歧**出现，
+    # 否则回滚只会把分歧翻个面（新现值 vs 旧现值），复核清单永远清不空（2026-10-10）。
+    # 值/来源/时间都保留，只有 decided_by 变成 dismissed，所以还能再回滚回来。
+    if (
+        superseded is not None
+        and superseded.id != row.id
+        and superseded.decided_by != DECIDED_DISMISSED
+    ):
+        superseded.decided_by = DECIDED_DISMISSED
     if scheme := scheme_of_identifier_field(field):
         _restore_identifier(session, paper, scheme, row.value)
     else:
@@ -555,6 +568,30 @@ def claim_source_type(session: Session, claim: PaperFieldProvenance | None) -> s
     return (source.source_type or "").strip().lower() or None
 
 
+def dismiss_claim(
+    session: Session, *, paper_id: str, field: str, provenance_id: str
+) -> PaperFieldProvenance:
+    """Mark a losing claim as reviewed: the human kept the current value.
+
+    Nothing is deleted and nothing about the claim changes except ``decided_by``, so
+    the row stays in the ledger and ``rollback`` can still restore it later. What
+    changes is that ``recorded_conflicts`` stops reporting it -- without this the
+    review list could be looked at but never emptied (2026-10-10).
+    """
+    row = session.get(PaperFieldProvenance, provenance_id)
+    if row is None or row.paper_id != paper_id or row.field != field:
+        raise LookupError(
+            f"no claim {provenance_id} for {field} on paper {paper_id}"
+        )
+    if row.is_current:
+        raise LookupError(
+            "that claim is the current value -- there is no disagreement to dismiss"
+        )
+    row.decided_by = DECIDED_DISMISSED
+    session.flush()
+    return row
+
+
 def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]]:
     """Disagreements the merge engine filed: a losing claim plus the winning one.
 
@@ -562,9 +599,19 @@ def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]
     the same field -- exactly what rule R2 records instead of overwriting (section 8
     of the design). This is the second half of ``GET /api/metadata/review``.
 
-    Two things are deliberately *not* conflicts: a heuristic value that a structured
-    source replaced (that is rule 2 doing its job, not a disagreement between
-    sources), and anything belonging to a deleted paper.
+    Four things are deliberately *not* conflicts:
+
+    * a heuristic value that a structured source replaced -- that is rule 2 doing its
+      job, not a disagreement between sources;
+    * a claim a human dismissed with ``POST .../metadata/conflicts/dismiss`` (kept the
+      current value), or a field a human ruled on by editing it (either side is
+      ``manual``): the older value is history, and reporting it as an open dispute
+      would make the review list unemptiable -- the queue is for *undecided*
+      disagreements (2026-10-10);
+    * anything belonging to a deleted paper.
+
+    Each entry carries the losing claim's ``provenance_id`` so the caller can settle
+    it without another lookup (``POST /api/papers/{id}/metadata/rollback``).
     """
     statement = (
         select(PaperFieldProvenance)
@@ -586,9 +633,20 @@ def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]
         current = current_claim(session, row.paper_id, row.field)
         if current is None or _same_value(current.value, row.value):
             continue
+        # A human already reviewed this one and kept the current value.
+        if row.decided_by == DECIDED_DISMISSED:
+            continue
         # A heuristic value losing to a structured one is an override (rule 2), and
         # the design says that is expected -- not something to review.
-        if claim_source_type(session, row) == source_vocab.SOURCE_TYPE_PDF_HEURISTIC:
+        loser_type = claim_source_type(session, row)
+        if loser_type == source_vocab.SOURCE_TYPE_PDF_HEURISTIC:
+            continue
+        # A human already decided this field ("采纳被拒值" / "保留现值" both write a
+        # ``manual`` claim): the older value is history, not an open question. Without
+        # this the review list could never be emptied by acting on it.
+        if loser_type == source_vocab.SOURCE_TYPE_MANUAL:
+            continue
+        if claim_source_type(session, current) == source_vocab.SOURCE_TYPE_MANUAL:
             continue
         seen.add(key)
         conflicts.append(
@@ -598,6 +656,7 @@ def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]
                 "kept": current.value,
                 "rejected": row.value,
                 "source_id": row.source_id,
+                "provenance_id": row.id,
                 "decided_at": row.decided_at,
             }
         )

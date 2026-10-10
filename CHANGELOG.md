@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **字段冲突有人工出口了**（`app/services/provenance_service.py`、`app/services/metadata_manual.py`、
+  `app/api/papers.py`）。此前 `GET /api/metadata/review` 会列出库内字段冲突，但**只能看不能动** ——
+  真机上就这样挂着 10 条。现在每个冲突条目带下落败声明的 `provenance_id`，并新增
+  `POST /api/papers/{id}/metadata/conflicts/dismiss`（「保留现值」：把那条标 `decided_by='dismissed'`）；
+  与既有的 `metadata/rollback`（「采纳被拒值」）配对。两条路都**不删任何声明**，值/来源/时间都留着，
+  所以裁决之后照样能回滚（§8 规则 5）。配套两条语义：
+  **人工裁决过的字段不再进冲突清单**（清单是"未决分歧"队列，否则点了按钮行还挂在那儿，永远清不空），
+  以及**回滚也会关掉分歧**（否则回滚只是把分歧翻个面：新现值 vs 旧现值）。
+
 ### Fixed
 
 - **PDF 启发式不再把标题碎片与摘要句子当成人名**（`app/services/metadata_service.py`）。
