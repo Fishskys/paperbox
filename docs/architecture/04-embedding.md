@@ -230,9 +230,16 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
    `uv run python scripts/create_index.py --index paper_chunks_vN+1`（新物理索引；**不要**用
    `--migrate-from`，它现在会在维度不同时拒绝——`_reindex` 原样拷贝向量，跨维度必然是错的），
    并把 `OPENSEARCH_INDEX` 指过去。
-4. **整库重嵌**：`uv run python scripts/reindex.py --dry-run` 先看清单，再去掉 `--dry-run` 真跑
-   （按 `--parser-backend` 戳或 `--degraded` 收窄的用法见 AGENTS §3.10）。每篇论文重走
-   chunk→embed→index，解析产物有缓存，开销主要在 embedding。
+4. **整库重嵌**（三条路等价，选顺手的）：
+   * **API/界面**：`POST /api/papers/reindex`（WebUI 是论文库里的「重建全库索引」按钮）。
+     先 `dry_run=true`（默认）看"选几篇、为什么"，确认后带 `dry_run=false` 才排队 ——
+     整库是小时级操作，不能挂在一次请求上。换模型时它自己会报
+     `embedding_model_changed`（整库范围），不用你记着"这次该全跑"。
+   * **脚本**：`uv run python scripts/reindex.py --auto --dry-run` 先看清单（同一套检测），
+     去掉 `--dry-run` 真跑（按 `--parser-backend` 戳或 `--degraded` 收窄的用法见 AGENTS §3.10）。
+   * 界面/API 与脚本**共用同一份选择与检测实现**（`app/services/reindex_service.py`），
+     只有执行方式不同：脚本在本进程同步跑（可 Ctrl-C），端点按论文入队。
+   每篇论文重走 chunk→embed→index，解析产物有缓存，开销主要在 embedding。
 5. **验收**：`GET /api/consistency` 看 `embedding_models.{chunks,documents}`——重嵌完成后应只剩一个
    模型名；没重嵌完的论文若两侧模型不一致，会以 `embedding_model_mismatch` 出现在 problems 里。
 6. **SRW 旁路**：`paper_repr` 的向量与 connector 的 `model` 参数都是旧模型的，重跑

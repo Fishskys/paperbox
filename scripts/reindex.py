@@ -52,6 +52,7 @@ from app.db.session import SessionLocal  # noqa: E402
 from app.search import opensearch  # noqa: E402
 from app.core.config import PARSER_BACKENDS  # noqa: E402
 from app.services import degradation_service, paper_service  # noqa: E402
+from app.services import reindex_service  # noqa: E402
 from app.services.consistency_service import UNKNOWN_BACKEND  # noqa: E402
 from app.workers import tasks  # noqa: E402
 
@@ -69,35 +70,69 @@ def targets(
     degraded_stage: str | None = None,
     degraded_code: str | None = None,
     parser_backend: str | None = None,
-) -> list[Paper]:
+    auto: bool = False,
+) -> tuple[list[Paper], list[reindex_service.ReindexReason]]:
     """Non-deleted papers to reindex, narrowed by every requested filter (AND).
 
-    ``degraded_only`` reads the ledger (``paper_degradations``), ``parser_backend``
-    reads the stamp on ``papers``; ``unknown`` means "no stamp at all".
+    Selection is **shared with the API** (``app/services/reindex_service.py``): the
+    same helpers answer "which papers have no chunks", "which stamps are stale",
+    "which have open degradations" -- so the script, the endpoint and the report can
+    never disagree about who needs a rebuild. Only the *execution* differs: this
+    script runs the pipeline in-process (interruptible, ``--dry-run``-able), the
+    endpoint queues one job per paper.
+
+    ``--auto`` is the detection-driven path (换模型 / 换解析器 / 有降级 / 缺 chunk),
+    and prints why each reason fired.
     """
-    query = select(Paper).where(Paper.deleted_at.is_(None))
-    if paper_ids:
-        query = query.where(Paper.id.in_(paper_ids))
-    if parser_backend:
-        if parser_backend == UNKNOWN_BACKEND:
-            query = query.where(Paper.parser_backend.is_(None))
-        else:
-            query = query.where(Paper.parser_backend == parser_backend)
-    papers = list(session.execute(query.order_by(Paper.created_at)).scalars())
+    if auto:
+        plan = reindex_service.select_papers(session, paper_ids=paper_ids or None)
+        return plan.papers, plan.reasons
+
+    wanted: set[str] | None = None
+    reasons: list[reindex_service.ReindexReason] = []
     if missing_only:
-        have = {
-            row[0]
-            for row in session.execute(
-                select(PaperChunk.paper_id).group_by(PaperChunk.paper_id)
+        wanted = reindex_service.papers_without_chunks(session)
+        reasons.append(
+            reindex_service.ReindexReason(
+                code=reindex_service.REASON_MISSING_CHUNKS,
+                detail="还没有 chunk",
+                papers=len(wanted),
+                scope="subset",
             )
-        }
-        papers = [paper for paper in papers if paper.id not in have]
+        )
     if degraded_only:
         flagged = degradation_service.paper_ids_with_open_degradations(
             session, stage=degraded_stage, code=degraded_code
         )
-        papers = [paper for paper in papers if paper.id in flagged]
-    return papers
+        wanted = flagged if wanted is None else (wanted & flagged)
+        reasons.append(
+            reindex_service.ReindexReason(
+                code=reindex_service.REASON_OPEN_DEGRADATIONS,
+                detail="有未决降级",
+                papers=len(flagged),
+                scope="subset",
+            )
+        )
+    if parser_backend:
+        # 语义：只挑**戳等于**该值的论文（"把 pypdf 解析的那些重跑一遍"）
+        stamped = reindex_service.papers_with_stamp(session, parser_backend)
+        wanted = stamped if wanted is None else (wanted & stamped)
+        reasons.append(
+            reindex_service.ReindexReason(
+                code=reindex_service.REASON_PARSER_DRIFT,
+                detail=f"解析戳是 {parser_backend}",
+                papers=len(stamped),
+                scope="subset",
+            )
+        )
+
+    query = select(Paper).where(Paper.deleted_at.is_(None))
+    if paper_ids:
+        query = query.where(Paper.id.in_(paper_ids))
+    papers = list(session.execute(query.order_by(Paper.created_at)).scalars())
+    if wanted is not None:
+        papers = [paper for paper in papers if paper.id in wanted]
+    return papers, reasons
 
 
 def _print_reasons(session, papers: list[Paper]) -> None:
@@ -152,6 +187,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--auto",
+        action="store_true",
+        help=(
+            "let the detection decide: 换 embedding 模型 / 换解析器 / 有未决降级 / 缺 chunk "
+            "分别命中，并打印每条理由（与 POST /api/papers/reindex 同一套检测）"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print the selection (with stamp and open degradations) and exit",
@@ -183,7 +226,7 @@ def main() -> int:
                 print(f"  {paper_id}: {', '.join(codes)}")
             return 0
 
-        papers = targets(
+        papers, reasons = targets(
             session,
             args.paper_ids,
             args.missing,
@@ -191,7 +234,13 @@ def main() -> int:
             degraded_stage=args.degraded_stage,
             degraded_code=args.degraded_code,
             parser_backend=args.parser_backend,
+            auto=args.auto,
         )
+        if reasons:
+            print("detected reasons:")
+            for reason in reasons:
+                print(f"  [{reason.code}] scope={reason.scope} papers={reason.papers}")
+                print(f"      {reason.detail}")
         if not papers:
             print("nothing to reindex" if not args.dry_run else "no paper matches")
             return 0
@@ -200,7 +249,7 @@ def main() -> int:
             _print_reasons(session, papers)
             return 0
         print(f"reindexing {len(papers)} paper(s)")
-        if args.degraded or args.parser_backend:
+        if args.degraded or args.parser_backend or args.auto:
             _print_reasons(session, papers)
         opensearch.ensure_index()
         for index, paper in enumerate(papers, start=1):

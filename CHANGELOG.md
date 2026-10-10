@@ -8,6 +8,25 @@
 
 ### Added
 
+- **批量/整库重建索引的端点**（`POST /api/papers/reindex`、`app/services/reindex_service.py`）。
+  两种真实场景驱动它：**换了 embedding 模型**（旧向量与新查询不可比 → 整库重嵌）与
+  **从 pypdf 换成 docling**（不重新解析就吃不到新产物）。调用时自动检测"为什么要重建"：
+
+  | 理由码 | 含义 | 范围 |
+  |---|---|---|
+  | `embedding_model_changed` | 索引里的 chunk 用别的模型嵌的 | 整库 |
+  | `parser_backend_changed` | 论文解析戳与当前 `PARSER_BACKEND` 不一致 | 命中的那些 |
+  | `open_degradations` | 上次流水线让步过且未解决 | 命中的那些 |
+  | `missing_chunks` | 还没有 chunk | 命中的那些 |
+
+  检测做成 `DETECTORS` 注册表：加一条新理由只要加一个函数，端点和脚本自动带上。
+  选择逻辑与 `scripts/reindex.py` **共用**同一份实现（脚本加 `--auto` 走同一套检测），
+  差别只在执行 —— 脚本在本进程同步跑，端点按论文入队后立即返回（整库是小时级操作）。
+  `dry_run` 默认 **true**（与元数据导入一致）：先看"选几篇、为什么、跳过了什么"，确认后再写。
+  响应区分 `reasons`（本次采纳）与 `skipped_reasons`（检测到但没采纳），方便排查
+  "为什么它说不用重建"。真机验证：`--auto` 在语料上命中 2 篇未决降级；单篇写路径排队后
+  作业跑完（EMBEDDING→INDEXING→COMPLETED），重建后 `consistent=True problems=0`。
+
 - **字段冲突有人工出口了**（`app/services/provenance_service.py`、`app/services/metadata_manual.py`、
   `app/api/papers.py`）。此前 `GET /api/metadata/review` 会列出库内字段冲突，但**只能看不能动** ——
   真机上就这样挂着 10 条。现在每个冲突条目带下落败声明的 `provenance_id`，并新增
