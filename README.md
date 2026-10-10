@@ -149,6 +149,7 @@ paperbox/
 | 论文 | GET | `/api/papers/{paper_id}/chunks` | 该论文的切块 |
 | 论文 | GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件 |
 | 论文 | GET | `/api/papers/{paper_id}/degradations` | 该论文的解析降级记录 |
+| 论文 | POST | `/api/papers/reindex` | **批量/整库重建**（自动检测换模型、换解析器、未决降级、缺 chunk；默认只报告） |
 | 论文 | POST | `/api/papers/{paper_id}/reindex` | 重建该论文的切块与向量 |
 | 检索 | POST | `/api/search` | 检索（关键词 / 语义 / 混合，可精排、可出过滤面） |
 | 检索 | GET | `/api/search-logs` | 历史检索日志（复盘用） |

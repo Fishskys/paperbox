@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-
-from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -116,4 +115,45 @@ class PaperDegradationList(BaseModel):
     degradations: list[PaperDegradationOut] = Field(default_factory=list)
 
 
-__all__ = ["PaperChunkList", "PaperChunkOut", "PaperFileOut", "PaperOut"]
+class ReindexIn(BaseModel):
+    """Body of ``POST /api/papers/reindex``（批量重建索引）。
+
+    默认 **dry_run=True**（与元数据导入一致）：先看"要重建哪些、为什么"，确认了再写。
+    选择优先级：``paper_ids`` > ``include_all`` > ``reasons`` > 默认（所有检测到的理由的并集）。
+    ``reasons`` 的取值来自 ``app/services/reindex_service.py`` 的 ``REASON_*``；
+    新理由只要加进那份 DETECTORS 就自动可用，调用方不必改。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dry_run: bool = True
+    include_all: bool = False
+    paper_ids: list[str] | None = None
+    reasons: list[str] | None = None
+
+
+class ReindexOut(BaseModel):
+    """批量重建的处置报告：为什么、选了几篇、排了哪些作业、跳过了什么。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    dry_run: bool
+    selected: int
+    queued: int = 0
+    job_ids: list[str] = Field(default_factory=list)
+    skipped: list[dict[str, str]] = Field(default_factory=list)
+    reasons: list[dict[str, Any]] = Field(default_factory=list)
+    skipped_reasons: list[dict[str, Any]] = Field(default_factory=list)
+    embedding: dict[str, Any] = Field(default_factory=dict)
+    parser: dict[str, Any] = Field(default_factory=dict)
+    note: str = ""
+
+
+__all__ = [
+    "PaperChunkList",
+    "PaperChunkOut",
+    "PaperFileOut",
+    "PaperOut",
+    "ReindexIn",
+    "ReindexOut",
+]

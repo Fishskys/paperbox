@@ -302,6 +302,7 @@ cd infra && docker compose --profile local-docling up -d docling
 | `uv run python scripts/healthcheck.py` | 依赖 + 应用 + 索引 + 检索管道一键自检 |
 | `uv run python scripts/create_index.py` | 幂等创建索引与别名；`--migrate-from <旧索引>` 服务端复制文档 |
 | `uv run python scripts/refresh_index_metadata.py` | 只刷新索引里的元数据快照（秒级，不重算向量） |
+| `POST /api/papers/reindex` | **批量/整库重建索引**：自动检测"为什么要重建"（换 embedding 模型 / 换解析器 / 未决降级 / 缺 chunk），默认 `dry_run=true` 只报告；确认后带 `dry_run=false` 才排队。整库是小时级操作 |
 | `POST /api/papers/{paper_id}/reindex` | 重建某篇论文的切块与向量（较慢） |
 | `uv run python scripts/check_consistency.py` | 三端（数据库/对象存储/索引）只读对账 |
 | `uv run python scripts/setup_snapshots.py` | 建/核对快照仓库与定时快照策略；`--restore-check` 做恢复演练 |
@@ -383,7 +384,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 |---|---|
 | 免鉴权 | `GET /health`、`GET /`、`GET /docs`；`GET /api/downloads/{paper_id}`（只认签名） |
 | read | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review` |
-| write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/{id}/reindex`；`PATCH /api/papers/{id}/metadata`、rollback；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
+| write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/reindex`（批量）、`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
 | admin | `DELETE /api/papers/{paper_id}` |
 
 ### 2.2 服务与自检

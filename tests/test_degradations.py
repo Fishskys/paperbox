@@ -617,9 +617,10 @@ def test_reindex_targets_can_select_degraded_papers(db_session) -> None:
         db_session, paper_id=degraded, stage=ledger.STAGE_CHUNKING, code="semantic_fallback"
     )
 
-    assert {paper.id for paper in targets(db_session, [], False)} == {clean, degraded}
-    assert {paper.id for paper in targets(db_session, [], False, True)} == {degraded}
-    assert {paper.id for paper in targets(db_session, [clean], False, True)} == set()
+    # targets() 现在返回 (papers, reasons)：理由要能报给调用方（端点与 --auto 都要用）
+    assert {paper.id for paper in targets(db_session, [], False)[0]} == {clean, degraded}
+    assert {paper.id for paper in targets(db_session, [], False, True)[0]} == {degraded}
+    assert {paper.id for paper in targets(db_session, [clean], False, True)[0]} == set()
 
 
 def test_reindex_targets_skip_papers_whose_degradation_is_resolved(db_session) -> None:
@@ -630,7 +631,7 @@ def test_reindex_targets_skip_papers_whose_degradation_is_resolved(db_session) -
         db_session, paper_id=paper_id, stage=ledger.STAGE_CHUNKING, code="semantic_fallback"
     )
     ledger.resolve_stage(db_session, paper_id=paper_id, stage=ledger.STAGE_CHUNKING)
-    assert targets(db_session, [], False, True) == []
+    assert targets(db_session, [], False, True)[0] == []
 
 
 def test_reindex_degradations_listing_shows_stage_code_pairs(
@@ -681,7 +682,7 @@ def test_reindex_targets_can_select_a_backend_stamp(db_session) -> None:
     db_session.flush()
 
     def picked(**kwargs) -> set[str]:
-        return {paper.id for paper in targets(db_session, [], False, **kwargs)}
+        return {paper.id for paper in targets(db_session, [], False, **kwargs)[0]}
 
     assert picked() == {docling, pypdf, legacy}
     assert picked(parser_backend="docling") == {docling}
@@ -711,7 +712,7 @@ def test_reindex_targets_combine_the_stamp_with_the_ledger(db_session) -> None:
             degraded_stage=ledger.STAGE_PARSING,
             degraded_code="docling_unavailable",
             parser_backend="pypdf",
-        )
+        )[0]
     }
     assert chosen == {fell_back}
     assert by_choice not in chosen
@@ -760,3 +761,23 @@ def test_job_id_foreign_key_column_is_optional(db_session) -> None:
         db_session, paper_id=paper_id, stage=ledger.STAGE_INDEXING, code="snapshot_lag"
     )
     assert row.job_id is None
+
+
+def test_reindex_auto_reports_the_detected_reasons(db_session) -> None:
+    """``--auto`` 与 API 端点共用同一套检测：理由要随选择一起返回，才能解释"为什么是这些"。"""
+    from scripts.reindex import targets
+
+    degraded = add_paper(db_session)
+    ledger.record(
+        db_session, paper_id=degraded, stage=ledger.STAGE_CHUNKING, code="semantic_fallback"
+    )
+    clean = add_paper(db_session)
+    db_session.flush()
+
+    papers, reasons = targets(db_session, [], False, auto=True)
+
+    assert {paper.id for paper in papers} >= {degraded}
+    codes = {reason.code for reason in reasons}
+    # clean 没有 chunk，所以 missing_chunks 也会命中；降级那条必须在
+    assert "open_degradations" in codes
+    assert all(reason.papers >= 1 for reason in reasons)

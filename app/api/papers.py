@@ -18,6 +18,8 @@ from app.core.logging import get_logger
 from app.core.security import require_admin, require_api_key, require_write
 from app.db.session import get_db
 from app.schemas.paper import (
+    ReindexIn,
+    ReindexOut,
     PaperChunkList,
     PaperDegradationList,
     PaperDegradationOut,
@@ -41,6 +43,7 @@ from app.services import ingestion_service as ingest
 from app.services import metadata_manual
 from app.services import object_storage
 from app.services import paper_service as papers
+from app.services import reindex_service
 from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
@@ -293,6 +296,66 @@ def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
             detail=f"object storage cleanup failed: {exc}",
         ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/reindex", response_model=ReindexOut, dependencies=[Depends(require_write)])
+def reindex_library_endpoint(
+    body: ReindexIn,
+    session: Session = Depends(get_db),
+) -> ReindexOut:
+    """整库/批量重建索引：先**检测**为什么要重建，再按论文入队（plan §24）。
+
+    两种真实场景驱动它：**换了 embedding 模型**（旧向量与新查询不可比，必须整库重嵌）与
+    **从 pypdf 换成 docling**（要重新解析才能吃到新产物）。检测不止这两种，见
+    ``app/services/reindex_service.py`` 的 DETECTORS —— 加一条新理由不需要改这个端点。
+
+    选择逻辑与 ``scripts/reindex.py`` 共用（同一份 SQL、同一套检测），差别只在执行：
+    脚本在本进程同步跑（可 Ctrl-C、可 ``--dry-run``），这里按论文**入队**后立即返回 ——
+    单篇 30–370 秒，整库是小时级操作，不能让它挂在一次 HTTP 请求上。
+
+    ``dry_run`` 默认 **true**：先拿到"选 N 篇 + 每条理由"，确认后再调一次写库。
+    """
+    try:
+        plan = reindex_service.select_papers(
+            session,
+            paper_ids=body.paper_ids,
+            reasons=body.reasons,
+            include_all=body.include_all,
+        )
+    except ValueError as exc:  # 未知理由码
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    report = plan.as_dict()
+    job_ids: list[str] = []
+    skipped: list[dict[str, str]] = []
+    if not body.dry_run and plan.papers:
+        job_ids, skipped = reindex_service.queue(session, plan.papers)
+
+    note = (
+        "试运行：没有排任何作业。确认后带 dry_run=false 再调一次。"
+        if body.dry_run
+        else (
+            f"已排 {len(job_ids)} 个重建作业（队列按 INGEST_CONCURRENCY 串行执行，"
+            "整库是小时级操作）；用 GET /api/jobs/{job_id} 或 GET /api/jobs/queue 跟进。"
+        )
+    )
+    if not plan.papers:
+        note = "没有需要重建的论文（检测全部为空）；要用 include_all=true 强制整库。"
+
+    return ReindexOut(
+        dry_run=body.dry_run,
+        selected=len(plan.papers),
+        queued=len(job_ids),
+        job_ids=job_ids,
+        skipped=skipped,
+        reasons=report["reasons"],
+        skipped_reasons=report["skipped_reasons"],
+        embedding=report["embedding"],
+        parser=report["parser"],
+        note=note,
+    )
 
 
 @router.post("/{paper_id}/reindex", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_write)])

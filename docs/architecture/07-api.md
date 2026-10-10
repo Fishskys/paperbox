@@ -51,7 +51,8 @@
 | PATCH | `/api/papers/{paper_id}/metadata` | 手动改元数据 | 是 | — | `app/api/papers.py:256` |
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张 | 是 | — | `app/api/papers.py:276` |
 | DELETE | `/api/papers/{paper_id}` | 删除（204） | 是 | — | `app/api/papers.py:240` |
-| POST | `/api/papers/{paper_id}/reindex` | 重建索引（202） | 是 | — | `app/api/papers.py:266` |
+| POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | 是 | — | `app/api/papers.py:266` |
+| POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | 是 | — | `app/api/papers.py:266` |
 | POST | `/api/metadata/import` | 外部元数据导入 | 是 | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py:93-103` |
 | GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py:151-155` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py:168` |
@@ -146,6 +147,15 @@
 | `Host` 白名单 | 显式 `TransportSecuritySettings(allowed_hosts=…)`（**不依赖 SDK 默认**，SDK 默认只认 `127.0.0.1`/`localhost`）；白名单外一律 **421**；`MCP_ALLOWED_HOSTS` 为空且 `MCP_ENABLED=true` → **启动即报错** |
 | 路径规范化 | `McpMountPathMiddleware` 在服务端内部把 `/mcp` 改写成 `/mcp/`（Starlette 的 `Mount` 正则要求尾斜杠）；**不带尾斜杠也必须一次命中**，不能回 307 |
 | 鉴权 | 自写静态 Bearer（**不用** SDK 的 `AuthSettings`——那是 OAuth 形态）：`McpAuthMiddleware` 置于**最外层**（先鉴权再谈 Host），缺凭据 401 / 不匹配 403；**不支持 `?key=`**；命中后把 agent 名放进 ContextVar 供审计 |
+`POST /api/papers/reindex` 的选择逻辑与 **`scripts/reindex.py` 共用**
+（`app/services/reindex_service.py`：同一份 SQL、同一套检测），差别只在执行 —— 脚本在本进程同步跑
+（可 Ctrl-C、可 `--dry-run`），端点按论文**入队**后立即返回（单篇 30–370 秒，整库是小时级操作，
+不能挂在一次 HTTP 请求上）。请求体：`dry_run`（默认 **true**）、`include_all`（全库）、
+`paper_ids`（指名）、`reasons`（只按某个检测理由）。响应里 `reasons` 说明为什么、
+`skipped_reasons` 说明"检测到但本次没采纳"，`skipped` 逐条列出跳过原因（例如没有原始文件）。
+检测理由（`DETECTORS` 注册表，可扩展）：`embedding_model_changed` / `parser_backend_changed` /
+`open_degradations` / `missing_chunks`。
+
 | 工具 ↔ REST 的关系 | 工具直接调 **service 层**（`search_pipeline.run_search`、`chunk_service`、`paper_service.delete_preview/purge`、`ingestion_service.create_reindex_job`、`metadata_manual.current_value`），不绕 HTTP：同一查询在 REST 与 MCP 上的 `total` 与排序逐位相同（不变式 2） |
 | 失败通道 | 工具抛 `ToolFailure`（继承 SDK `ToolError`）→ 客户端拿 `isError:true` + 契约错误 JSON 文本；抛其它异常 = 崩贴、客户端看不到细节（`app/mcp/errors.py`） |
 | 写工具开关 | 关掉的写工具**不注册**：不出现在 `tools/list`，按名字也调不到 |
