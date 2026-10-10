@@ -20,7 +20,7 @@
 
 - 评测**不跑在应用进程里**：`scripts/eval.py` 是独立客户端，只发 `POST /api/search`（`scripts/eval.py:2-31`）。
 - 单元测试**不碰真机**：pytest 全程不连 PostgreSQL/OpenSearch/MinIO，真机验证只放 `scripts/`（`AGENTS.md` §6）。
-- 根 `docker-compose.yml` 只打包**应用**，四个依赖在 `infra/docker-compose.yml`（两份 compose 明确分离，`docker-compose.yml:1`、`infra/docker-compose.yml:2`）。
+- 根 `docker-compose.yml` 只打包**应用**，依赖在 `infra/docker-compose.yml`（两份 compose 明确分离，`docker-compose.yml:1`、`infra/docker-compose.yml:2`）：postgres / opensearch / minio / embedding 四个常驻，docling 由 `--profile local-docling` 控制（默认不起，生产上跑在 NAS 上，两份 compose 的 healthcheck 都探容器内的 5001 端口、要求 `/health` 返回 200）。
 - 不自动删数据：`create_index.py` 只切别名、旧索引保留供回滚（`scripts/create_index.py:30-31`）；维度不同的迁移直接在**建任何索引之前**拒绝（`:18-20`，2026-10-07）；`purge_deleted.py` 默认**只**清索引文档与对象、保留 PostgreSQL 行，只有显式 `--hard` 才删 PG 行（`scripts/purge_deleted.py:83`）。
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用，带行号）
@@ -220,7 +220,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 
 | 脚本 | 作用 | 主要参数 | 幂等 | 碰真机数据 | 退出码 |
 |---|---|---|---|---|---|
-| `healthcheck.py` | 四依赖 + API 健康检查与文档数 | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py:123`） |
+| `healthcheck.py` | 五依赖（含解析后端 docling，未配 `DOCLING_URL` 时该行显式 `skip`）+ API 健康检查与文档数 | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py:130`） |
 | `acceptance.py` | plan §38 端到端验收 9 项 | `--api`、`--url` | 否（会真导入一篇 arXiv PDF，判重则复用） | **写**：导入论文 | `0` 全 PASS / `1` 有 FAIL（`acceptance.py:61, 118`） |
 | `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing`、`--degraded`（+`--degraded-stage`/`--degraded-code`）、`--degradations`、`--parser-backend`、`--dry-run` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引（`--dry-run`/`--degradations` 只读不写） | `0` 无失败 / `1` 有失败（`reindex.py:222, 228`） |
 | `purge_deleted.py` | 清已删论文的索引文档与 MinIO 对象 | `--dry-run` | 是 | **写**：删索引文档 + 对象（PG 行保留） | 无残留 `0`；有失败 `1`；`--dry-run` 恒 `0`（`purge_deleted.py:128-130, 96, 101`） |

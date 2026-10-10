@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`/health` 增加解析后端 docling 探针**（`app/api/health.py`、`scripts/healthcheck.py`）。`services`
+  从四项变五项：`postgres` / `opensearch` / `minio` / `embedding` / `docling`。docling **走 HTTP 探**，
+  因为生产上解析后端跑在 NAS 上、并不在本机 docker 里；判据是 `{DOCLING_URL}/health` 返回 **200**
+  —— 与两份 compose（`infra/docker-compose.yml`、`infra/docling/fnos/docker-compose.yml`）的容器
+  healthcheck 是同一个端点、同一个口径（要求 200 而非"小于 500 就算活着"：404 说明那个端口上站的
+  不是 docling）。`DOCLING_URL` 为空时该项报 `"disabled"` —— 只用 pypdf 解析的部署没有坏掉，
+  `/health` 的 `status` 也不因此变脸。`scripts/healthcheck.py` 同步：配了才探，没配打印
+  `skip docling` 一行说明原因。WebUI（paperbox-webui）状态条增加 `docling` 一格，并把 `disabled`
+  渲染成中性色 —— 此前前端只有"绿 = ok / 红 = 其它"，会把"没配"误报成故障。
+
 ### Fixed
 
 - **元数据导入：单条解析失败不再让整批 422**（`app/services/metadata_import.py`、`app/schemas/metadata.py`、

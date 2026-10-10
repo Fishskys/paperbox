@@ -29,7 +29,7 @@
 
 | 方法 | 路径 | 作用 | Bearer | 关键查询参数 | 出处 |
 |---|---|---|---|---|---|
-| GET | `/health` | 四个依赖的轻量探针 | 免 | — | `app/api/health.py:79` |
+| GET | `/health` | 五个依赖的轻量探针（含解析后端 docling，未配置时该项为 `disabled`） | 免 | — | `app/api/health.py:102` |
 | GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | 是 | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py:38` |
 | GET | `/` | landing（`include_in_schema=False`） | 免 | — | `app/main.py:100` |
 | POST | `/api/papers/ingest` | URL 摄取 | 是 | — | `app/api/ingestion.py:255` |
@@ -207,7 +207,7 @@
 5. **429 的判定在服务端**（客户端无并发参数）：`INGEST_UPLOAD_CONCURRENCY` 管在途请求，`INGEST_QUEUE_HIGH_WATERMARK` 只管多文件请求（`upload_admission.py:128-136`），单文件永远放行。`Retry-After` 值硬编码 2 秒。
 6. **`X-Request-ID` 总是回显**：带了沿用，没带生成 `uuid4().hex`（`main.py:77`），响应头无条件写入（`main.py:80`）；日志侧靠 ContextVar（`logging.py:34`）。
 7. **关闭不排空**：`job_queue.stop()` 只 cancel 协程，线程内流水线继续跑；作业行停在中间态，靠下次启动的 `recover()` 标 `INTERRUPTED`（`queue.py:139-154`, `:240-264`）。想让在途作业跑完必须显式 `job_queue.join()`，lifespan 目前不调用。
-8. **`GET /health` 恒 200**（`health.py:88-97`）：任一依赖挂掉只是该字段变 `"error"`，`status` 永远是 `"ok"`；用 200 判依赖健康会误判，必须看 `services.*`。
+8. **`GET /health` 恒 200**（`health.py:112-122`）：任一依赖挂掉只是该字段变 `"error"`，`status` 永远是 `"ok"`；用 200 判依赖健康会误判，必须看 `services.*`。`services` 自 2026-10-10 起是**五项**：`postgres` / `opensearch` / `minio` / `embedding` / `docling`；最后一项在 `DOCLING_URL` 为空时报 `"disabled"`（部署只用 pypdf 解析，不是故障）。
 9. **分页参数不一致**：`chunks` 夹取 1..200（`papers.py:162`）、`review` 有 `ge=1, le=200`（`metadata.py:154`）、`search-logs` 依赖服务常量（`search_logs.py:29`），但 `GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无任何上下界（`jobs.py:77`, `papers.py:50-51`）。
 10. **DELETE 的补偿语义**：先清 OpenSearch、再清 MinIO、最后才标记软删（`papers.py:242-242`），任一步 503 时论文仍可见且可原样重试——不要把顺序调换。
 11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py:66`）；`source_type` 只来自 query（`metadata.py:99-102`）。README §3.4 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
@@ -234,7 +234,7 @@
 | `INGEST_ARCHIVE_TMP_DIR` / `INGEST_ARCHIVE_TTL_HOURS` | `""`（系统 temp）/ `24` | 解包位置与保留时长（GC 用） | `config.py:178-180` |
 | `INGEST_GC_INTERVAL_S` | `300` | housekeeping 间隔（首轮启动即跑） | `config.py:184` |
 | `INGEST_CONCURRENCY` | `2` | 并行流水线数（队列 worker 数，`/api/jobs/queue` 的 `concurrency`） | `config.py:140` |
-| `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` | `/health` 探针目标（embedding 探 `GET /health`） | `config.py:61`, `:65`, `:70`；`health.py:60-76` |
+| `OPENSEARCH_URL` / `MINIO_BUCKET` / `EMBEDDING_URL` / `DOCLING_URL` | `http://localhost:9200` / `paperbox` / `http://localhost:8090` / `""` | `/health` 探针目标：embedding 与 docling 各探自己的 `GET /health`（docling 要求 **200**，未配置 `DOCLING_URL` 时该项为 `disabled`） | `config.py:61`, `:65`, `:70`, `:304`；`health.py:63-100` |
 | `SEARCH_LOG_ENABLED` / `SEARCH_LOG_RESULTS_LIMIT` | `True` / `20` | `POST /api/search` 写日志开关与结果条数上限 | `config.py:129-130` |
 | `RERANK_ENABLED` / `RERANK_TIMEOUT` | `True` / `10.0` | 响应 `rerank` 块与两阶段检索 | `config.py:83`, `:89`；`app/services/search_pipeline.py:121-125` |
 | `QUERY_REWRITE_ENABLED` + `_URL`/`_MODEL`/`_API_KEY` | `False` / `""` | 改写开关；开启时三者必填否则启动即报错 | `config.py:104-106`, `:220-238` |
