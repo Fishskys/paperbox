@@ -6,6 +6,13 @@ paperbox 是一个论文知识库后端服务：把 PDF 变成可编程调用的
 
 ## 2. 快速开始
 
+**时区**：全栈统一 `Asia/Shanghai`（2026-10-10 起）。应用在导入期执行
+`os.environ.setdefault("TZ", "Asia/Shanghai")` + `time.tzset()`；`infra/docker-compose.yml`
+的五个服务各带 `TZ`（Postgres 另带 `PGTZ`），`cp infra/.env.example infra/.env` 时即可见。
+`timestamptz` 里存的是**绝对时刻**，改 `TZ` 只改渲染口径、不动数据；接口一律返回带偏移的
+ISO 串（UTC），浏览器自己转本地。要换成别的时区，改 `.env`/`infra/.env` 的 `TZ` 后
+重启应用与容器（`docker compose up -d`）。
+
 依赖 [Docker](https://docs.docker.com/engine/install/) 与 [uv](https://docs.astral.sh/uv/)。
 下面按仓库默认配置走，不需要改任何配置项。
 

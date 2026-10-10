@@ -80,6 +80,7 @@ uv run python scripts/healthcheck.py
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
+| `TZ` | 进程时区 | `Asia/Shanghai` | 应用日志、`.env` 里不带偏移的时间戳、依赖容器的解释口径都看它；见 §1.3.6 |
 | `POSTGRES_HOST` | PostgreSQL 主机 | `127.0.0.1` | 任意主机名/IP；容器化时用 `host.docker.internal` 或服务名 |
 | `POSTGRES_PORT` | PostgreSQL 端口 | `5432` | 1–65535 |
 | `POSTGRES_USER` | 数据库用户 | `postgres` | 需与容器初始化时的用户一致 |
@@ -208,6 +209,31 @@ uv run python scripts/manage_keys.py revoke hermes --yes
 
 注意：`source=env` 的引导行不可经脚本吊销（要从 `.env` 移除并重启）；吊销立即生效（下一次请求即 403）。
 
+#### 1.3.6 时区（2026-10-10 起全栈统一）
+
+全栈统一 `Asia/Shanghai`，三处一起生效，**任何一处漏设都会重新出现"时间不对"**：
+
+| 位置 | 怎么设 | 影响什么 |
+|---|---|---|
+| 应用进程（API） | `app/core/config.py` 导入期 `os.environ.setdefault("TZ", "Asia/Shanghai")` + `time.tzset()`，可用 `.env` 的 `TZ` 覆盖 | 日志时间戳（形如 `2026-10-10T21:54:44+0800`）、不带偏移的时间戳、`datetime.now()` |
+| 四个依赖容器 | `infra/docker-compose.yml` 每个服务的 `TZ`（Postgres 另加 `PGTZ` 给容器内客户端） | 容器日志；**`docker exec ... psql` 看到的时间** |
+| WebUI 进程 | `webui/config.py` 同口径 | WebUI 的访问日志 |
+
+```bash
+# 自查：三处都该显示同一时刻（UTC+8）
+date                                            # 宿主
+docker exec paperbox-postgres date              # 容器
+docker exec paperbox-postgres psql -U postgres -d paperbox -tAc "show timezone; select now();"
+```
+
+两条容易踩的：
+
+- **`timestamptz` 存的是绝对时刻**。改 `TZ` 不改任何已存数据，只改"怎么解释/渲染"；
+  所以历史时间戳不会因为这次统一而需要迁移。
+- **时间戳的语义看列名**：`decided_at` 目前只由 `server_default=func.now()` 在**写入声明**时赋值，
+  两条人工裁决接口（`conflicts/dismiss`、`metadata/rollback`）只改 `decided_by`、**不更新它** ——
+  所以它不是"裁决时刻"，而是那条声明的写入时刻。
+
 ### 1.4 容器配置（`infra/.env`）
 
 #### 1.4.1 四个容器总览
@@ -219,6 +245,11 @@ uv run python scripts/manage_keys.py revoke hermes --yes
 | `paperbox-minio` | `minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1` | `9000`（API）、`9001`（控制台） | `MINIO_DATA_DIR` | `/minio/health/live` | `MINIO_ROOT_USER/PASSWORD` 未设（必填） |
 | `paperbox-embedding` | 本地构建 `infra/embedding`（`paperbox/embedding-server:0.1`） | `8090` | `EMBEDDING_MODELS_DIR` | `/health` | 首次启动要下载模型（慢）；批次/线程配置过大会 OOM |
 | `paperbox-docling`（可选） | 本地构建 `infra/docling`（`paperbox-docling-cpu:v1.35.0-formula`） | `8091→5001` | `DOCLING_DATA_DIR` | `/health` | 只带 `--profile local-docling` 才启动；内存上限给小了会被 OOM-kill |
+
+**时区**：五个服务统一 `TZ=${TZ:-Asia/Shanghai}`（缺省即 `Asia/Shanghai`，见 §1.3.6）。
+Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO 镜像里没有 tzdata**，
+只给 `TZ` 会打印成 `13:53 Asia`（名字认了、偏移仍是 0）—— 所以它的 compose 里把宿主的
+`/usr/share/zoneinfo/Asia/Shanghai` 同时挂到 `/etc/localtime` 与同名 zoneinfo 路径上。
 
 #### 1.4.2 凭据与端口
 
@@ -698,3 +729,14 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 应只有一个模型名加若干 `unknown`（`unknown` = 记录该列之前入库的旧数据，不是错误）。
 若出现两个模型名，说明上次换模型只重嵌了一部分；单篇论文两侧模型不一致会直接报
 `embedding_model_mismatch` 问题。修复方式：对名单里的论文跑 `reindex` 重嵌。
+
+**Q21 `docker exec ... psql` 里看到的时间比本地早 8 小时 / 日志时间对不上？**
+看的是**不同层的时区**，不是数据写错了。全栈口径见 §1.3.6：容器与进程都统一
+`TZ=Asia/Shanghai`（缺省即此值），Postgres 另设 `PGTZ`。两条相关的语义值得先记住：
+
+- `timestamptz` 存的是**绝对时刻**，`psql` 输出成什么样只取决于会话时区；跨层对时间时显式写
+  `select decided_at at time zone 'Asia/Shanghai'`，别拿两层的裸字符串直接比。
+- 列名不等于语义：`decided_at` 只在**声明写入**时由 `server_default` 赋值，两条人工裁决接口
+  （`conflicts/dismiss`、`metadata/rollback`）**不更新它** —— 它不是"裁决时刻"。要查"谁在什么时候
+  裁决的"，看应用访问日志（形如 `POST /api/papers/<id>/metadata/conflicts/dismiss ... 200` 那条，
+  带 `+0800` 时间戳）。

@@ -17,6 +17,9 @@ services:
     container_name: paperbox-docling
     restart: unless-stopped
     environment:
+      # 时区（2026-10-10）：全栈统一 Asia/Shanghai，与 infra/docker-compose.yml 一致。
+      # 本机那份（infra/docling）在 NAS 上也一样，只影响日志时间戳。
+      TZ: ${TZ:-Asia/Shanghai}
       UVICORN_WORKERS: "1"
       DOCLING_SERVE_LOG_LEVEL: "WARNING"
       # 懒加载：冷请求付一次模型加载，平时只占几百 MB（与本机取值一致，便于对照）

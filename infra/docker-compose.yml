@@ -9,6 +9,10 @@
 #     MINIO_DATA_DIR=/srv/paperbox/data/minio
 #     EMBEDDING_MODELS_DIR=/srv/paperbox/data/embedding-models
 #   （写在同目录的 .env 里；./data 已在 .gitignore/.dockerignore 中）
+# 时区: 五个服务统一 TZ=Asia/Shanghai（2026-10-10）。TZ 的来源是 shell 或 infra/.env；
+#   不设也有默认值兜底（`${TZ:-Asia/Shanghai}`）。PostgreSQL 另设 PGTZ 给容器内客户端兜底，
+#   这样 `docker exec ... psql` 看到的时间与本地一致（此前是 UTC，容易被误读成"时间不对"）。
+#   注意：`timestamptz` 存的是绝对时刻，改 TZ 不改任何已存数据，只改渲染口径。
 # 端口绑定: 默认 0.0.0.0（随 PAPERBOX_BIND_IP 可改）。服务器上若只想让本机应用访问依赖，
 #   在 infra/.env 设 PAPERBOX_BIND_IP=127.0.0.1 即可（API 仍由应用自身的端口对外）。
 name: paperbox
@@ -26,6 +30,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: paperbox
+      # 时区（2026-10-10）：全栈统一 Asia/Shanghai，见本文件头部说明。
+      #   `TZ` 决定服务端 `timezone` GUC 的默认值 —— `timestamptz` 里存的仍是**绝对时刻**，
+      #   改的只是"怎么解释/渲染"（此前容器是 UTC，于是 `psql` 直连看到的比本地早 8 小时，
+      #   曾被当成"数据写错了时间"排查过一轮）。
+      #   `PGTZ` 给容器内的 libpq 客户端兜底，免得漏设 TZ 的会话又退回 UTC。
+      TZ: ${TZ:-Asia/Shanghai}
+      PGTZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:5432:5432"
     volumes:
@@ -55,6 +66,8 @@ services:
       # 若将来启用 plugins.security，务必在 .env 里设一个强口令覆盖它。
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:-ChangeMe-Initial-Admin-2026!}
       - DISABLE_TELEMETRY=true
+      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）
+      - TZ=${TZ:-Asia/Shanghai}
     ulimits:
       memlock: { soft: -1, hard: -1 }
       nofile: { soft: 65536, hard: 65536 }
@@ -86,11 +99,19 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）。
+      # 这个镜像里**没有 tzdata**，只给 TZ 会打印成 `13:53 Asia`（名字认了、偏移仍是 0），
+      # 所以把宿主的时区文件只读挂进来 —— 比在镜像里装 tzdata 轻，也不会被镜像升级冲掉。
+      TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:9000:9000"
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:9001:9001"
     volumes:
       - ${MINIO_DATA_DIR:-./data/minio}:/data
+      # glibc 在有 `TZ` 时会去 `/usr/share/zoneinfo/<区域>` 取规则，而该镜像里没有这个目录；
+      # 所以两处都挂：`/etc/localtime` 给忽略 TZ 的工具，zoneinfo 路径给认 TZ 的工具。
+      - /usr/share/zoneinfo/${TZ:-Asia/Shanghai}:/etc/localtime:ro
+      - /usr/share/zoneinfo/${TZ:-Asia/Shanghai}:/usr/share/zoneinfo/${TZ:-Asia/Shanghai}:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
       interval: 10s
@@ -138,6 +159,8 @@ services:
       INFERENCE_WORKERS: ${INFERENCE_WORKERS:-1}
       INFERENCE_QUEUE_DEPTH: ${INFERENCE_QUEUE_DEPTH:-512}
       PORT: 8090
+      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）
+      TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:8090:8090"
     volumes:
@@ -187,6 +210,8 @@ services:
     environment:
       UVICORN_WORKERS: "1"
       DOCLING_SERVE_LOG_LEVEL: "WARNING"
+      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）
+      TZ: ${TZ:-Asia/Shanghai}
       # ── 资源与超时（2026-09-28 T1/T2 实测后的取值，依据官方 configuration.md）──
       # LOAD_MODELS_AT_BOOT 默认 true：开机就把 layout+tableformer+RapidOCR 全加载，
       #   实测容器在 2200m 上限下 OOM 自杀并重启了一次（重启窗口里请求全 502）。
