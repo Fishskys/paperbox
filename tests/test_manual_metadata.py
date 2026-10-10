@@ -431,3 +431,161 @@ def test_rollback_404s_for_an_unknown_claim(client, session_factory) -> None:
     )
 
     assert response.status_code == 404
+
+# --------------------------------------------------------------------------- #
+# 驳回（保留现值）：人工裁决的另一半（2026-10-10）
+# 这些用例不需要真实来源行：source_id 为 None 时 claim_source_type 也是 None，
+# 既不是启发式也不是 manual，照样算"待裁决分歧"。
+# --------------------------------------------------------------------------- #
+def test_dismiss_keeps_the_current_value_and_closes_the_dispute(db_session) -> None:
+    """「保留现值」= 记一笔人工裁决，值不动，但这行不再进复核清单。"""
+    paper = make_paper(db_session)
+    first = provenance_service.set_field(db_session, paper, "authors", ["Zhuocheng Zhang"])
+    losing = provenance_service.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="authors",
+        value=["msi"],
+        make_current=False,
+    )
+    assert len(provenance_service.recorded_conflicts(db_session)) == 1, "先确认它本来是一处冲突"
+
+    row = metadata_manual.dismiss_conflict(db_session, paper, "authors", losing.id)
+
+    assert row.id == losing.id
+    assert row.decided_by == provenance_service.DECIDED_DISMISSED
+    assert row.value == ["msi"], "值不能被动过 —— 只是裁决过"
+    assert provenance_service.current_claim(db_session, paper.id, "authors").id == first.id
+    assert provenance_service.recorded_conflicts(db_session) == []
+
+
+def test_a_dismissed_claim_can_still_be_rolled_back(db_session) -> None:
+    """驳回不删历史：真觉得被拒值对，照样能回滚（设计 §8 规则 5）。"""
+    paper = make_paper(db_session)
+    provenance_service.set_field(db_session, paper, "authors", ["Zhuocheng Zhang"])
+    losing = provenance_service.record_claim(
+        db_session,
+        paper_id=paper.id,
+        field="authors",
+        value=["msi"],
+        make_current=False,
+    )
+    metadata_manual.dismiss_conflict(db_session, paper, "authors", losing.id)
+
+    metadata_manual.rollback_metadata(db_session, paper, "authors", losing.id)
+
+    assert provenance_service.current_claim(db_session, paper.id, "authors").id == losing.id
+    assert paper_service.paper_author_names(paper) == ["msi"]
+
+
+def test_rollback_is_the_other_half_of_the_same_verdict(db_session) -> None:
+    """「采纳被拒值」走 rollback：分歧同样消失（落败方变成了当前值）。"""
+    paper = make_paper(db_session)
+    current = provenance_service.set_field(db_session, paper, "title", "Wrong title")
+    better = provenance_service.record_claim(
+        db_session, paper_id=paper.id, field="title", value="Better title", make_current=False
+    )
+    assert len(provenance_service.recorded_conflicts(db_session)) == 1
+
+    metadata_manual.rollback_metadata(db_session, paper, "title", better.id)
+
+    assert paper.title == "Better title"
+    assert provenance_service.recorded_conflicts(db_session) == []
+    assert current.id != better.id
+
+
+def test_dismiss_refuses_the_current_claim(db_session) -> None:
+    """现值不是"分歧"，驳回它没有意义 —— 要改值请走 PATCH/rollback。"""
+    paper = make_paper(db_session)
+    current = provenance_service.set_field(db_session, paper, "title", "Current title")
+
+    with pytest.raises(LookupError):
+        metadata_manual.dismiss_conflict(db_session, paper, "title", current.id)
+
+
+def test_dismiss_refuses_a_claim_from_another_paper(db_session) -> None:
+    paper = make_paper(db_session)
+    other = make_paper(db_session, title="Other")
+    provenance_service.set_field(db_session, other, "title", "Other title")
+    foreign = provenance_service.record_claim(
+        db_session, paper_id=other.id, field="title", value="Other old", make_current=False
+    )
+
+    with pytest.raises(LookupError):
+        metadata_manual.dismiss_conflict(db_session, paper, "title", foreign.id)
+
+
+def test_dismiss_refuses_a_mismatched_field(db_session) -> None:
+    paper = make_paper(db_session)
+    provenance_service.set_field(db_session, paper, "title", "Title")
+    claim = provenance_service.record_claim(
+        db_session, paper_id=paper.id, field="title", value="Old title", make_current=False
+    )
+
+    with pytest.raises(LookupError):
+        metadata_manual.dismiss_conflict(db_session, paper, "abstract", claim.id)
+
+
+def test_the_dismiss_endpoint_reports_404_for_an_unknown_claim(client, session_factory) -> None:
+    """API 层把 LookupError 映射成 404（与 rollback 一致）。"""
+    paper_id = seed_paper(session_factory)
+
+    response = client.post(
+        f"/api/papers/{paper_id}/metadata/conflicts/dismiss",
+        json={"field": "title", "provenance_id": paper_service.new_uuid()},
+    )
+
+    assert response.status_code == 404
+
+
+def test_the_dismiss_endpoint_reports_404_for_the_current_claim(client, session_factory) -> None:
+    """现值不是分歧：驳回它没有意义，接口要说清而不是默默成功。"""
+    session = session_factory()
+    try:
+        paper = make_paper(session)
+        claim = provenance_service.set_field(session, paper, "title", "Current title")
+        session.commit()
+        paper_id, claim_id = paper.id, claim.id
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/papers/{paper_id}/metadata/conflicts/dismiss",
+        json={"field": "title", "provenance_id": claim_id},
+    )
+
+    assert response.status_code == 404
+    assert "current value" in response.json()["detail"]
+
+
+def test_the_dismiss_endpoint_closes_a_conflict(client, session_factory) -> None:
+    """走一遍 HTTP：驳回后这条不再出现在复核清单里，值仍是原来那个。"""
+    session = session_factory()
+    try:
+        paper = make_paper(session)
+        provenance_service.set_field(session, paper, "authors", ["Zhuocheng Zhang"])
+        losing = provenance_service.record_claim(
+            session, paper_id=paper.id, field="authors", value=["msi"], make_current=False
+        )
+        session.commit()
+        paper_id, claim_id = paper.id, losing.id
+    finally:
+        session.close()
+
+    before = client.get("/api/metadata/review?limit=50").json()["conflicts"]
+    assert [c["field"] for c in before if c["paper_id"] == paper_id] == ["authors"]
+    assert before[0]["provenance_id"], "清单必须带上落败声明的 id，界面才能一键裁决"
+
+    response = client.post(
+        f"/api/papers/{paper_id}/metadata/conflicts/dismiss",
+        json={"field": "authors", "provenance_id": claim_id},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["dismissed"] is True and body["provenance_id"] == claim_id
+
+    after = client.get("/api/metadata/review?limit=50").json()["conflicts"]
+    assert [c for c in after if c["paper_id"] == paper_id] == []
+    detail = client.get(f"/api/papers/{paper_id}/metadata").json()
+    assert detail["values"]["authors"] == ["Zhuocheng Zhang"], "驳回不改值"

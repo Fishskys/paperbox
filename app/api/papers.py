@@ -25,6 +25,8 @@ from app.schemas.paper import (
     PaperOut,
 )
 from app.schemas.metadata import (
+    ConflictDismissIn,
+    ConflictDismissOut,
     MetadataPatch,
     MetadataPatchOut,
     MetadataRollbackIn,
@@ -209,6 +211,36 @@ def patch_paper_metadata(
     result = metadata_manual.patch_metadata(session, paper, payload)
     session.commit()
     return MetadataPatchOut.model_validate(result.as_dict())
+
+
+@router.post(
+    "/{paper_id}/metadata/conflicts/dismiss",
+    response_model=ConflictDismissOut,
+    dependencies=[Depends(require_write)],
+)
+def dismiss_paper_conflict(
+    paper_id: str,
+    body: ConflictDismissIn,
+    session: Session = Depends(get_db),
+) -> ConflictDismissOut:
+    """人类裁决：保留现值，这条分歧不再进复核清单。
+
+    与 ``rollback`` 配对 —— 那条是"被拒值其实是对的"。两者都不删任何声明，只改"哪条生效"
+    或"分歧是否还开着"，所以此后仍可回滚（设计 §8 规则 5）。
+    """
+    paper = _load_paper(session, paper_id)
+    try:
+        row = metadata_manual.dismiss_conflict(
+            session, paper, body.field, body.provenance_id
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    session.commit()
+    return ConflictDismissOut(
+        paper_id=paper.id, field=row.field, provenance_id=row.id
+    )
 
 
 @router.post("/{paper_id}/metadata/rollback", response_model=MetadataRollbackOut, dependencies=[Depends(require_write)])

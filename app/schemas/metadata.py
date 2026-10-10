@@ -112,6 +112,27 @@ class MetadataRollbackIn(BaseModel):
     provenance_id: str
 
 
+class ConflictDismissIn(BaseModel):
+    """Body of ``POST /api/papers/{paper_id}/metadata/conflicts/dismiss``.
+
+    人工裁决的另一半：``rollback`` 是"被拒值其实是对的"，本端点是"现值就该留着"。
+    """
+
+    field: str
+    provenance_id: str
+
+
+class ConflictDismissOut(BaseModel):
+    """Result of dismissing a conflict."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    paper_id: str
+    field: str
+    provenance_id: str
+    dismissed: bool = True
+
+
 class MetadataRollbackOut(BaseModel):
     """Result of a rollback."""
 
@@ -160,6 +181,9 @@ class ConflictOut(BaseModel):
     kept: Any = None
     rejected: Any = None
     source_id: str | None = None
+    #: 落败那条声明的 provenance 行 id —— 界面「采纳被拒值」直接拿它调 rollback，
+    #: 不用再查一次（2026-10-10）。
+    provenance_id: str | None = None
     decided_at: datetime | None = None
 
 
