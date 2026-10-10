@@ -35,7 +35,7 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -94,7 +94,8 @@ def matches_glob(relative: str, pattern: str) -> bool:
             return _match(parts, rest) or (bool(parts) and _match(parts[1:], pat))
         if not parts:
             return False
-        if not fnmatch(parts[0], head):
+        # 与 app.services.local_scan 保持同一口径：显式大小写不敏感。
+        if not fnmatchcase(parts[0].casefold(), head.casefold()):
             return False
         return _match(parts[1:], rest)
 

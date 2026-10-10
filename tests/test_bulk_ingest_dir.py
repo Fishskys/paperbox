@@ -276,3 +276,32 @@ def test_a_non_positive_limit_is_a_usage_error(tmp_path, capsys):
 
     assert code == 2
     assert "positive" in capsys.readouterr().err
+
+
+def test_the_standalone_matcher_agrees_with_the_service_one() -> None:
+    """脚本自带一份 glob 匹配器（为保持"不依赖 app"），两份口径必须一致。
+
+    2026-10-10：两边都用了 ``fnmatch``，而它只在 Windows 上折叠大小写 —— 同一份
+    ``**/*.pdf`` 在服务端匹配不到 ``d.PDF``，脚本侧的预筛却以另一套平台行为为准，
+    于是出现"预筛放过、服务端少收一个"。两边现在都显式 casefold，这条守住它们不分叉。
+    """
+    from app.services.local_scan import matches_glob as service_matcher
+
+    cases = [
+        ("nested/d.PDF", "**/*.pdf"),
+        ("a.pdf", "**/*.pdf"),
+        ("nested/deep/x.PdF", "**/*.pdf"),
+        ("a.PDF", "*.pdf"),
+        ("a.pdf", "*.PDF"),
+        ("a.txt", "**/*.pdf"),
+        ("nested/a.pdf", "*/*.pdf"),
+        ("a.pdf", "*/*.pdf"),
+        ("NESTED/D.PDF", "**/*.pdf"),
+    ]
+    for relative, pattern in cases:
+        assert script.matches_glob(relative, pattern) == service_matcher(
+            relative, pattern
+        ), (relative, pattern)
+    # 大小写不敏感是契约本身，不能只靠"两份恰好一致"
+    assert script.matches_glob("nested/d.PDF", "**/*.pdf") is True
+    assert service_matcher("nested/d.PDF", "**/*.pdf") is True
