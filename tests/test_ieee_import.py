@@ -521,3 +521,85 @@ def test_reimport_after_soft_delete_repoints_the_record(db_session) -> None:
 
     third = importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
     assert third.unchanged == 1  # idempotent again, now against the new paper
+
+
+# --------------------------------------------------------------------------- #
+# 会议日期区间（2026-10-10 回归）
+#
+# 真实 IEEE 批次的 ``publication_date`` 是**区间**：``"17-19 Oct. 2025"``。原实现
+# 在识别到月份名后把字符串里所有数字拼起来当年份 → ``17192025`` → ``date()`` 抛
+# ``ValueError: year 18202014 is out of range``，于是**整个文件被 422 拒收**。
+# ieee_tools 的两份真实数据里 tdadc 750/1103、tdc 3808/5933 条会踩到这个。
+# --------------------------------------------------------------------------- #
+
+#: (原始字符串, 期望年份, 期望的月精度日期)
+IEEE_DATE_RANGES = [
+    ("17-19 Oct. 2025", 2025, "2025-10-01"),
+    ("3-5 Dec. 2012", 2012, "2012-12-01"),
+    ("14-18 Sept. 2015", 2015, "2015-09-01"),
+    ("18-20 June 2014", 2014, "2014-06-01"),
+    ("11-16 Nov. 2006", 2006, "2006-11-01"),
+    ("3-3 Oct. 2013", 2013, "2013-10-01"),
+    ("1-5 June 2014", 2014, "2014-06-01"),
+]
+
+
+def test_a_conference_date_range_does_not_blow_up_the_parse() -> None:
+    """年份是那个独立的四位数字，不是把区间里的数字拼起来。"""
+    for raw, year, iso in IEEE_DATE_RANGES:
+        record = dict(IEEE_SAMPLE["articles"][0])
+        record["publication_date"] = raw
+        record["publication_year"] = year          # 真实 IEEE 记录两个字段都给
+        parsed = importer.parse_record(record, importer.FORMAT_IEEE_RAW)
+        assert parsed.year == year, raw
+        assert parsed.values["publication_date"] == iso, raw
+
+
+def test_a_date_range_still_yields_a_year_without_publication_year() -> None:
+    """``publication_year`` 缺失时年份要从日期串里读出来 —— 这条路径以前会返回 None。"""
+    for raw, year, iso in IEEE_DATE_RANGES:
+        record = dict(IEEE_SAMPLE["articles"][0])
+        record["publication_date"] = raw
+        record.pop("publication_year", None)
+        parsed = importer.parse_record(record, importer.FORMAT_IEEE_RAW)
+        assert parsed.year == year, raw
+        assert parsed.values["publication_date"] == iso, raw
+
+
+def test_a_whole_payload_of_date_ranges_imports_instead_of_raising() -> None:
+    """一份全是日期区间的载荷必须能被读进去（以前第一条就抛 ValueError）。"""
+    payload = {
+        "total_records": len(IEEE_DATE_RANGES),
+        "articles": [
+            dict(
+                IEEE_SAMPLE["articles"][0],
+                doi=f"10.1109/TEST.{index}",
+                publication_date=raw,
+                publication_year=year,
+            )
+            for index, (raw, year, _iso) in enumerate(IEEE_DATE_RANGES)
+        ],
+    }
+    detected, records = importer.records_from_payload(payload)
+    assert detected == importer.FORMAT_IEEE_RAW
+    parsed = [importer.parse_record(record, detected) for record in records]
+    assert len(parsed) == len(IEEE_DATE_RANGES)
+    assert [p.year for p in parsed] == [year for _raw, year, _iso in IEEE_DATE_RANGES]
+
+
+def test_month_precision_without_a_year_keeps_the_old_behaviour() -> None:
+    """没有年份时保持原样：认得出月份就给年初以外的月精度，给不出就回落。"""
+    record = dict(IEEE_SAMPLE["articles"][0])
+    record["publication_date"] = "July 2015"
+    assert importer.parse_record(record, importer.FORMAT_IEEE_RAW).values["publication_date"] == "2015-07-01"
+
+    record = dict(IEEE_SAMPLE["articles"][0])
+    record["publication_date"] = "2015-08-09"
+    assert importer.parse_record(record, importer.FORMAT_IEEE_RAW).values["publication_date"] == "2015-01-01"
+
+    record = dict(IEEE_SAMPLE["articles"][0])
+    record["publication_date"] = "no digits here"
+    record.pop("publication_year", None)
+    assert "publication_date" not in importer.parse_record(
+        record, importer.FORMAT_IEEE_RAW
+    ).values

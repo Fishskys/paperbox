@@ -4,6 +4,22 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **IEEE 元数据导入：会议日期区间不再让整份文件被拒收**（`app/services/metadata_import.py`）。
+  真实 IEEE 批次的 `publication_date` 写的是区间（`"17-19 Oct. 2025"`、`"18-20 June 2014"`），
+  而解析器在认出月份后把这串里的**所有数字拼起来**当年份（`17192025`、`18202014`），
+  `date()` 于是抛 `ValueError: year … is out of range`，整个载荷被 422 拒收。
+  实测 `ieee_tools` 的两份数据分别有 750/1103、3808/5933 条会踩到。
+  现在年份只认那个**独立的四位数字**（新助手 `_year_in_text`，先认 1900–2199 再退回 1000–2999），
+  月份表也补上了 IEEE 实际使用的**缩写**（`Oct.` / `Sept.` / `Nov.` / `Feb.`）—— 此前缩写记录会
+  静默丢掉月份，还会被 `digits[:4]` 取成 `1719` 这种假年份。`_year_from` 同样改用该助手，
+  所以日期串里没有 `publication_year` 时也能读出年份。
+  验证：新增 4 个回归用例（`tests/test_ieee_import.py`，共 34 个）；真机干跑两份真实数据
+  从 422 变为 `HTTP 200 / total=1103`、`HTTP 200 / total=5933`（`dry_run=true`，未写库）。
+
 ## [0.4.1] - 2026-10-08
 
 ### Added
