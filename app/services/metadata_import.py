@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from datetime import date, datetime
@@ -57,20 +58,23 @@ CSL_PAPER_TYPES: dict[str, str] = {
     "standard": venues.PAPER_TYPE_STANDARD,
 }
 
-_IEEE_MONTHS = (
-    "january",
-    "february",
-    "march",
-    "april",
-    "may",
-    "june",
-    "july",
-    "august",
-    "september",
-    "october",
-    "november",
-    "december",
-)
+#: 月份词 → 月份号。IEEE 的 ``publication_date`` 用**缩写**（``"17-19 Oct. 2025"``、
+#: ``"Feb. 2022"``、``"14-18 Sept. 2015"``），只有少数记录写全名（``"June 2014"``）。
+#: 原实现只认全名，于是缩写记录静默丢掉月份（还被 ``digits[:4]`` 取到 ``1719`` 这种
+#: 假年份）；全名记录则走上"把数字拼成年份"的崩溃路径。两条一起在 2026-10-10 修。
+#: 三字母前缀即可覆盖全名（``june``/``july`` 由 ``jun``/``jul`` 区分，``sept.`` 由 ``sep``）。
+_IEEE_MONTH_NUMBERS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+_IEEE_MONTH_TOKEN_RE = re.compile("|".join(_IEEE_MONTH_NUMBERS))
+
+
+def _month_in_text(lowered: str) -> int | None:
+    """Month number for the first month word in an (already casefolded) date string."""
+    match = _IEEE_MONTH_TOKEN_RE.search(lowered)
+    return _IEEE_MONTH_NUMBERS[match.group(0)] if match else None
 
 
 @dataclass
@@ -171,23 +175,48 @@ def _pages(start: Any, end: Any) -> str | None:
     return first or last
 
 
+#: 一个**独立**的四位数字（左右都不能紧邻别的数字）。用它在自由文本里找年份：
+#: IEEE 的日期是区间（``"17-19 Oct. 2025"``），把数字拼起来会得到 ``17192025``，
+#: 取前四位会得到 ``1719`` —— 两者都不是年份，年份是那个独立的四位数字。
+_YEAR_TOKEN_RE = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+
+
+def _year_in_text(text: str) -> int | None:
+    """Pick a plausible year out of a free-form date string, or ``None``.
+
+    先认 1900–2199（学术数据的现实范围，且能把 ``"17-19 Oct. 2025"`` 里的 2025
+    同 ``1719`` 这类拼接产物区分开），再退回到 1000–2999。多个候选时取最左边那个，
+    与旧实现"取前四位"的取向一致（``"2013-2015"`` 仍取 2013）。
+    """
+    tokens = [int(match.group(1)) for match in _YEAR_TOKEN_RE.finditer(text)]
+    for candidate in tokens:
+        if 1900 <= candidate <= 2199:
+            return candidate
+    for candidate in tokens:
+        if 1000 <= candidate <= 2999:
+            return candidate
+    return None
+
+
 def _month_precision_date(value: Any, year: Any) -> str | None:
-    """``"July 2015"`` -> ``"2015-07-01"`` (IEEE reports month precision)."""
+    """``"July 2015"`` -> ``"2015-07-01"`` (IEEE reports month precision).
+
+    也接受区间写法（``"17-19 Oct. 2025"`` -> ``"2025-10-01"``）：年份只认那个独立的
+    四位数字，**不再把字符串里的数字拼起来**（那会把会议日期算成 ``17192025``，
+    让 ``date()`` 抛 ``ValueError`` 并导致整份文件被 422 拒收 —— 2026-10-10 修）。
+    """
     text = _text(value)
     fallback_year = _int(year)
     if text:
         lowered = text.casefold()
-        for index, month in enumerate(_IEEE_MONTHS, start=1):
-            if month in lowered:
-                parsed_year = _int("".join(ch for ch in text if ch.isdigit()) or None)
-                chosen = parsed_year or fallback_year
-                if chosen:
-                    return date(chosen, index, 1).isoformat()
-        digits = "".join(ch for ch in text if ch.isdigit())
-        if len(digits) >= 4:
-            parsed_year = _int(digits[:4])
-            if parsed_year:
-                return date(parsed_year, 1, 1).isoformat()
+        month = _month_in_text(lowered)
+        found = _year_in_text(text)
+        if month is not None:
+            chosen = found or fallback_year
+            if chosen:
+                return date(chosen, month, 1).isoformat()
+        elif found:
+            return date(found, 1, 1).isoformat()
     if fallback_year:
         return date(fallback_year, 1, 1).isoformat()
     return None
@@ -213,11 +242,7 @@ def _year_from(value: Any) -> int | None:
         year = int(value)
         return year if 1000 <= year <= 2999 else None
     text = str(value).strip()
-    digits = "".join(ch for ch in text if ch.isdigit())
-    if len(digits) >= 4:
-        year = int(digits[:4])
-        return year if 1000 <= year <= 2999 else None
-    return None
+    return _year_in_text(text)
 
 
 def _record_digest(record: Mapping[str, Any]) -> str:
