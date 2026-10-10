@@ -261,7 +261,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 1. **只填空**：列里已有值就不覆盖，但照样记一条 `is_current=false` 的声明（历史不丢，可回滚）。
 2. **一个例外**：`pdf_heuristic` 的值可以被任何结构化来源覆盖。结构化来源**之间不比较权威性**——分歧保留现值并登记为冲突。
 
-字段特例（`_special_winner:163`）：`abstract` 取最长、`authors` 取最多、`year` 冲突时保现值。
+字段特例（`_special_winner:163`）：`abstract` 取最长、`authors` 取最多、`year` 冲突时保现值 ——
+**仅限结构化来源之间**（2026-10-10 补）：弱来源（`pdf_heuristic`/`filename`）不参与这条，
+因为它不是"截断得更短"而是"读错了"，且错读的列表往往更长。
 
 落库与报告：`apply_decision:263` → `merge_values:320`（批量）→ `conflict_report:375`；复核清单由 `recorded_conflicts:533` 生成，**只列"真冲突"**（`is_current=false` 且值不同、来源不是 `pdf_heuristic`、论文未删）——"结构化覆盖启发式"是规则 2 的正常工作，不出现在清单里。
 

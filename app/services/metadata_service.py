@@ -48,6 +48,53 @@ _TITLE_BOILERPLATE = re.compile(
 _FOOTER = re.compile(r"^(?:\d{1,3}|page \d+|\d+\s*of\s*\d+)$", re.IGNORECASE)
 _CAPITALISED_WORD = re.compile(r"^[A-Z\u00c0-\u00de][\w'’\-\.]*$")
 _NAME_NOISE = re.compile(r"[*†‡§¶◦●✳∗°\d]+")
+#: Lowercase name particles that legitimately appear inside a real name
+#: ("Ludwig van Beethoven", "Maria de la Cruz"). Anything else lowercase inside a
+#: name-shaped line means the line is prose, not a byline.
+_NAME_PARTICLES = frozenset(
+    {
+        "al", "ben", "bin", "da", "de", "del", "della", "den", "der", "di", "dos",
+        "du", "el", "ibn", "la", "le", "mac", "mc", "o", "san", "st", "ten",
+        "ter", "van", "vda", "vel", "von", "y",
+    }
+)
+#: Words that never belong to a person's name. Their presence in a candidate line
+#: is the cheapest signal that the line is a title, a caption or abstract prose --
+#: which is exactly how a mis-parsed page used to smuggle fragments into ``authors``
+#: ("Collaborative Platform", "for Social", "we propose an automated").
+_NAME_STOPWORDS = frozenset(
+    {
+        # 注意：不要放单字母词（"a"）。它和名字里的中间名首字母 "A." 撞车，
+        # 而小写的 "a" 本来就会被下面"每个词必须首字母大写/是姓名粒子"这一关挡掉。
+        "an", "and", "any", "are", "as", "at", "be", "based", "between", "both",
+        "but", "by", "can", "design", "do", "does", "during", "each", "efficient",
+        "for", "from", "framework", "good", "has", "have", "how", "in", "into",
+        "is", "it", "its", "may", "method", "more", "most", "new", "not", "of",
+        "on", "or", "our", "out", "over", "paper", "results", "show", "shows",
+        "such", "system", "than", "that", "the", "their", "then", "there", "these",
+        "they", "this", "those", "through", "to", "toward", "towards", "under",
+        "up", "use", "used", "uses", "using", "via", "was", "we", "were", "what",
+        "when", "where", "which", "while", "who", "will", "with", "within",
+        "without", "would",
+        # Nouns that show up in titles, front matter and affiliations but not in a
+        # person's name. They are what made capitalised *phrases* pass the shape gate
+        # ("Collaborative Platform", "Additional Key Words", "Ant Group",
+        # "Graduate Student Member"). Deliberately not a big blocklist: only words
+        # that cannot be a given or family name in this corpus.
+        "additional", "automation", "collaborative", "edited", "editor", "editorial",
+        "graduate", "group", "inc", "institute", "language", "laboratory", "member",
+        "peer", "phrase", "phrases", "platform", "research", "review", "science",
+        "student", "understanding", "university", "volume", "words",
+    }
+)
+#: Lines that end the author block just as reliably as "Abstract" does. Camera-ready
+#: PDFs print ACM/IEEE front matter between the byline and the abstract, and every
+#: one of these lines used to be fed to the name splitter.
+_AUTHOR_BLOCK_END = re.compile(
+    r"^(?:additional\s+key\s+words|key\s+words|keywords|index\s+terms|phrases|"
+    r"ccs\s+concepts|acm\s+reference\s+format|abstract)\b[:\s]",
+    re.IGNORECASE,
+)
 
 
 def arxiv_id_from_url(url: str | None) -> str | None:
@@ -194,11 +241,15 @@ def detect_authors(pages: Sequence[PageText], title: str | None = None) -> list[
     Names are taken line by line: e-mail addresses, affiliations and footnotes
     are skipped, comma/``and``-separated lists are split, and a run of bare
     capitalised names on one line (common in camera-ready PDFs) is split into
-    two-word names.
+    two-word names. Two guards keep the page's *other* text out of the byline: the
+    title's own fragments are dropped (a wrapped title is otherwise indistinguishable
+    from a row of names), and every candidate has to pass :func:`_plausible_author`,
+    which rejects lines containing prose words.
     """
     lines = _candidate_lines(pages, limit=1)
     if not lines:
         return []
+    title_words = _title_word_set(title)
     start = 0
     if title:
         normalized_title = re.sub(r"\s+", " ", title).strip().casefold()
@@ -213,13 +264,17 @@ def detect_authors(pages: Sequence[PageText], title: str | None = None) -> list[
         if not stripped:
             continue
         folded = stripped.casefold()
-        if _ABSTRACT_MARKER.match(stripped) or _SECTION_MARKER.match(stripped):
-            break
-        if folded.startswith(("keywords", "index terms", "abstract")):
+        if (
+            _ABSTRACT_MARKER.match(stripped)
+            or _AUTHOR_BLOCK_END.match(stripped)
+            or _SECTION_MARKER.match(stripped)
+        ):
             break
         if _EMAIL.search(stripped) or _is_boilerplate(stripped):
             continue
         if re.search(r"\d{4}", stripped) and "@" in stripped:
+            continue
+        if _is_title_fragment(stripped, title_words):
             continue
         names = _names_from_line(stripped)
         for name in names:
@@ -230,6 +285,29 @@ def detect_authors(pages: Sequence[PageText], title: str | None = None) -> list[
         if len(authors) >= 20:
             break
     return authors
+
+
+def _title_word_set(title: str | None) -> frozenset[str]:
+    """Content words of the title, for spotting the title's own fragments."""
+    if not title:
+        return frozenset()
+    return frozenset(word for word in re.split(r"\W+", title.casefold()) if len(word) > 1)
+
+
+def _is_title_fragment(line: str, title_words: frozenset[str]) -> bool:
+    """True when every content word of ``line`` also appears in the title.
+
+    A title that wraps over two lines never satisfies the "is the whole title on
+    this line" probe in :func:`detect_authors`, so its tail used to reach the name
+    splitter -- and the even-word-count branch cheerfully cut it into two-word
+    "names": "Collaborative Platform", "for Social", "Science Automation".
+    """
+    if not title_words:
+        return False
+    words = [word for word in re.split(r"\W+", line.casefold()) if len(word) > 1]
+    if len(words) < 2:
+        return False
+    return all(word in title_words for word in words)
 
 
 def _names_from_line(line: str) -> list[str]:
@@ -260,6 +338,14 @@ def _strip_author_noise(name: str) -> str:
 
 
 def _plausible_author(name: str) -> bool:
+    """Whether a candidate string looks like a person's name.
+
+    Shape only -- no name list, no language model. Every word must start with a
+    capital (or be a known particle such as ``van``/``de``), and a single stopword
+    anywhere disqualifies the candidate. That last check is what keeps prose out:
+    "for Social", "from Topology" and "we propose an automated" all parse as
+    capitalised word pairs, which is why they ended up in ``paper_authors``.
+    """
     if not (3 <= len(name) <= 80):
         return False
     if _AFFILIATION.search(name) or _EMAIL.search(name):
@@ -267,6 +353,18 @@ def _plausible_author(name: str) -> bool:
     words = name.split()
     if not (1 < len(words) <= 5):
         return False
+    if any(word.casefold().strip(".,;:") in _NAME_STOPWORDS for word in words):
+        return False
+    for word in words:
+        core = word.strip(".,;:'\u2019-")
+        if not core:
+            return False
+        if core.casefold() in _NAME_PARTICLES:
+            continue
+        # ``str.isupper()`` 而不是 ``_CAPITALISED_WORD``：后者的大写区间只到拉丁-1
+        # （U+00DE），会把 "Łukasz Kaiser" 这种名字判成不合法（真机误伤过）。
+        if not core[0].isupper():
+            return False
     return all(re.search(r"[A-Za-z\u4e00-\u9fff]", word) for word in words)
 
 

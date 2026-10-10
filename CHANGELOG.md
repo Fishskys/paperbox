@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **PDF 启发式不再把标题碎片与摘要句子当成人名**（`app/services/metadata_service.py`）。
+  真机语料 30 篇里有 8 篇的作者名单被污染（`Collaborative Platform`、`for Social`、
+  `we propose an automated`、`Additional Key Words`…），根因是两条：① **标题跨两行**时
+  "整标题在某一行里"的探测失败，标题尾行落进了姓名切分器，而该分支对偶数个词的行走
+  "按词对切人名"（正好把 `A Human-AI Collaborative Platform for Social Science Automation`
+  切成 `Collaborative Platform` / `for Social` / `Science Automation`）；② 形状判定太松，
+  任何"首字母大写的词对"都算人名。现在补两道门：标题碎片（内容词全部出现在标题里）直接跳过；
+  候选人必须**每个词首字母大写或姓名字**（`van`/`de`/`la`…），且不含 `for`/`from`/`we`/`the`
+  一类功能词与论文学术名词（`platform`/`group`/`member`…）。首字母判定改用 Unicode 感知的
+  `str.isupper()`，`Łukasz` 这种拉丁扩展字符不再被误杀；单字母中间名（`Frans A. Oliehoek`）
+  也不再与英文冠词 `a` 撞车。实测：语料 30 篇逐篇对照，**改进 23 篇 / 不变 5 篇 / 回归 0 篇**。
+
+- **合并规则 4 的"更长者胜"不再让弱来源赢过结构化来源**（`app/services/metadata_merge.py`）。
+  规则 2 原先只写了"结构化来源可以覆盖弱来源"，没写反过来 —— 于是 PDF 启发式的错读列表
+  （10 项，含标题碎片）靠"最长列表"盖住了 PDF 内嵌元数据里的干净 7 个人名，同一篇的 `title`
+  却是内嵌的赢（那里没有字段特例，走"保现值"）。现在补上镜像的一支：弱来源对结构化值 → 保留现值、
+  登记冲突（`a weak source cannot outgrow a structured one`）；弱来源对弱来源 → 同样保留现值
+  （否则修好的抽取器重新解析也救不回来：旧的垃圾更长，永远赢）。规则 4 只在结构化来源之间生效。
+
+- **新增 `scripts/repair_heuristic_authors.py`**：把上面那个规则缺口已经造成的落库结果按修好的
+  规则重放一遍。默认 dry-run，`--apply` 才写库；只处理"当前作者声明来自弱来源、且有结构化备选"
+  的论文，并且**两重证据门槛**——当前名单确实含形状不合法的项，且备选值本身干净（真机上见过
+  内嵌值是 `msi`、而启发式那份是 14 个真名，硬修过去就是毁数据）。跑完在
+  `logs/app/repair-heuristic-authors.json` 落一份报告，含"维持原判"与"需人工复核"两栏。
+
 ### Added
 
 - **`/health` 增加解析后端 docling 探针**（`app/api/health.py`、`scripts/healthcheck.py`）。`services`
