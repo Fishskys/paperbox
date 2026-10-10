@@ -39,7 +39,7 @@ cd paperbox
 cp infra/.env.example infra/.env     # 容器配置
 cp .env.example .env                 # 应用配置
 
-# 3) 起四个依赖容器
+# 3) 起依赖容器（postgres / opensearch / minio / embedding；要用本机 docling 就加 --profile local-docling）
 cd infra && docker compose up -d && cd ..
 
 # 4) Python 环境（按 uv.lock 建 .venv）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.4.1 starting`；`curl http://127.0.0.1:8077/health` 四个依赖都是 `ok` |
+| 6) 启动 | 日志出现 `paperbox 0.4.1 starting`；`curl http://127.0.0.1:8077/health` 五个依赖都是 `ok`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空） |
 
 一键自检（推荐）：
 
@@ -67,7 +67,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 uv run python scripts/healthcheck.py
 ```
 
-它会逐项检查四个依赖、应用健康接口、索引文档数与检索管道，最后打印 `RESULT: all dependencies reachable`。
+它会逐项检查五个依赖（未配 `DOCLING_URL` 时 docling 那行显式 `skip`）、应用健康接口、索引文档数与检索管道，最后打印 `RESULT: all dependencies reachable`。
 
 > **Windows 开发机**：依赖容器跑在 WSL2 里，第 3 步换成
 > `wsl -e bash -lc "cd /mnt/<盘>/.../paperbox/infra && docker compose up -d"`；
@@ -278,7 +278,7 @@ cd infra && docker compose --profile local-docling up -d docling
 
 | 形态 | 做法 | 适用 |
 |---|---|---|
-| A. 应用直跑宿主（推荐） | 四个依赖容器跑 docker，应用用 `uv run uvicorn` 或 systemd 托管，依赖地址填 `127.0.0.1` | 单机部署、最省事 |
+| A. 应用直跑宿主（推荐） | 依赖容器（postgres / opensearch / minio / embedding，另可按需 `--profile local-docling` 起 docling）跑 docker，应用用 `uv run uvicorn` 或 systemd 托管，依赖地址填 `127.0.0.1` | 单机部署、最省事 |
 | B. 应用也容器化 | `docker compose -f docker-compose.yml up -d --build`（根目录那份 compose 只打包应用） | 要统一编排时 |
 
 形态 B 的两个要点：依赖地址要么指向宿主网关 `host.docker.internal`（根 compose 已配 `extra_hosts`），
@@ -391,7 +391,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 方法 | 端点 | 说明 | 参数 |
 |---|---|---|---|
 | GET | `/` | 服务名、版本、文档地址 | 无 |
-| GET | `/health` | 应用与四个依赖（PG / OpenSearch / MinIO / Embedding）健康状态，免鉴权 | 无 |
+| GET | `/health` | 应用与五个依赖（PG / OpenSearch / MinIO / Embedding / docling）健康状态，免鉴权；docling 未配 `DOCLING_URL` 时报 `disabled` | 无 |
 | GET | `/api/consistency` | 三端只读对账：逐篇核对「文件记录 ↔ 对象存储对象」「切块记录 ↔ 索引文档」；响应另含两份普查 `parser_backends`（解析后端）与 `embedding_models.{chunks,documents}`（切块与索引文档各按 embedding 模型计数，`unknown` = 记录该列之前入库的） | `limit`（默认 200，1–1000）、`parser_papers`（默认 `false`，为 `true` 时附上每个解析后端下的存活论文清单） |
 
 ### 2.3 导入（五个入口）

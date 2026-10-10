@@ -81,6 +81,9 @@ def main() -> int:
     minio = env.get("MINIO_ENDPOINT", "localhost:9000")
     minio_host, minio_port = host_port(minio if "://" in minio else f"http://{minio}")
     emb_url = env.get("EMBEDDING_URL", "http://localhost:8090")
+    # 解析后端可能不在本机（本项目部署在 NAS 上，见 infra/docling/fnos/），所以只探 HTTP；
+    # DOCLING_URL 为空表示这套部署只用 pypdf 解析 —— 那不是故障，跳过并说明。
+    docling_url = env.get("DOCLING_URL", "").strip()
     app_port = env.get("PAPER_API_PORT", "8077")
     index = env.get("OPENSEARCH_ALIAS", "paper_chunks_current")
 
@@ -91,6 +94,10 @@ def main() -> int:
     ok &= check_http("opensearch", os_url, "/_cluster/health")
     ok &= check_http("minio", f"http://{minio_host}:{minio_port}", "/minio/health/live")
     ok &= check_http("embedding", emb_url, "/health")
+    if docling_url:
+        ok &= check_http("docling", docling_url, "/health")
+    else:
+        print("  skip docling      DOCLING_URL 未配置（解析后端不是 docling）")
     ok &= check_http("api", f"http://127.0.0.1:{app_port}", "/health")
 
     try:

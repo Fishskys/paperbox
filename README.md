@@ -29,7 +29,7 @@ uv run python scripts/create_index.py
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 ```
 
-另开一个终端自检：`uv run python scripts/healthcheck.py`（四个依赖 + 应用 + 检索管道逐项检查），
+另开一个终端自检：`uv run python scripts/healthcheck.py`（五个依赖 + 应用 + 检索管道逐项检查），
 交互式接口文档在 <http://127.0.0.1:8077/docs>。
 
 > 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pypdf 解析，
@@ -136,7 +136,7 @@ paperbox/
 | 分组 | 方法 | 端点 | 说明 |
 |---|---|---|---|
 | 服务 | GET | `/` | 服务名与版本 |
-| 服务 | GET | `/health` | 应用与四个依赖的健康状态 |
+| 服务 | GET | `/health` | 应用与五个依赖（含解析后端 docling）的健康状态 |
 | 服务 | GET | `/api/consistency` | 三端（数据库 / 对象存储 / 检索库）只读对账 |
 | 导入 | POST | `/api/papers/ingest` | 按 URL 导入 |
 | 导入 | POST | `/api/papers/ingest/file` | 上传单个 PDF |

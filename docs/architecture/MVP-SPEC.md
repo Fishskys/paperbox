@@ -79,7 +79,7 @@ POST   /api/search                  检索（keyword / semantic / hybrid）
 
 ### GET /health 响应
 ```json
-{"status":"ok","version":"0.1.0","services":{"postgres":"ok|error","opensearch":"ok|error","minio":"ok|error","embedding":"ok|error"}}
+{"status":"ok","version":"0.1.0","services":{"postgres":"ok|error","opensearch":"ok|error","minio":"ok|error","embedding":"ok|error","docling":"ok|error|disabled"}}
 ```
 （各依赖做轻量探测，不可用时该字段为 `"error"`，整体 status 仍为 ok；embedding 探测 GET /health）
 
