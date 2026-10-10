@@ -49,7 +49,10 @@ class ProvenanceEntry(BaseModel):
     confidence: float | None = None
     is_current: bool = False
     decided_by: str
+    #: 声明写入账本的时刻（机器语义）。
     decided_at: datetime | None = None
+    #: 人类裁决这一行的时刻（``NULL`` = 没有人类裁决过）；与 ``decided_by`` 配对（2026-10-10）。
+    decision_at: datetime | None = None
 
 
 class PaperMetadataOut(BaseModel):
@@ -185,6 +188,8 @@ class ConflictOut(BaseModel):
     #: 不用再查一次（2026-10-10）。
     provenance_id: str | None = None
     decided_at: datetime | None = None
+    #: 始终为 ``NULL`` —— 清单只列**未决**分歧；留字段是为了与账本同形（2026-10-10）。
+    decision_at: datetime | None = None
 
 
 class ReviewOut(BaseModel):

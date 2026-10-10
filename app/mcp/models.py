@@ -162,7 +162,10 @@ class ProvenanceClaimView(BaseModel):
     source_id: str | None = None
     confidence: float | None = None
     decided_by: str | None = None
+    #: 声明写入账本的时刻。
     decided_at: datetime | None = None
+    #: 人类裁决这一行的时刻（``None`` = 没裁决过）。
+    decision_at: datetime | None = None
 
 
 class PaperDetailData(BaseModel):

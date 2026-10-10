@@ -6,6 +6,48 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-10
+
+**这一版把"时间"这件事收干净**：全栈时区统一 `Asia/Shanghai`，以及一个被真机排查逼出来的
+数据模型缺口 —— `decided_at` 名字像裁决时刻，实际上只在声明写入账本时赋值，于是"这几条冲突
+什么时候被裁决的"只能去翻访问日志。
+
+### Added
+
+- **`paper_field_provenance.decision_at`**（迁移 `a41f7c2d9b30`）：人类**裁决**这一行的时刻。
+  `NULL` = 没有任何人类碰过它。三个裁决入口都会盖：`conflicts/dismiss`（保留现值）、
+  `metadata/rollback`（被顶掉的那条 + 被扶正的那条）、手工 `PATCH` 元数据（新写的那条 claim）。
+  新增助手 `record_human_decision()` 与 `set_field(human=True)` 把"`decided_by` 与 `decision_at`
+  一起写"变成默认路径 —— 此前只写前者，才有这次排查。
+  刻意**不按 `decided_by` 猜**：合并引擎在导入一份人工来源时也写 `decided_by='manual'`，那是
+  归属不是裁决，用猜的会把导入时刻冒充成裁决时刻（有用例钉住这一条）。
+  接口与 MCP 一并透出：`GET /api/papers/{id}/metadata` 的账本、复核清单条目、
+  `paper_get` 的来源视图都带 `decision_at`。
+- **`scripts/backfill_decision_times.py`**：按**应用访问日志**回填历史裁决时刻（默认 dry-run）。
+  只认"时间戳 + `POST .../metadata/{conflicts/dismiss,rollback}` + 2xx"的行，且要求某篇论文的
+  请求数与待回填行数相等才一一对上，否则整篇跳过 —— 拿不到证据就留空，不拿 `decided_at` 冒充。
+
+### Changed
+
+- **全栈时区统一 `Asia/Shanghai`**（此前一处都没设：四个容器是 UTC，compose 与 `.env` 模板
+  都没提，应用日志的 `+0800` 只是"碰巧宿主是 CST"）：
+  - API 进程：`app/core/config.py` 导入期 `os.environ.setdefault("TZ", "Asia/Shanghai")` + `time.tzset()`；
+  - `infra/docker-compose.yml` 五个服务各带 `TZ=${TZ:-Asia/Shanghai}`，**Postgres 另带 `PGTZ`**
+    （就是它让容器内 `psql` 不再回退 UTC）；**MinIO 镜像没有 tzdata**，只给变量会打印
+    `13:53 Asia`（名字认了、偏移仍是 0），所以额外把宿主 zoneinfo 同时挂到 `/etc/localtime`
+    与同名 zoneinfo 路径；
+  - WebUI 进程同口径；两仓库的 `.env.example` / `infra/.env.example` 都写明。
+  - 语义不变：`timestamptz` 存绝对时刻，改的是解释口径、不动数据；接口一律返回带偏移的 ISO 串
+    （UTC），浏览器自己转本地。
+  - 新测试 `tests/test_timezone.py`：钉住进程偏移（日志时间戳带 `+0800`），并**静态守卫每个
+    compose 服务都必须声明时区** —— 漏掉的那个服务就是下次的排查对象。
+
+### Fixed
+
+- **文档不再把 `decided_at` 当裁决时刻**：`UserManual` §1.3.6 与 Q21、`08-metadata.md` 的字段表、
+  `metadata-architecture.md` 的字段说明都改成两个时间戳的分工，并补上"`psql` 看到的时间比本地
+  早 8 小时"的排查路径（会话时区 vs 绝对时刻）。
+
 ## [0.5.0] - 2026-10-10
 
 **这一版把两件「只能在终端里做」的事交给了 API 与界面**：整库重建索引，以及字段冲突的人工裁决。

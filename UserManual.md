@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.5.0**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.5.1**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.5.0 starting`；`curl http://127.0.0.1:8077/health` 五个依赖都是 `ok`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空） |
+| 6) 启动 | 日志出现 `paperbox 0.5.1 starting`；`curl http://127.0.0.1:8077/health` 五个依赖都是 `ok`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空） |
 
 一键自检（推荐）：
 
@@ -230,9 +230,12 @@ docker exec paperbox-postgres psql -U postgres -d paperbox -tAc "show timezone; 
 
 - **`timestamptz` 存的是绝对时刻**。改 `TZ` 不改任何已存数据，只改"怎么解释/渲染"；
   所以历史时间戳不会因为这次统一而需要迁移。
-- **时间戳的语义看列名**：`decided_at` 目前只由 `server_default=func.now()` 在**写入声明**时赋值，
-  两条人工裁决接口（`conflicts/dismiss`、`metadata/rollback`）只改 `decided_by`、**不更新它** ——
-  所以它不是"裁决时刻"，而是那条声明的写入时刻。
+- **两个时间戳别混**（2026-10-10 起）：`decided_at` = 这条声明**写入账本**的时刻（`server_default`），
+  `decision_at` = 人类**裁决**它的时刻（`NULL` = 没有人类碰过）。此前只有前者，于是"这几条冲突
+  什么时候被裁决的"只能去翻访问日志 —— 0.5.1 补了 `decision_at`（迁移 `a41f7c2d9b30`），
+  三个裁决入口（`conflicts/dismiss`、`metadata/rollback`、手工 PATCH）都会盖。
+  **0.5.1 之前**的裁决没有这一列；要用访问日志补历史值，跑
+  `uv run python scripts/backfill_decision_times.py`（默认试运行，`--apply` 才写）。
 
 ### 1.4 容器配置（`infra/.env`）
 
@@ -736,7 +739,7 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 
 - `timestamptz` 存的是**绝对时刻**，`psql` 输出成什么样只取决于会话时区；跨层对时间时显式写
   `select decided_at at time zone 'Asia/Shanghai'`，别拿两层的裸字符串直接比。
-- 列名不等于语义：`decided_at` 只在**声明写入**时由 `server_default` 赋值，两条人工裁决接口
-  （`conflicts/dismiss`、`metadata/rollback`）**不更新它** —— 它不是"裁决时刻"。要查"谁在什么时候
-  裁决的"，看应用访问日志（形如 `POST /api/papers/<id>/metadata/conflicts/dismiss ... 200` 那条，
-  带 `+0800` 时间戳）。
+- 两个时间戳别混：`decided_at` 是**声明写入账本**的时刻，`decision_at` 才是**人类裁决**的时刻
+  （0.5.1 起；`NULL` = 没裁决过）。账本（`GET /api/papers/{id}/metadata` 的 `provenance`）两个都返回，
+  所以"谁在什么时候裁决的"直接读接口即可。**0.5.1 之前**的裁决只有访问日志能证，
+  正因如此当时排查绕了一圈；要补历史值就 `uv run python scripts/backfill_decision_times.py`。

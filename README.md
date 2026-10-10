@@ -177,7 +177,7 @@ paperbox/
 
 ## 6. 声明
 
-本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.5.0**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+本项目基于 [MIT License](LICENSE) 开源，版权归 Fishskys 所有；当前版本 **0.5.1**，变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 使用中遇到问题或有想法，欢迎提 [Issue](https://github.com/Fishskys/paperbox/issues) 与 Pull Request；
 如果它对你的工作有帮助，欢迎点一个 ⭐ [Star](https://github.com/Fishskys/paperbox)。

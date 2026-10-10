@@ -105,7 +105,8 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | `field` | `title` / `abstract` / `year` / `venue` / `volume` / `issue` / `pages` / `authors` / `publication_date` / `paper_type` / `identifier:doi` / `tag:ieee_terms` … |
 | `value` | JSONB（标量或结构：作者列表、标识符） |
 | `source_id` | FK paper_sources（NULL = 系统/人工） |
-| `confidence` / `decided_by` / `decided_at` | 置信度 / `initial` \| `structured_override` \| `manual` / 裁决时间 |
+| `confidence` / `decided_by` | 置信度 / `initial` \| `structured_override` \| `manual` \| `dismissed`（谁定的这个值、或谁裁决的分歧） |
+| `decided_at` / `decision_at` | 声明**写入账本**的时刻（`server_default`，渲染账本时间用它）/ 人类**裁决**它的时刻（`NULL` = 没裁决过；2026-10-10 起） |
 | `is_current` | 该字段当前生效值 |
 
 **约束**：`UNIQUE(paper_id, field) WHERE is_current`（每字段一个当前值）；**历史行永不删除**（回滚 = 把历史行置回 `is_current=true`）。

@@ -138,7 +138,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `confidence` | FLOAT | 结构化来源 1.0、首页启发式 0.5 |
 | `is_current` | BOOLEAN NOT NULL，默认 `false` | 每个字段只有一条为真 |
 | `decided_by` | VARCHAR(32) NOT NULL，默认 `initial` | `initial` / `structured_override` / `manual`（`provenance_service.py:37-39`） |
-| `decided_at` | DATETIME NOT NULL，默认 `now()` | |
+| `decided_at` | DATETIME NOT NULL，默认 `now()` | **这条声明写入账本**的时刻（机器语义）；名字是历史遗留，别当裁决时刻用 |
+| `decision_at` | DATETIME NULL | 人类**裁决**这一行的时刻（`dismiss` / `rollback` / 手工 PATCH）；`NULL` = 没有人类碰过（2026-10-10 迁移 `a41f7c2d9b30`） |
 | `identifier_id` | UUID，FK→`paper_identifiers.id` | `identifier:<scheme>` 类声明指向具体标识符行 |
 
 `field` 的取值空间（`provenance_service.py:61-106`）：
