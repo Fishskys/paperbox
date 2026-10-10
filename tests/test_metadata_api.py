@@ -480,3 +480,42 @@ def test_apply_reports_an_unknown_paper(client, session_factory) -> None:
 
     assert body["skipped"] == 1
     assert body["errors"][0]["error"] == "paper not found"
+
+def test_the_import_report_splits_detected_from_imported_and_failed(client) -> None:
+    """回执给三层数字：检测到 / 导入成功 / 失败，并点名失败条目（2026-10-10）。
+
+    一条读不出来的记录不该让整批 422；它被跳过、写进 ``failures``，其余照常。
+    解析器对畸形输入很稳，所以这里用注入式失败来确定性地造出"那条坏记录"。
+    """
+    from unittest import mock
+
+    from app.services import metadata_import as importer
+
+    payload = {
+        "total_records": 3,
+        "articles": [
+            dict(IEEE_SAMPLE["articles"][0], doi=f"10.1109/TEST.{index}") for index in range(3)
+        ],
+    }
+    payload["articles"][1] = dict(payload["articles"][1], doi="10.1109/TEST.BROKEN")
+    real_parse = importer.parse_record
+
+    def explode(record, fmt):
+        if record.get("doi") == "10.1109/TEST.BROKEN":
+            raise ValueError("year 18202014 is out of range")
+        return real_parse(record, fmt)
+
+    with mock.patch.object(importer, "parse_record", side_effect=explode):
+        response = client.post("/api/metadata/import", json=payload)
+
+    assert response.status_code == 200, "一条坏记录不再把整批变成 422"
+    body = response.json()
+    assert body["detected"] == 3
+    assert body["total"] == 2
+    assert body["failed"] == 1
+    assert body["skipped"] == 0
+    assert body["total"] + body["failed"] + body["skipped"] == body["detected"]
+    failure = body["failures"][0]
+    assert failure["index"] == 1
+    assert failure["identifier"] == "10.1109/TEST.BROKEN"
+    assert "year 18202014 is out of range" in failure["reason"]

@@ -32,11 +32,24 @@ def print_report(report: importer.ImportReport, path: Path) -> None:
     print(f"file:      {path}")
     print(f"format:    {report.format}")
     print(f"mode:      {'dry run (nothing written)' if report.dry_run else 'applied'}")
+    # 一眼能看懂的三行：检测到多少、成功多少、失败多少（2026-10-10 owner 口径）。
+    print(
+        f"检测到元数据条目 {report.detected} 条，"
+        f"导入成功 {report.total} 条，失败 {report.failed} 条"
+        + (f"，因 limit 跳过 {report.skipped} 条" if report.skipped else "")
+    )
     print(
         f"records:   {report.total} "
         f"(matched={report.matched} shell={report.created_shell} "
         f"ambiguous={report.ambiguous} unmatched={report.unmatched} unchanged={report.unchanged})"
     )
+    if report.failures:
+        print(f"失败条目（{len(report.failures)}）：")
+        for item in report.failures[:20]:
+            where = item.get("identifier") or "（无标识字段）"
+            print(f"  #{item.get('index')} {where}  原因：{item.get('reason')}")
+        if len(report.failures) > 20:
+            print(f"  ... 另有 {len(report.failures) - 20} 条")
     if report.conflicts:
         print(f"conflicts: {len(report.conflicts)}")
         for item in report.conflicts[:20]:

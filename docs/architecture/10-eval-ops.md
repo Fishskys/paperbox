@@ -105,7 +105,7 @@
 | 脚本 | 报告 | 顶层键 |
 |---|---|---|
 | `scripts/bulk_ingest.py` | `evals/ingest-report.json` | `started_at/finished_at/base_url/total/completed/failed/skipped/items[]`（`bulk_ingest.py:372-381`） |
-| `scripts/bulk_ingest_dir.py` | `evals/ingest-dir-report.json`（`bulk_ingest_dir.py:47`） | `started_at/finished_at/mode/root/glob/base_url/counts/error/items[]`（`bulk_ingest_dir.py:574-584`） |
+| `scripts/bulk_ingest_dir.py` | `evals/ingest-dir-report.json`（`bulk_ingest_dir.py:47`） | `started_at/finished_at/mode/root/glob/base_url/counts/error/items[]`（`bulk_ingest_dir.py:575-585`） |
 
 ## 4. 调用链（从入口到落地，逐跳，带函数名）
 
@@ -174,8 +174,8 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | 数据目录变量只认 `infra/.env` | `docker compose` 只读 compose 同目录的 `.env`，写仓库根那份无效 | `AGENTS.md` §3.3、`.env.example:413` |
 | `Dockerfile` 的监听参数 | CMD 用 `sh -c exec` 展开 `PAPER_API_HOST/PORT`，此前写死导致 compose 传参**被静默忽略** | `Dockerfile:31-33`、`docs/progress/project.md:509` |
 | 评测脚本不硬编码 WSL | `_docker_argv` 按 `PAPERBOX_DOCKER_PREFIX` → `docker` → `wsl -e docker` 选择，Linux 上可用 | `build_eval_set.py:26-43`、`docs/progress/project.md:510` |
-| `--resume` 的键是**相对路径** | 报告里 `relative`（或退回 `path`）；`status=skipped` 的行不算已完成 | `bulk_ingest_dir.py:224-238` |
-| 429 以服务端 `Retry-After` 为准 | 有该头就用它（封顶 60s），没有才指数退避 + 25% 抖动 | `bulk_ingest_dir.py:180-208` |
+| `--resume` 的键是**相对路径** | 报告里 `relative`（或退回 `path`）；`status=skipped` 的行不算已完成 | `bulk_ingest_dir.py:225-239` |
+| 429 以服务端 `Retry-After` 为准 | 有该头就用它（封顶 60s），没有才指数退避 + 25% 抖动 | `bulk_ingest_dir.py:181-209` |
 | 精排超时会**静默降级** | `RERANK_TIMEOUT` 默认 10 秒撑不住慢档精排（jina 0.276 s/候选，`top_k=10` ≈14s），表现为“能搜到但没重排”（`rerank.model=null`）；现役 int8 档只要 ≈3.2s，但队列单线程时等待由队列决定 | `docs/progress/project.md:468-472`、`.env.example:130-132` |
 | `purge_deleted` 只清索引与对象 | `paper_chunks` 行**故意保留**（软删语义），且只处理 `deleted_at` 非空的行 | `purge_deleted.py:13-14, 37-39` |
 
@@ -227,7 +227,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 | `check_consistency.py` | 三端（PG/MinIO/OpenSearch）只读对账，列出缺失/孤儿/删除残留（解析产物单列 `cache objects`，不算 problem） | `--no-fail`、`--parser-papers` | 是（只读） | 只读 | 有漂移 `1` / 无漂移 `0` / `--no-fail` 恒 `0`（`check_consistency.py:103-139`） |
 | `refresh_index_metadata.py` | 批量改写已索引文档的元数据快照（不重算向量） | `--dry-run`、`--paper-id`、`--limit`、`--no-mapping` | 是（同元数据同输出） | **写**：`PUT _mapping` + 每个 chunk 一条 partial update | 全成功 `0` / 有失败 `1`（`refresh_index_metadata.py:94-141`） |
 | `bulk_ingest.py` | 按 arXiv 清单串行导入 | `--file`、`--limit`、`--resume`、`--dry-run`、`--out`、`--timeout`、`--poll-interval`、`--base-url`、`--api-key` | 否（`--resume` 靠 `arxiv_id` 跳过） | **写**：批量导入 | 无失败 `0`；有失败 `1`；`--dry-run` `0`；`--limit<=0` `2`（`bulk_ingest.py:260-262, 289, 393`） |
-| `bulk_ingest_dir.py` | 导入一个文件夹 | `--root`(必需)、`--glob`、`--no-recursive`、`--limit`、`--via-http`、`--resume`、`--dry-run`、`--max-file-mb`、`--out`、`--timeout`、`--poll-interval` | 否（`--resume` 按相对路径跳过） | **写**：批量导入 | 无 error 且 `failed=0` 且 `rejected=0` → `0`，否则 `1`；root 非目录 / `--limit<=0` → `2`（`bulk_ingest_dir.py:482-484, 503-505, 591`） |
+| `bulk_ingest_dir.py` | 导入一个文件夹 | `--root`(必需)、`--glob`、`--no-recursive`、`--limit`、`--via-http`、`--resume`、`--dry-run`、`--max-file-mb`、`--out`、`--timeout`、`--poll-interval` | 否（`--resume` 按相对路径跳过） | **写**：批量导入 | 无 error 且 `failed=0` 且 `rejected=0` → `0`，否则 `1`；root 非目录 / `--limit<=0` → `2`（`bulk_ingest_dir.py:483-485, 504-506, 592`） |
 | `create_index.py` | 幂等建索引/别名；`--migrate-from` 迁移并切别名 | `--index`、`--alias`、`--migrate-from`、`--poll-interval`、`--task-timeout` | 是 | **写**：建索引/切别名（**不删旧索引**） | `verify` `0/1`（`create_index.py:122`）；`migrate` `0/1/2`（`:161-184, 246`） |
 | `build_eval_set.py` | 由 spec 生成定标集 | `--spec` | 是（同输入逐字节同输出） | 只读（`psql` 只发 select） | 正常 `0`；`psql` 失败抛 `RuntimeError`（`:58-59`） |
 | `build_arxiv_ids.py` | 从 arXiv API 生成语料清单 | 无 | 否（话题/条数为常量，结果随 arXiv 变化） | 否（只打外网 + 写文件） | 正常 `0` |

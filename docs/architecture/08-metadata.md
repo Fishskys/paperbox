@@ -389,6 +389,6 @@ CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_m
 **已知行为（不是缺陷，读代码时会撞上）**：
 
 - `papers.external_id`（`models.py:89`）全仓无引用，是历史遗留列。
-- `ImportReport.unmatched`（`metadata_import.py:593`）有字段无自增点，恒为 0；没有证据的记录一律计入 `created_shell`。
+- `ImportReport.unmatched`（`metadata_import.py:663`）有字段无自增点，恒为 0；没有证据的记录一律计入 `created_shell`。
 - `PrimaryOutcome.needs_reindex`（`paper_service.py:479-481`）只有单测引用，app 无调用方——主版本翻牌由同一次流水线继续索引完成。
 - `papers.doi` / `papers.arxiv_id` 是镜像列，改它们必须同时改 `paper_identifiers`（走 `replace_identifier` + `mirror_legacy_columns`）。

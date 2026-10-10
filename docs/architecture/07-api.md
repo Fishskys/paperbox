@@ -277,5 +277,5 @@
 9. **MCP 侧的四项细化未做**（非缺口，见 `docs/architecture/11-mcp-agent-interface.md` §12）：审计字段细化（T-A4）、错误码细化（T-A7）、预算与翻页边界细化（T-A8）、作业等待语义细化（T-A9）。
 10. **MCP 无速率限制**：审计能看见谁调了多少，但没有任何 per-key 限流（"限流未做"是明确记录在案的缺口）。
 11. **MCP 只在 Hermes 与 codex 上做过真机验收**：Claude Code（本机未安装）与自研 harness 的片段**未验证**；SSRF 闸残留 DNS rebinding 风险（解析与连接之间的竞态，已在 `net_guard.py` 明文标注）。
-9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` §2（`:29-53`）未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` §3.4 的导入示例含无效的 `-F source_type=…`（README 已精简，原 §3.4 示例移除）且响应示例字段名写作 `total_records`（同上），代码实际返回 `total`（`app/schemas/metadata.py:132`、`app/services/metadata_import.py:600-612`）；`docs/architecture/MVP-SPEC.md:9` 提示该文件部分表述已过期。
+9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` §2（`:29-53`）未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` §3.4 的导入示例含无效的 `-F source_type=…`（README 已精简，原 §3.4 示例移除）且响应示例字段名写作 `total_records`（同上），代码实际返回 `total`（`app/schemas/metadata.py:135`、`app/services/metadata_import.py:653-674`）；`docs/architecture/MVP-SPEC.md:9` 提示该文件部分表述已过期。
 10. **鉴权零单测**：401/403 与 `X-API-Key` 回退路径均无测试；测试统一绕过依赖，因此「precondition 挂了但鉴权漏配」这类回归不会被发现。
