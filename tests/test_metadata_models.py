@@ -141,6 +141,7 @@ def test_provenance_columns() -> None:
         "is_current",
         "decided_by",
         "decided_at",
+        "decision_at",
         "identifier_id",
     }
     assert PaperFieldProvenance.value.type.__class__.__name__ == "JSONB"

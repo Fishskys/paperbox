@@ -230,6 +230,7 @@ def set_field(
     confidence: float | None = None,
     decided_by: str = DECIDED_INITIAL,
     override: bool = False,
+    human: bool = False,
 ) -> PaperFieldProvenance | None:
     """Record a claim *and* write it onto the paper (the usual entry point).
 
@@ -237,6 +238,9 @@ def set_field(
     (that is what the merge engine does with the loser of a conflict).
     ``override=True`` publishes the value even where the merge rules would only
     fill a blank -- the manual-update and rollback paths.
+    ``human=True`` stamps ``decision_at``: 这次写入背后**有人的点击**。合并引擎在导入一份
+    人工来源时也会写 ``decided_by='manual'``，但那是归属不是裁决（人的动作发生在导入之前、
+    时间也无从得知），所以它**不传** ``human`` —— 用 ``decided_by`` 猜会把导入时刻冒充裁决时刻。
     """
     claim = record_claim(
         session,
@@ -249,8 +253,29 @@ def set_field(
         make_current=True,
     )
     if claim is not None:
+        if human:
+            record_human_decision(claim)
         write_field(session, paper, field, value, override=override)
     return claim
+
+
+def record_human_decision(
+    row: PaperFieldProvenance,
+    decided_by: str | None = None,
+    *,
+    at: datetime | None = None,
+) -> PaperFieldProvenance:
+    """记一次人工裁决：``decision_at``（给了 ``decided_by`` 就一并写）。
+
+    存在的理由：``decided_at`` 是**声明写入账本**的时刻，与"人什么时候裁决的"是两件事。
+    此前裁决路径只写 ``decided_by``，于是"谁在什么时候裁决的"只能去翻访问日志 ——
+    真机排查时就这样绕了一圈（2026-10-10）。裁决入口一律走这里，免得下次新增入口时
+    又只写一半。
+    """
+    if decided_by is not None:
+        row.decided_by = decided_by
+    row.decision_at = at or datetime.now(timezone.utc)
+    return row
 
 
 def rollback_field(
@@ -276,7 +301,11 @@ def rollback_field(
         and superseded.id != row.id
         and superseded.decided_by != DECIDED_DISMISSED
     ):
-        superseded.decided_by = DECIDED_DISMISSED
+        record_human_decision(superseded, DECIDED_DISMISSED)
+    # 被扶正的那条也盖个时间戳：人刚判过"这条才是对的"。``decided_by`` 保持原样
+    # （它记的是**谁写了这个值**，不是谁裁决的），所以可能出现"机器登记 + 人类裁决过"，
+    # 那正是事实。
+    record_human_decision(row)
     if scheme := scheme_of_identifier_field(field):
         _restore_identifier(session, paper, scheme, row.value)
     else:
@@ -551,7 +580,9 @@ def provenance_summary(
                 "confidence": row.confidence,
                 "is_current": bool(row.is_current),
                 "decided_by": row.decided_by,
+                #: ``decided_at`` = 这条声明写入账本的时刻；``decision_at`` = 人裁决它的时刻。
                 "decided_at": row.decided_at,
+                "decision_at": row.decision_at,
             }
             for row in rows
         ]
@@ -574,10 +605,12 @@ def dismiss_claim(
     """Mark a losing claim as reviewed: the human kept the current value.
 
     Nothing is deleted and nothing about the claim changes except ``decided_by``, so
-    the row stays in the ledger and ``rollback`` can still restore it later. What
+    行 stays in the ledger and ``rollback`` can still restore it later. What
     changes is that ``recorded_conflicts`` stops reporting it -- without this the
     review list could be looked at but never emptied (2026-10-10).
     """
+    # ``decided_by`` 与 ``decision_at`` 一起写：只写前者的话，"什么时候裁决的"就只能去翻
+    # 访问日志（2026-10-10 真机排查的教训，见 :func:`record_human_decision`）。
     row = session.get(PaperFieldProvenance, provenance_id)
     if row is None or row.paper_id != paper_id or row.field != field:
         raise LookupError(
@@ -587,7 +620,7 @@ def dismiss_claim(
         raise LookupError(
             "that claim is the current value -- there is no disagreement to dismiss"
         )
-    row.decided_by = DECIDED_DISMISSED
+    record_human_decision(row, DECIDED_DISMISSED)
     session.flush()
     return row
 
@@ -612,6 +645,9 @@ def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]
 
     Each entry carries the losing claim's ``provenance_id`` so the caller can settle
     it without another lookup (``POST /api/papers/{id}/metadata/rollback``).
+
+    排序按落败声明的 ``decided_at``（= 它**写入账本**的时刻）倒序 —— 清单里全是未决分歧，
+    ``decision_at`` 在这里恒为 ``NULL``，排不了也排不出意义（2026-10-10 澄清）。
     """
     statement = (
         select(PaperFieldProvenance)

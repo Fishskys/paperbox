@@ -183,6 +183,9 @@ def patch_metadata(
                 confidence=1.0,
                 decided_by=prov.DECIDED_MANUAL,
                 override=True,
+                # 人工编辑就是一次裁决：盖 decision_at（只写 decided_by 的话，
+                # "什么时候改的"只能去翻访问日志）
+                human=True,
             )
             result.fields.append(key)
             continue
@@ -200,6 +203,9 @@ def patch_metadata(
                 confidence=1.0,
                 decided_by=prov.DECIDED_MANUAL,
                 override=True,
+                # 人工编辑就是一次裁决：盖 decision_at（只写 decided_by 的话，
+                # "什么时候改的"只能去翻访问日志）
+                human=True,
             )
             identifiers.replace_identifier(
                 session,
@@ -229,6 +235,9 @@ def patch_metadata(
                 confidence=1.0,
                 decided_by=prov.DECIDED_MANUAL,
                 override=True,
+                # 人工编辑就是一次裁决：盖 decision_at（只写 decided_by 的话，
+                # "什么时候改的"只能去翻访问日志）
+                human=True,
             )
             result.fields.append(key)
             continue
@@ -246,6 +255,9 @@ def patch_metadata(
                 confidence=1.0,
                 decided_by=prov.DECIDED_MANUAL,
                 override=True,
+                # 人工编辑就是一次裁决：盖 decision_at（只写 decided_by 的话，
+                # "什么时候改的"只能去翻访问日志）
+                human=True,
             )
             result.fields.append(key)
             continue
@@ -264,6 +276,9 @@ def patch_metadata(
                 confidence=1.0,
                 decided_by=prov.DECIDED_MANUAL,
                 override=True,
+                # 人工编辑就是一次裁决：盖 decision_at（只写 decided_by 的话，
+                # "什么时候改的"只能去翻访问日志）
+                human=True,
             )
             result.fields.append(key)
             continue

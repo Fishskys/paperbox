@@ -320,6 +320,7 @@ def register(server: MCPServer) -> None:
                         confidence=item.get("confidence"),
                         decided_by=item.get("decided_by"),
                         decided_at=item.get("decided_at"),
+                        decision_at=item.get("decision_at"),
                     )
                     for item in items
                     if item.get("is_current")

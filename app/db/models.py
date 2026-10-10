@@ -649,9 +649,17 @@ class PaperFieldProvenance(Base):
     decided_by: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'initial'")
     )
+    #: 这条声明**写入账本**的时刻（``server_default``）—— 不是裁决时刻。
+    #: 名字是历史遗留；渲染"账本时间"用的就是它。裁决时刻见 ``decision_at``。
     decided_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    #: 人类**裁决**这一行的时刻（2026-10-10 新增，见迁移 ``a41f7c2d9b30``）。
+    #: ``NULL`` = 没有任何人类碰过它（机器合并的 ``initial`` / ``structured_override``）。
+    #: 三种情况会写它：① ``conflicts/dismiss``（保留现值）；② ``metadata/rollback``
+    #: （被顶掉的那条 + 被扶正的那条）；③ 手工 PATCH 元数据（那一格新写的 claim）。
+    #: 与 ``decided_by`` 分工：后者说"谁定的"，它说"什么时候定的"。
+    decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: Set when the claim is about a specific identifier row (``identifier:doi``).
     identifier_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("paper_identifiers.id", ondelete="SET NULL")
