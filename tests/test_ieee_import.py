@@ -603,3 +603,105 @@ def test_month_precision_without_a_year_keeps_the_old_behaviour() -> None:
     assert "publication_date" not in importer.parse_record(
         record, importer.FORMAT_IEEE_RAW
     ).values
+
+
+# --------------------------------------------------------------------------- #
+# 单条解析失败不再拖垮整批（2026-10-10，owner 口径）
+#
+# 解析器本身对畸形输入很稳（dict/list/None 进 date/authors 都不抛，见
+# tmp/probe_bad_records.py 的探测），所以这里用**注入式失败**来确定性地验证容错层：
+# 要求是"跳过这一条、其余照常、并在回执里点名 + 给原因"。
+# --------------------------------------------------------------------------- #
+
+from unittest import mock  # noqa: E402
+
+
+def _payload_with_one_bad_record(count: int = 4) -> dict:
+    articles = [
+        dict(IEEE_SAMPLE["articles"][0], doi=f"10.1109/TEST.{index}")
+        for index in range(count)
+    ]
+    broken = min(2, count - 1)
+    articles[broken] = dict(articles[broken], doi="10.1109/TEST.BROKEN")
+    return {"total_records": count, "articles": articles}
+
+
+def test_a_single_unparseable_record_is_skipped_and_named(db_session) -> None:
+    payload = _payload_with_one_bad_record()
+    real_parse = importer.parse_record
+
+    def explode(record, fmt):
+        if record.get("doi") == "10.1109/TEST.BROKEN":
+            raise ValueError("year 18202014 is out of range")
+        return real_parse(record, fmt)
+
+    with mock.patch.object(importer, "parse_record", side_effect=explode):
+        report = importer.import_payload(db_session, payload, apply=False)
+
+    assert report.detected == 4, "检测到的条目数要含失败那条"
+    assert report.failed == 1
+    assert report.total == 3, "其余三条照常进入匹配"
+    assert report.total + report.failed + report.skipped == report.detected
+    assert len(report.failures) == 1
+    failure = report.failures[0]
+    assert failure["index"] == 2
+    assert failure["identifier"] == "10.1109/TEST.BROKEN"
+    assert "year 18202014 is out of range" in failure["reason"]
+    assert failure["reason"].startswith("ValueError")
+
+
+def test_a_payload_where_every_record_fails_still_returns_a_report(db_session) -> None:
+    payload = _payload_with_one_bad_record(count=3)
+    with mock.patch.object(
+        importer, "parse_record", side_effect=ValueError("cannot read this record")
+    ):
+        report = importer.import_payload(db_session, payload, apply=False)
+
+    assert report.detected == 3
+    assert report.total == 0
+    assert report.failed == 3
+    assert len(report.failures) == 3
+
+
+def test_the_failure_entry_falls_back_to_the_title_when_there_is_no_doi() -> None:
+    from app.services.metadata_import import _record_hint
+
+    assert _record_hint({"doi": "10.1/x"}) == "10.1/x"
+    assert _record_hint({"title": "A paper"}) == "A paper"
+    assert _record_hint({"author": "someone"}) is None
+    assert _record_hint("not a mapping") is None
+
+
+def test_the_report_arithmetic_holds_when_a_limit_is_applied(db_session) -> None:
+    payload = _payload_with_one_bad_record(count=5)
+    real_parse = importer.parse_record
+
+    def explode(record, fmt):
+        if record.get("doi") == "10.1109/TEST.BROKEN":
+            raise ValueError("boom")
+        return real_parse(record, fmt)
+
+    with mock.patch.object(importer, "parse_record", side_effect=explode):
+        report = importer.import_payload(db_session, payload, apply=False, limit=2)
+
+    assert report.detected == 5
+    assert report.failed == 1
+    assert report.total == 2
+    assert report.skipped == 2, "剩下两条是被 limit 截断的"
+    assert report.total + report.failed + report.skipped == report.detected
+
+
+def test_the_strict_parser_still_raises_for_callers_that_want_that(db_session) -> None:
+    """``parse_records``（严格版）保持抛异常：attach/apply 依赖它单条读取已存记录。"""
+    payload = _payload_with_one_bad_record(count=2)
+    real_parse = importer.parse_record
+
+    def explode(record, fmt):
+        raise ValueError("nope")
+
+    with mock.patch.object(importer, "parse_record", side_effect=explode):
+        import pytest
+
+        with pytest.raises(ValueError):
+            importer.parse_records(payload)
+        del real_parse

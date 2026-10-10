@@ -129,12 +129,21 @@ class ImportReportOut(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    #: 载荷里检测到的条目数（含解析失败与 limit 截断的）。
+    detected: int = 0
+    #: 进入匹配的条目数（= detected − failed − skipped）。
     total: int = 0
     matched: int = 0
     created_shell: int = 0
     ambiguous: int = 0
     unmatched: int = 0
     unchanged: int = 0
+    #: 解析失败被跳过的条目数（明细见 failures，单条脏数据不再让整批 422）。
+    failed: int = 0
+    #: 被 limit 截断、未处理的条目数。
+    skipped: int = 0
+    #: ``[{index, identifier, reason}]``。
+    failures: list[dict[str, Any]] = Field(default_factory=list)
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
     sources: list[dict[str, Any]] = Field(default_factory=list)
     dry_run: bool = True

@@ -8,6 +8,19 @@
 
 ### Fixed
 
+- **元数据导入：单条解析失败不再让整批 422**（`app/services/metadata_import.py`、`app/schemas/metadata.py`、
+  `scripts/import_metadata.py`）。回执从"一个总数"变成三层数字：
+  `detected`（检测到的条目数）／`total`（成功进入匹配的）／`failed`（读不出来的，明细在 `failures[]`：
+  记录序号、尽力取到的标识、异常类型与原因），另有 `skipped`（被 `limit` 截断的）；CLI 直接打印
+  「检测到元数据条目 N 条，导入成功 M 条，失败 K 条」并逐条列出失败原因。严格版 `parse_records`
+  保持抛异常，供 attach/apply 单条读取已存记录用。
+
+- **目录导入的 glob 匹配在所有平台都大小写不敏感**（`app/services/local_scan.py`、
+  `scripts/bulk_ingest_dir.py`）。口径原本依赖 `fnmatch` + `os.path.normcase`，而后者只在 Windows
+  折叠大小写 —— 同一份 `**/*.pdf` 在 Windows 能匹配 `d.PDF`、到 Linux 就匹配不到，`INGEST_LOCAL_ROOTS`
+  目录里的大写扩展名文件会被静默漏掉。现在两边都显式 `fnmatchcase` + `casefold`，并加了一条测试断言
+  「服务端与脚本两份匹配器必须给出同一结论」。
+
 - **IEEE 元数据导入：会议日期区间不再让整份文件被拒收**（`app/services/metadata_import.py`）。
   真实 IEEE 批次的 `publication_date` 写的是区间（`"17-19 Oct. 2025"`、`"18-20 June 2014"`），
   而解析器在认出月份后把这串里的**所有数字拼起来**当年份（`17192025`、`18202014`），

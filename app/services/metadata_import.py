@@ -582,6 +582,48 @@ def parse_records(payload: Any) -> list[ParsedRecord]:
     return [parse_record(record, fmt) for record in records]
 
 
+def _record_hint(raw: Any) -> str | None:
+    """Best-effort identifier for a record that could not be parsed.
+
+    Reads only top-level scalar fields, so a broken record can still be named in
+    the report rather than showing up as an anonymous row index.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    for key in ("doi", "DOI", "article_number", "id", "title"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:200]
+    return None
+
+
+def parse_records_tolerant(
+    payload: Any,
+) -> tuple[list[ParsedRecord], list[dict[str, Any]]]:
+    """``(records, failures)`` -- one unparseable record never fails the batch.
+
+    A single bad record used to abort the whole payload (``ValueError`` -> 422),
+    which meant one malformed date could make a 5000-record file unimportable.
+    Now the record is skipped and named in ``failures``; the caller reports it
+    and imports the rest (2026-10-10, owner's request).
+    """
+    fmt, raw_records = records_from_payload(payload)
+    records: list[ParsedRecord] = []
+    failures: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_records):
+        try:
+            records.append(parse_record(raw, fmt))
+        except Exception as exc:  # noqa: BLE001 - the input is data, not code
+            failures.append(
+                {
+                    "index": index,
+                    "identifier": _record_hint(raw),
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    return records, failures
+
+
 def _source_ref(
     *,
     doi: str | None,
@@ -611,25 +653,38 @@ def _source_ref(
 class ImportReport:
     """The report ``POST /api/metadata/import`` and the CLI return."""
 
+    #: 载荷里检测到的条目数（含解析失败与被 ``limit`` 截断的）。
+    detected: int = 0
+    #: 真正进入匹配的条目数（= detected − failed − skipped）。
     total: int = 0
     matched: int = 0
     created_shell: int = 0
     ambiguous: int = 0
     unmatched: int = 0
     unchanged: int = 0
+    #: 解析失败被跳过的条目数，明细见 ``failures``（2026-10-10：单条脏数据不再让整批失败）。
+    failed: int = 0
+    #: 因 ``limit`` 没有处理的条目数。
+    skipped: int = 0
     conflicts: list[dict[str, Any]] = dataclass_field(default_factory=list)
     sources: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    #: ``[{index, identifier, reason}]``，失败条目的定位信息与原因。
+    failures: list[dict[str, Any]] = dataclass_field(default_factory=list)
     dry_run: bool = True
     format: str = FORMAT_GENERIC
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "detected": self.detected,
             "total": self.total,
             "matched": self.matched,
             "created_shell": self.created_shell,
             "ambiguous": self.ambiguous,
             "unmatched": self.unmatched,
             "unchanged": self.unchanged,
+            "failed": self.failed,
+            "skipped": self.skipped,
+            "failures": self.failures,
             "conflicts": self.conflicts,
             "sources": self.sources,
             "dry_run": self.dry_run,
@@ -872,9 +927,14 @@ def import_payload(
     importer: str = "metadata_import",
     limit: int | None = None,
 ) -> ImportReport:
-    """Parse a payload and import it (the API/CLI entry point)."""
-    parsed = parse_records(payload)
-    return import_records(
+    """Parse a payload and import it (the API/CLI entry point).
+
+    Parsing is per record: a record that cannot be read is skipped and listed in
+    ``report.failures`` instead of failing the whole payload (2026-10-10). Only a
+    payload that is not a supported shape at all still raises ``ValueError``.
+    """
+    parsed, failures = parse_records_tolerant(payload)
+    report = import_records(
         session,
         parsed,
         apply=apply,
@@ -882,6 +942,11 @@ def import_payload(
         importer=importer,
         limit=limit,
     )
+    report.detected = len(parsed) + len(failures)
+    report.failed = len(failures)
+    report.failures = failures
+    report.skipped = len(parsed) - report.total
+    return report
 
 
 def import_file(
@@ -931,5 +996,6 @@ __all__ = [
     "parse_ieee_record",
     "parse_record",
     "parse_records",
+    "parse_records_tolerant",
     "records_from_payload",
 ]
