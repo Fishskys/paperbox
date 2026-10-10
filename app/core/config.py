@@ -11,8 +11,23 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from functools import lru_cache
 from pathlib import Path
+
+#: 进程时区（2026-10-10）：全栈统一 Asia/Shanghai，可用环境变量 ``TZ`` 覆盖。
+#:
+#: 为什么要在这里（导入期）定：日志里的时间、`.env` 里不带偏移的时间戳、以及
+#: 会话内 ``datetime.now()`` 的语义都取决于进程时区，而宿主环境并不保证它 ——
+#: 容器默认 UTC、WSL 与 Windows 各自的默认值也不同，同一份日志里出现两种偏移
+#: 比完全没有时区更难查（真机上就发生过：`docker exec ... psql` 看到的比本地早
+#: 8 小时，被当成"数据写错时间"排查了一轮）。
+#:
+#: 注意：这只改**解释与渲染**口径。数据库里 ``timestamptz`` 存的是绝对时刻，
+#: 改 TZ 不动任何已存数据；接口返回的仍是带偏移的 ISO 串（UTC），浏览器自己转本地。
+os.environ.setdefault("TZ", "Asia/Shanghai")
+if hasattr(time, "tzset"):  # POSIX 有 tzset；Windows 交给系统时区
+    time.tzset()
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
