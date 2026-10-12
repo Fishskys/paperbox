@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -10,9 +13,8 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-
-from app.api.downloads import stream_original
 
 from app.core.logging import get_logger
 from app.core.security import require_admin, require_write
@@ -55,6 +57,12 @@ router = APIRouter(
 )
 
 NOT_FOUND = "paper not found"
+
+#: Read size when streaming an original from the object store.
+STREAM_CHUNK_BYTES = 64 * 1024
+
+#: Characters allowed in the ASCII fallback of a download filename.
+_ASCII_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def _load_paper(session: Session, paper_id: str):
@@ -118,13 +126,70 @@ def get_paper(paper_id: str, session: Session = Depends(get_db)) -> PaperOut:
     return PaperOut.model_validate(payload)
 
 
+def disposition(filename: str) -> str:
+    """RFC 6266 ``Content-Disposition`` for an arbitrary (possibly CJK) name.
+
+    Starlette encodes headers as latin-1, so an unquoted ``filename=<中文名>.pdf``
+    raised ``UnicodeEncodeError`` and the download answered 500 -- a stored file
+    with a non-ASCII name could not be fetched at all (found on the live corpus,
+    2026-10-04). The fix is the standard two-part header: an ASCII fallback plus a
+    percent-encoded UTF-8 ``filename*`` that every real client prefers.
+    """
+    name = (filename or object_storage.ORIGINAL_FILENAME).replace('"', "")
+    if name.isascii():
+        # A double quote inside a quoted filename would end the token early and
+        # produce a malformed header (review 2026-10-05, P3).
+        return f'attachment; filename="{name}"'
+    fallback = _ASCII_SAFE.sub("_", name) or object_storage.ORIGINAL_FILENAME
+    return (
+        f'attachment; filename="{fallback}"; '
+        f"filename*=UTF-8''{quote(name, safe='')}"
+    )
+
+
+def stream_original(record) -> StreamingResponse:
+    """Stream one stored file with an attachment disposition.
+
+    The only download path since 2026-10-12 (the signed ``/api/downloads`` route is
+    gone): REST readers and MCP's ``paper_get_file`` -- which hands out this route's
+    URL -- get the same bytes the same way, and nothing buffers a PDF in memory.
+    """
+    try:
+        stream = object_storage.open_stream(record.object_key, bucket=record.bucket)
+    except object_storage.ObjectNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="paper file not found"
+        ) from exc
+    except object_storage.ObjectStorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="object storage unavailable",
+        ) from exc
+
+    filename = record.filename or object_storage.ORIGINAL_FILENAME
+    media_type = record.content_type or object_storage.DEFAULT_PDF_CONTENT_TYPE
+    headers = {"Content-Disposition": disposition(filename)}
+    if record.size_bytes is not None:
+        headers["Content-Length"] = str(record.size_bytes)
+
+    def _iterate():
+        with stream as body:
+            while True:
+                chunk = body.read(STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(_iterate(), media_type=media_type, headers=headers)
+
+
 @router.get("/{paper_id}/file")
 def get_paper_file(paper_id: str, session: Session = Depends(get_db)):
     """Stream the stored original PDF with an attachment disposition.
 
-    The API key is the credential here; the agent-facing alternative is the
-    short-lived signed URL from ``GET /api/downloads/{paper_id}`` (same bytes,
-    same streaming code).
+    A public read (2026-10-12): no credential, no signature, no expiry. MCP's
+    ``paper_get_file`` hands out this exact URL, so both surfaces download the same
+    way.
     """
     paper = _load_paper(session, paper_id)
     record = papers.original_file(paper)

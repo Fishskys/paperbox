@@ -16,7 +16,6 @@ import pytest
 
 from app.api import (
     consistency,
-    downloads,
     health,
     ingestion,
     jobs,
@@ -27,13 +26,13 @@ from app.api import (
 )
 from app.core import security
 
-#: Endpoints that must answer without consulting a credential — 13 reads plus the
-#: two that were already open (`/health`, HMAC-signed `/api/downloads/{paper_id}`).
+#: Endpoints that must answer without consulting a credential — 12 reads plus
+#: `/health` (the signed `/api/downloads/{paper_id}` route was retired on
+#: 2026-10-12; every download goes through `GET /api/papers/{paper_id}/file`).
 PUBLIC: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/health"),
         ("GET", "/api/consistency"),
-        ("GET", "/api/downloads/{paper_id}"),
         ("GET", "/api/jobs"),
         ("GET", "/api/jobs/queue"),
         ("GET", "/api/jobs/{job_id}"),
@@ -71,7 +70,6 @@ GATED: dict[tuple[str, str], str] = {
 MODULES = (
     health,
     consistency,
-    downloads,
     ingestion,
     jobs,
     papers,

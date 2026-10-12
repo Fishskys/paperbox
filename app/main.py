@@ -21,7 +21,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app import __version__
 from app.api import ingestion as ingestion_api
 from app.api import jobs as jobs_api
-from app.api import downloads as downloads_api
 from app.api import health as health_api
 from app.api import consistency as consistency_api
 from app.api import metadata as metadata_api
@@ -80,11 +79,6 @@ async def lifespan(_: FastAPI):
                 "auth is disabled and the API listens on %s — every /api and /mcp "
                 "request is served as an anonymous admin",
                 settings.paper_api_host,
-            )
-        if not (settings.mcp_download_secret or settings.paper_api_key):
-            logger.warning(
-                "no download-signing secret (set MCP_DOWNLOAD_SECRET or "
-                "PAPER_API_KEY): signed download links will fail at creation"
             )
     # The dimension check runs before the queue starts: a deployment whose
     # EMBEDDING_DIMENSION disagrees with its model or its live index cannot
@@ -291,8 +285,6 @@ app.include_router(papers_api.router)
 app.include_router(metadata_api.router)
 app.include_router(search_api.router)
 app.include_router(search_logs_api.router)
-# Signed downloads carry their credential in the URL (no API key dependency).
-app.include_router(downloads_api.router)
 
 # --- MCP agent interface (contract: docs/architecture/11-mcp-agent-interface.md) ---
 # Built only when MCP_ENABLED=true; an empty MCP_ALLOWED_HOSTS is a startup error

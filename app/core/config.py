@@ -172,10 +172,6 @@ class Settings(BaseSettings):
     #: How long a writing tool waits for its job before handing back a job id.
     #: Must stay below the client's per-tool timeout.
     mcp_wait_seconds: int = Field(default=120, alias="MCP_WAIT_SECONDS")
-    #: Lifetime of the signed download URL returned by ``paper_get_file``.
-    mcp_download_ttl_seconds: int = Field(default=300, alias="MCP_DOWNLOAD_TTL_SECONDS")
-    #: Optional signing secret; empty derives one from ``PAPER_API_KEY``.
-    mcp_download_secret: str = Field(default="", alias="MCP_DOWNLOAD_SECRET")
     #: Tool contract version (frozen at v1, see the contract doc section 8).
     mcp_toolset: str = Field(default="v1", alias="MCP_TOOLSET")
     #: Fallback download host for clients that do not send one through the request
@@ -502,8 +498,6 @@ class Settings(BaseSettings):
             raise ValueError("MCP_MAX_CHARS_CEILING must be >= MCP_MAX_CHARS")
         if self.mcp_wait_seconds < 0:
             raise ValueError("MCP_WAIT_SECONDS must be >= 0")
-        if self.mcp_download_ttl_seconds <= 0:
-            raise ValueError("MCP_DOWNLOAD_TTL_SECONDS must be positive")
         if self.mcp_toolset not in MCP_TOOLSETS:
             raise ValueError(f"MCP_TOOLSET must be one of {sorted(MCP_TOOLSETS)}")
         if self.mcp_enabled and self.auth_enabled and not self.agent_keys and not (
@@ -528,17 +522,14 @@ class Settings(BaseSettings):
         """The well-known default key must never guard an authenticated service.
 
         With ``AUTH_ENABLED=true`` leaving ``PAPER_API_KEY=change-me`` means the
-        REST API answers to a public literal and the download-signing secret
-        (its fallback) is forgeable — so refuse to start. Keys created in the
-        database (``scripts/manage_keys.py``) do not lift this: the env value
-        would still be the signing-secret fallback. Set a real env key or an
-        ``MCP_DOWNLOAD_SECRET``.
+        write surface answers to a public literal — so refuse to start. Keys created
+        in the database (``scripts/manage_keys.py``) do not lift this: the env value
+        keeps working as a bootstrap credential. Set a real env key.
         """
         if self.auth_enabled and self.paper_api_key == "change-me" and not self.agent_keys:
             raise ValueError(
                 "AUTH_ENABLED=true refuses the default PAPER_API_KEY 'change-me': "
-                "set a real key (PAPER_API_KEY / PAPER_API_KEYS) or an "
-                "MCP_DOWNLOAD_SECRET before enabling auth"
+                "set a real key (PAPER_API_KEY / PAPER_API_KEYS) before enabling auth"
             )
         return self
 

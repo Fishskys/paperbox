@@ -18,7 +18,7 @@ Claude Code 与自研 harness 片段**未验证**（见 [#12](#12-未做与未�
 > **全部带页码与章节**；`paper_get` 报 15 块 + 7 个字段的来源账本；分页游标不重叠；`paper_get_context`
 > 窗口 5 块且恰好 1 块 `primary`；**`paper_get_file` 给的公开链接 200 / 2.2 MB 真 PDF**；
 > REST 与 MCP 同查询 **total 与排序逐位相同**（不变式 2）。
-> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、> `app/api/papers.py` 的 file 路由 + `app/api/downloads.py`（`paper_get_file` 发的就是前者，`stream_original()` 两者共用）、`app/mcp/citations.py`。
+> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、> `app/api/papers.py` 的 file 路由（`paper_get_file` 发的就是它，`stream_original()` 与 `disposition()` 都住在这里）、`app/mcp/citations.py`。
 > 未做项见 **[#12](#12-未做与未验证事项当前口径)**（四个细化项 + 速率限制；均非缺口）。
 
 ---

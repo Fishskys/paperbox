@@ -17,7 +17,6 @@ import json
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,7 +38,7 @@ from app.schemas.search import (
     SearchResult,
     SearchRewriteInfo,
 )
-from app.services import download_signing, search_pipeline, search_service
+from app.services import search_pipeline, search_service
 
 HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 INITIALIZE = {
@@ -62,10 +61,9 @@ READ_TOOLS = {
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def mcp_client(monkeypatch, session_factory) -> TestClient:
-    """Mounted MCP endpoint backed by an in-memory database and a stub secret."""
+    """Mounted MCP endpoint backed by an in-memory database."""
     monkeypatch.setattr(mcp_server_module, "settings", _settings())
     monkeypatch.setattr(tools_read, "SessionLocal", session_factory)
-    monkeypatch.setattr(settings, "mcp_download_secret", "test-secret")
     server = build_server()
     mounted = Starlette()
 
@@ -500,7 +498,7 @@ def test_the_public_file_route_streams_the_original(
             self.close()
 
     monkeypatch.setattr(
-        "app.api.downloads.object_storage.open_stream",
+        "app.api.papers.object_storage.open_stream",
         lambda key, bucket=None: _Body(b"%PDF-"),
     )
 
@@ -567,11 +565,12 @@ def _record(paper_id: str):
 
 
 # --------------------------------------------------------------------------- #
-# the signed route itself
+# --------------------------------------------------------------------------- #
+# the file route (the only download path; public since 2026-10-12)
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def paper_client(session_factory):
-    """A TestClient over the real app with the database and API key stubbed."""
+    """A TestClient over the real app with the database stubbed."""
 
     def _db():
         session = session_factory()
@@ -587,70 +586,28 @@ def paper_client(session_factory):
         paperbox_app.dependency_overrides.clear()
 
 
-def test_signed_route_streams_the_file(paper_client, session_factory, monkeypatch) -> None:
-    paper_id = make_paper(session_factory, chunks=1)
-    _store_original(session_factory, paper_id)
-
-    monkeypatch.setattr(settings, "mcp_download_secret", "test-secret")
-
-    class _Body(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            self.close()
-
-    monkeypatch.setattr(
-        "app.api.downloads.object_storage.open_stream",
-        lambda key, bucket=None: _Body(b"%PDF-"),
-    )
-
-    url, _ = download_signing.build_url(paper_id, "http://testserver")
-    response = paper_client.get(url.replace("http://testserver", ""))
-    assert response.status_code == 200
-    assert response.content == b"%PDF-"
-    assert response.headers["content-disposition"].startswith("attachment")
-
-
-def test_a_cjk_filename_does_not_break_the_download(paper_client, session_factory, monkeypatch) -> None:
+def test_a_cjk_filename_does_not_break_the_download() -> None:
     """Live-corpus bug: a non-ASCII filename used to answer 500.
 
     ``Content-Disposition: attachment; filename=<中文>.pdf`` is encoded as latin-1
     by Starlette, which raised ``UnicodeEncodeError`` -- so any paper whose stored
     filename was not ASCII could not be downloaded at all (found 2026-10-04).
     """
-    from app.api import downloads as downloads_api
+    from app.api import papers as papers_api
 
-    header = downloads_api.disposition("低功耗\u00a0SRAM 泄漏.pdf")
+    header = papers_api.disposition("低功耗\u00a0SRAM 泄漏.pdf")
     assert header.startswith('attachment; filename="')
     assert "filename*=UTF-8''" in header
     assert header.isascii()
     # An ASCII name stays simple, and quotes/spaces never break the header.
-    assert downloads_api.disposition("original.pdf") == 'attachment; filename="original.pdf"'
-    assert downloads_api.disposition("a b.pdf") == 'attachment; filename="a b.pdf"'
+    assert papers_api.disposition("original.pdf") == 'attachment; filename="original.pdf"'
+    assert papers_api.disposition("a b.pdf") == 'attachment; filename="a b.pdf"'
 
 
-def test_stream_original_uses_the_rfc6266_header(paper_client, session_factory, monkeypatch) -> None:
-    paper_id = make_paper(session_factory, chunks=0)
-    from app.db.models import PaperFile
-
-    session = session_factory()
-    try:
-        session.add(
-            PaperFile(
-                paper_id=paper_id,
-                kind="original",
-                object_key=f"papers/{paper_id}/original.pdf",
-                bucket="paperbox",
-                filename="低功耗 SRAM 泄漏.pdf",
-                content_type="application/pdf",
-                size_bytes=5,
-                is_primary=True,
-            )
-        )
-        session.commit()
-    finally:
-        session.close()
+def test_the_file_route_uses_the_rfc6266_header(
+    paper_client, session_factory, monkeypatch
+) -> None:
+    """The header helper is wired into the route, not just unit-tested."""
 
     class _Body(io.BytesIO):
         def __enter__(self):
@@ -659,34 +616,16 @@ def test_stream_original_uses_the_rfc6266_header(paper_client, session_factory, 
         def __exit__(self, *exc):
             self.close()
 
+    paper_id = make_paper(session_factory, chunks=0)
+    _store_original(session_factory, paper_id)
     monkeypatch.setattr(
-        "app.api.downloads.object_storage.open_stream",
+        "app.api.papers.object_storage.open_stream",
         lambda key, bucket=None: _Body(b"%PDF-"),
     )
-    monkeypatch.setattr(settings, "mcp_download_secret", "test-secret")
-    url, _ = download_signing.build_url(paper_id, "http://testserver")
-    response = paper_client.get(url.replace("http://testserver", ""))
+
+    response = paper_client.get(f"/api/papers/{paper_id}/file")
     assert response.status_code == 200
-    assert "filename*=UTF-8''" in response.headers["content-disposition"]
-
-
-def test_signed_route_refuses_a_tampered_signature(paper_client, session_factory) -> None:
-    paper_id = make_paper(session_factory, chunks=1)
-    response = paper_client.get(
-        f"/api/downloads/{paper_id}", params={"exp": 9999999999, "sig": "0" * 32}
-    )
-    assert response.status_code == 403
-
-
-def test_signed_route_refuses_an_expired_link(paper_client, session_factory) -> None:
-    paper_id = make_paper(session_factory, chunks=1)
-    expired = int(time.time()) - 5
-    response = paper_client.get(
-        f"/api/downloads/{paper_id}",
-        params={"exp": expired, "sig": download_signing.sign(paper_id, expired)},
-    )
-    assert response.status_code == 403
-    assert "expired" in response.json()["detail"]
+    assert response.headers["content-disposition"].startswith('attachment; filename="original.pdf"')
 
 
 # --------------------------------------------------------------------------- #
@@ -729,17 +668,3 @@ def test_chunk_view_marks_the_budget_cut() -> None:
     assert view.truncated is False and view.primary is False
     # Sanity: the models stay JSON-able (structuredContent has to serialise).
     assert json.loads(view.model_dump_json())["chars"] == 3
-
-
-def test_link_ttl_is_clamped_to_a_sane_window(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "mcp_download_ttl_seconds", 999999)
-    assert download_signing.ttl_seconds() == download_signing.MAX_TTL_SECONDS
-    monkeypatch.setattr(settings, "mcp_download_ttl_seconds", 1)
-    assert download_signing.ttl_seconds() == download_signing.MIN_TTL_SECONDS
-
-
-def test_build_url_expiry_matches_the_ttl() -> None:
-    url, expires_at = download_signing.build_url("p1", "http://host:8077", ttl=60)
-    assert "http://host:8077/api/downloads/p1?" in url
-    delta = expires_at - expires_at.now(expires_at.tzinfo)
-    assert timedelta(seconds=55) < delta <= timedelta(seconds=60)

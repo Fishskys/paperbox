@@ -7,8 +7,8 @@
 It adapts to the running server's auth state (detected by hitting
 ``GET /api/papers`` without a credential):
 
-* ``AUTH_ENABLED=false``: verifies anonymous admin access, /health and signed
-  downloads, then explains that tier enforcement needs ``AUTH_ENABLED=true``;
+* ``AUTH_ENABLED=false``: verifies anonymous admin access, /health and the public
+  file route, then explains that tier enforcement needs ``AUTH_ENABLED=true``;
 * ``AUTH_ENABLED=true``: verifies 401/403 semantics, the three role tiers over
   REST, tier gates on the MCP write tools (when they are registered), MCP
   handshake with a database key, and that revocation bites on the next request.
@@ -40,7 +40,6 @@ from app.core.config import settings  # noqa: E402
 from app.db.models import ApiKey  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.services import api_key_service as keys  # noqa: E402
-from app.services import download_signing  # noqa: E402
 
 BASE = f"http://127.0.0.1:{settings.paper_api_port}"
 PREFIXES = ("aaccread", "aaccwrite", "aaccadmin")
@@ -113,7 +112,7 @@ def one_live_paper_id() -> str | None:
 
 def run() -> None:
     with httpx.Client(timeout=30) as client:
-        # ---- always: health and downloads stay credential-free ---- #
+        # ---- always: health and the file route stay credential-free ---- #
         response = client.get(f"{BASE}/health")
         check(response.status_code == 200, "/health answers without a credential")
 
@@ -230,22 +229,17 @@ def run() -> None:
                     "/mcp answers anonymously while AUTH_ENABLED=false",
                 )
 
-        # ---- signed download stays credential-free ---- #
+        # ---- the file route needs no credential (2026-10-12: reads are public) ---- #
         paper_id = one_live_paper_id()
         if paper_id is None:
-            print("[SKIP] signed download: no live paper in the database")
+            print("[SKIP] file download: no live paper in the database")
         else:
-            url, _ = download_signing.build_url(paper_id, BASE)
-            signed = client.get(url)  # no Authorization header on purpose
+            download = client.get(f"{BASE}/api/papers/{paper_id}/file")
             check(
-                signed.status_code in (200, 206),
-                "signed download works without a credential",
-                f"status={signed.status_code}",
+                download.status_code in (200, 206),
+                "file download works without a credential",
+                f"status={download.status_code}",
             )
-            tampered = client.get(
-                url.replace("sig=", "sig=0" if not url.endswith("0") else "sig=1")
-            )
-            check(tampered.status_code == 403, "tampered signature is a 403")
 
 
 def main() -> int:

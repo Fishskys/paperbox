@@ -42,7 +42,6 @@ READS: list[tuple[str, str, dict | None]] = [
     ("GET", "/api/papers/{paper_id}/metadata", None),
     ("POST", "/api/search", {"query": "attention", "mode": "hybrid", "top_k": 1}),
     ("GET", "/api/search-logs", None),
-    ("GET", "/api/downloads/{paper_id}", None),  # signed link: 403 (bad/absent signature), never 401
 ]
 
 #: Paper-scoped entries use the ghost id, never a real paper.

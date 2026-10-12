@@ -22,10 +22,15 @@
 - **MCP 的 `paper_get_file` 不再发签名短链**：改成返回 `GET /api/papers/{paper_id}/file` 的绝对
   地址 —— 与 REST 读面同一个路由、同一套机制（无凭据、无签名、不过期）。`FileData` 去掉
   `expires_at`，`paper_get_file` 不再依赖 `download_signing`（签名密钥缺失这条失败路径一并消失），
-  信封 `warnings` 明说链接不含凭据也不过期。`GET /api/downloads/{paper_id}` 这条签名路由保留不动，
-  但它现在没有仓库内的生产者了。
+  信封 `warnings` 明说链接不含凭据也不过期（签名路由随即退役，见下一条）。
 - 修正 `app/main.py` 里那句说反的中间件注释（原文写「MCP auth runs outermost」，实际最外层是
   `AuthContextMiddleware`；顺带说明两个身份中间件作用面不重叠）。
+- **退役签名下载路由** `GET /api/downloads/{paper_id}`：读面公开后它保护的正是任何人都拿得到的
+  东西（`/api/papers` 可枚举 + `/api/papers/{id}/file` 免鉴权），而 MCP 已不再发它。删除
+  `app/api/downloads.py` 与 `app/services/download_signing.py`（`disposition()` / `stream_original()`
+  搬进 `app/api/papers.py`，成为**唯一**下载路径）、配置键 `MCP_DOWNLOAD_SECRET` /
+  `MCP_DOWNLOAD_TTL_SECONDS` 与其校验、以及 `lifespan` 里「缺签名密钥」的 WARNING。
+  端点数 30 → 29；公开端点 15 → 14。
 
 ### Added
 

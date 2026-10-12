@@ -166,7 +166,6 @@ paperbox/
 | 元数据 | POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL-JSON / JSON） |
 | 元数据 | POST | `/api/metadata/apply` | 提交复核决定 |
 | 元数据 | POST | `/api/metadata/sources/{source_id}/attach` | 把来源记录挂到指定论文 |
-| 论文 | GET | `/api/downloads/{paper_id}` | 签名短链下载（免 Bearer，签名即凭据，过期 403） |
 | **agent** | **POST** | **`/mcp`** | **MCP Streamable HTTP 端点**（10 个工具；默认关闭，需 `MCP_ENABLED` + Host 白名单；**不在 `/docs` 里**，见架构文档 11） |
 
 ## 6. 声明

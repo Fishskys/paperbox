@@ -185,7 +185,7 @@ uv run python scripts/healthcheck.py
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
 | `AUTH_ENABLED` | 鉴权总开关 | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`）；`true` = **写接口**（导入/重试/重建索引/元数据改动，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)）要 Bearer key，**读接口一律免鉴权**（2026-10-12 起）。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
-| `PAPER_API_KEY` | 引导管理员密钥（Bearer，agent 名 `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**（它同时是签名下载密钥的回落）；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
+| `PAPER_API_KEY` | 引导管理员密钥（Bearer，agent 名 `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
 | `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
@@ -355,9 +355,7 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 | `MCP_ALLOW_DELETE` / `MCP_ALLOW_REINDEX` / `MCP_ALLOW_METADATA_WRITE` | 三个写工具分开关 | `false` | 受总闸约束；导入工具只受总闸管 |
 | `MCP_MAX_CHARS` / `MCP_MAX_CHARS_CEILING` | 单次正文预算 / 上限 | `8000` / `32000` | 超上限**报错不裁剪** |
 | `MCP_WAIT_SECONDS` | 写工具等待作业完成的秒数 | `120` | 客户端 per-tool timeout 要 ≥ 它 |
-| `MCP_DOWNLOAD_TTL_SECONDS` 之外的下载密钥 `MCP_DOWNLOAD_SECRET` | 签名下载链接的 HMAC 密钥 | 空 | 空则回落 `PAPER_API_KEY`；轮换任一会使未过期链接全部失效（设计如此） |
 | `MCP_PUBLIC_BASE_URL` | 下载链接的对外基地址 | 空 | 仅 stdio 兜底用：正常情况下链接按 agent 实际访问的 host 拼 |
-| `MCP_DOWNLOAD_TTL_SECONDS` | `/api/downloads/{paper_id}` 签名链接有效期 | `300` | 只作用于这条签名路由；MCP 的 `paper_get_file` 发的是公开 file 路由，与它无关 |
 
 起服务（示例，把 `<IP>` 换成 agent 会访问的地址）：
 
@@ -402,7 +400,6 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 鉴权 | **读接口免鉴权**（`GET` 类 + `POST /api/search`：不带 key 直接 200，带了无效 key 也照答 200）；`AUTH_ENABLED=true` 时**写接口**要 `Authorization: Bearer <key>`，缺凭证 401、凭证不匹配 403、档位不足 403（detail 含 `insufficient role`）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套 |
 | 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
 | 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 [#1.7](#17-mcp-接入让-agent-直接查读论文)） |
-| 签名下载 | `GET /api/downloads/{paper_id}?exp=&sig=`（**免 Bearer**，签名即凭据，TTL 10–3600 s，过期或被改 403） |
 | 错误体 | `{"detail": "..."}`（422 校验错误为 FastAPI 默认结构，含 `loc`/`msg`/`type`） |
 | 幂等性 | 建索引、建快照、清理解包目录等运维接口可重复执行 |
 | 长任务 | 导入类接口返回 `202` + `job_id`，进度用作业接口轮询 |
@@ -412,7 +409,6 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 档位 | 端点 |
 |---|---|
 | 免鉴权（**读**） | `GET /health`、`GET /`、`GET /docs`；`POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review`。这 13 个业务读接口**不读凭证**：缺 key、key 写错都照常 200 |
-| 免鉴权（凭证是签名） | `GET /api/downloads/{paper_id}`：只认 URL 里的 `exp`/`sig`（HMAC），与 key 无关 |
 | write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/reindex`（批量）、`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
 | admin | `DELETE /api/papers/{paper_id}` |
 
@@ -457,7 +453,6 @@ curl -X POST http://127.0.0.1:8077/api/papers/ingest/files \
 | DELETE | `/api/papers/{paper_id}` | 删除论文（软删，返回 204） | `paper_id`（路径，**必填**） |
 | GET | `/api/papers/{paper_id}/chunks` | 该论文的切块列表 | `paper_id`（**必填**）、`limit`（默认 50）、`offset`（默认 0） |
 | GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件（需 API key） | `paper_id`（**必填**） |
-| GET | `/api/downloads/{paper_id}` | 下载 PDF 原件（**短期签名链接，无需 API key**） | `paper_id`（**必填**）、`exp`（Unix 过期时间）、`sig`（HMAC 签名）；`paper_get_file` 不发这条链接 |
 | GET | `/api/papers/{paper_id}/degradations` | 该论文的解析降级记录 | `paper_id`（**必填**）、`include_resolved`（默认 `false`） |
 | POST | `/api/papers/{paper_id}/reindex` | 重建该论文的切块与向量（返回 202） | `paper_id`（**必填**） |
 

@@ -44,7 +44,6 @@
 | GET | `/api/papers` | 论文列表 | 免 | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py` |
 | GET | `/api/papers/{paper_id}` | 单篇元数据 | 免 | — | `app/api/papers.py` 的 `list_papers()` |
 | GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | 免 | — | `app/api/papers.py` 的 `get_paper()` |
-| GET | `/api/downloads/{paper_id}` | **签名**短链下载（独立入口，免 Bearer：签名即凭据，`exp`/`sig` 过期或被改 → 403；`paper_get_file` 现在发的是 `/api/papers/{id}/file`，不是这条） | 免 | `exp`、`sig` | `app/api/downloads.py` |
 | GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | 免 | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
 | GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | 免 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
 | GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 免 | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
@@ -78,9 +77,8 @@
 | 解析（每请求一次） | `AuthContextMiddleware`（main.py）解析 Bearer → `api_key_service.authenticate(session, token)`，把身份放 `scope["state"]` 并把前缀绑进日志上下文（**纯 ASGI**；不在依赖里做，因为线程池依赖里绑 contextvar 传播不回日志上下文） | `app/main.py`、`app/services/api_key_service.py` |
 | 凭证存储 | `api_keys` 表只存 `sha256(完整密钥)`；`name`/`prefix`/`key_hash` 各唯一；三档 `read < write < admin`；env 引导行（`PAPER_API_KEY`/`PAPER_API_KEYS`）启动时 upsert 成 admin、优先于库行（恢复路径） | `app/db/models.py::ApiKey`、`app/services/api_key_service.py` |
 | 档位强制 | `require_role(min)` 工厂；写端点用 `require_write`（=write）、删除用 `require_admin`（=admin），**端点级**挂载（缺凭证 401、不匹配 403、档位不足 403 `insufficient role`）。**没有 read 档单例**：读端点不挂依赖，凭证根本不被读取（2026-10-12） | `app/core/security.py` |
-| 依赖挂载 | ingestion 整个 router `require_write`；jobs/metadata/papers 是混档 router，**只在写/admin 端点**挂依赖，读端点不挂；search / search_logs / consistency / downloads / health 整个 router 无依赖 | 各 `app/api/*.py` |
+| 依赖挂载 | ingestion 整个 router `require_write`；jobs/metadata/papers 是混档 router，**只在写/admin 端点**挂依赖，读端点不挂；search / search_logs / consistency / health 整个 router 无依赖 | 各 `app/api/*.py` |
 | 公开读 | 13 个读端点（[#2.1](#21-端点总表) 里 `Bearer=免` 的业务行）+ `GET /health`；router 构造时不带 dependencies，端点函数也不带 | 同上 |
-| 豁免（凭证是别的东西） | `GET /api/downloads/{paper_id}` 只认 URL 里的 HMAC 签名，**既不看 Bearer 也不看档位** | `app/api/downloads.py` |
 
 测试用 `app.dependency_overrides[require_write]` 绕过写档（如 `tests/test_ingest_files.py` 的 `client()`）；读端点没有依赖可绕，契约由 `tests/test_public_reads.py`（30 个路由逐条钉住谁有门谁没有）与 `tests/test_auth_rest.py`（401/403 语义与「无效凭证打读端点仍是 200」）覆盖。
 端点→档位全表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)；启动护栏（拒 `change-me`、拒零密钥、auth-off + 非回环 WARNING）见 `app/main.py::lifespan` 与 `app/core/config.py` 的 `_check_auth`。
@@ -224,7 +222,6 @@
 12. **无 CORS 中间件**：全仓 grep `CORS` 0 命中，浏览器跨源调用会失败；Hermes/脚本这类非浏览器客户端不受影响。
 13. **`/mcp` 不能有重定向**：客户端（如 Hermes）在 307 后**不会重放 `Authorization`**，所以 `/mcp` 必须在服务端内部补斜杠一次命中；断言这件事必须 `follow_redirects=False`，否则 TestClient 会自动跟随、测试等于没测。
 14. **MCP 写工具"关 = 不注册"**：`MCP_WRITE_ENABLED` 与三个 `MCP_ALLOW_*` 决定工具是否注册，不是运行时才拒绝；想确认当下能力请看 `tools/list`，不要看文档。
-15. **`/api/downloads/{paper_id}` 是唯一"凭证不是 Bearer"的端点**（读端点免鉴权是另一回事）：凭证是 URL 里的 HMAC 签名（覆盖 `paper_id:exp`），TTL 10–3600 s；它不是"公开下载"，泄露链接就等于限时授权。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处）
 
@@ -251,7 +248,7 @@
 | `MCP_ENABLED` / `MCP_ALLOWED_HOSTS` | `False` / `""` | 是否挂载 `/mcp`；开启时白名单**必填**（空则启动报错）。白名单要同时写 `host` 与 `host:*` | `config.py`, , `_check_mcp` |
 | `MCP_WRITE_ENABLED` + `MCP_ALLOW_DELETE`/`_METADATA_WRITE`/`_REINDEX` | `False` | 写工具总闸与三个分开关；关掉的工具**不注册** | `config.py` |
 | `PAPER_API_KEYS` | `""` | 多 agent 的 `名字:key`（分号分隔），命中则审计记该 agent 名；**按值认身份**，共用一把 key 会同名 | `config.py`, `app/mcp/auth.py` |
-| `MCP_MAX_CHARS` / `_CEILING`、`MCP_WAIT_SECONDS`、`MCP_DOWNLOAD_TTL_SECONDS`、`MCP_DOWNLOAD_SECRET`、`MCP_TOOLSET`、`MCP_PUBLIC_BASE_URL` | `8000`/`32000`、`120`、`300`、`""`（回落 `PAPER_API_KEY`）、`v1`、`""` | 正文预算与上限（超上限报错不夹紧）、写工具等待上限、签名链接 TTL（夹取 10–3600）、签名密钥、工具集版本、无请求上下文时的兜底基址 | `config.py` |
+| `MCP_MAX_CHARS` / `_CEILING`、`MCP_WAIT_SECONDS`、`MCP_TOOLSET`、`MCP_PUBLIC_BASE_URL` | `8000`/`32000`、`120`、`v1`、`""` | 正文预算与上限（超上限报错不夹紧）、写工具等待上限、工具集版本、无请求上下文时的下载兜底基址 | `config.py` |
 | `INGEST_ALLOW_PRIVATE_HOSTS` | `""` | `paper_import`/`/ingest` 访问私网地址的白名单（主机名或 CIDR）；空 = 只允许公网（SSRF 闸逃逸阀） | `config.py`, `app/services/net_guard.py` |
 
 非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py` 的 `RETRY_AFTER_SECONDS`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py` 的 `PROBE_TIMEOUT`）、chunk 分页上限 200（`app/api/papers.py` 的 `get_paper_degradations()`）。
