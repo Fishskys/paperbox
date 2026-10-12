@@ -114,6 +114,24 @@ def write_disabled(variable: str, tool: str) -> ToolFailure:
     )
 
 
+def read_requires_credential(tool: str) -> ToolFailure:
+    """The deployment gates reads and no usable credential came in (plan D5).
+
+    Deliberately the same ``FORBIDDEN`` code as a tier failure: the code set is a
+    frozen contract, and the two cases are distinguishable from the message. It is
+    not literally a tier problem -- the caller presented nothing at all -- so the
+    hint talks about the deployment, not about a stronger key.
+    """
+    return ToolFailure(
+        code=FORBIDDEN,
+        message=f"{tool} needs a credential in this deployment (reads are gated)",
+        hint=(
+            "this server sets AUTH_READ_ACCESS=key: send Authorization: Bearer "
+            "pb_<prefix>_<secret> with a key of role 'read' or higher"
+        ),
+    )
+
+
 def forbidden_role(tool: str, minimum: str) -> ToolFailure:
     """The key authenticated, but its role tier is too low for this tool.
 

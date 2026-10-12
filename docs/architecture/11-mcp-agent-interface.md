@@ -143,20 +143,22 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 > MCP 与 REST **共用同一套密钥**
 > （`app/services/api_key_service.py` 是唯一认证来源），并受 `AUTH_ENABLED` 总开关控制。
-> **读工具免凭证**（2026-10-12 起，与 REST 的公开读一致）：`/mcp` 不拒绝任何请求，
-> 无凭证或缺无效凭证都算匿名调用者，能不能用由**工具的档位检查**决定。
+> `/mcp` 不拒绝任何请求：无凭证或缺无效凭证都算匿名调用者，能不能用由**工具层**决定
+> —— 读工具看读门策略 `AUTH_READ_ACCESS`（2026-10-12 起可配置，默认 `public` 即免凭证），
+> 写工具看档位。
 
 | 项 | 契约 |
 |---|---|
 | 唯一路径 | `Authorization: Bearer <key>` |
 | query-string key | **不支持**（v1 明确不做：key 进 URL 会落进代理/网关日志与浏览器历史） |
-| 总开关 | `AUTH_ENABLED=false`（默认）→ `/mcp` 与 `/api/*` 都**不查凭证**，每个调用方是匿名 admin（agent=`anonymous`、前缀=`anonymous`）；`=true` → **写工具**要求 key（读工具与 REST 读接口一样开放）。`MCP_ENABLED` 仍只决定 `/mcp` 是否挂载 |
+| 总开关 | `AUTH_ENABLED=false`（默认）→ `/mcp` 与 `/api/*` 都**不查凭证**，每个调用方是匿名 admin（agent=`anonymous`、前缀=`anonymous`）；`=true` → **写工具**要求 key。`MCP_ENABLED` 仍只决定 `/mcp` 是否挂载 |
+| 读门 | `AUTH_READ_ACCESS=public`（默认）→ 无凭证调用者解析为**匿名 read 身份**，6 个读工具照常作答；`=key` → 无凭证调用者没有身份，读工具以 `ToolFailure(FORBIDDEN)` 失败，失败文本含 `reads are gated`（**码集冻结**，不新增 `AUTH_REQUIRED`）。该键只在 `AUTH_ENABLED=true` 时有作用对象，`AUTH_ENABLED=false` 时为合法组合、**不告警** |
 | 凭证来源 | `api_keys` 表（`scripts/manage_keys.py` 创建，三档 `read < write < admin`，只存 sha256）→ **优先**环境引导 key（`PAPER_API_KEYS` 命名 + `PAPER_API_KEY` 共享，一律 admin；env 是恢复路径，同名同值时 env 赢）。`AUTH_ENABLED=true` 而 env 与库中一把 key 都没有 → **启动报错**；env 唯一可用密钥是 `change-me` → **启动报错** |
-| 档位 | 写工具要求 `write`（`paper_import`/`paper_reindex`/`paper_update_metadata`），`paper_delete` 要求 `admin`，且与 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 取 **AND**；档位不足**或无身份（匿名）** → `ToolFailure(FORBIDDEN, "insufficient role")`。读工具不检查档位（因此匿名可用）。检查在工具层而不是传输层：传输层看不到工具名，而读工具必须放行 |
-| 失败 | **传输层不再返回 401/403**（2026-10-12）：缺凭证与凭证不匹配都降级为匿名，读工具照常作答，写工具以 `ToolFailure(FORBIDDEN)` 失败（HTTP 仍是 200 —— MCP 的错误在 JSON-RPC 信封里）。凭证不匹配时日志有 WARNING `unknown bearer token` |
+| 档位 | **四个写工具全部要求 `write`**（`paper_import`/`paper_reindex`/`paper_update_metadata`/`paper_delete`），且与 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 取 **AND**；档位不足**或无身份（匿名）** → `ToolFailure(FORBIDDEN, "insufficient role")`。`admin` 档在 MCP 面上暂时没有工具（唯一的 admin 端点是 REST 的批量重建，MCP 不提供）。读工具只检查读门、不检查档位。检查在工具层而不是传输层：传输层看不到工具名 |
+| 失败 | **传输层不再返回 401/403**（2026-10-12）：缺凭证与凭证不匹配都降级为匿名（读门 `public`）/无身份（读门 `key`）。读工具在 `key` 读门下、写工具在两种读门下都以 `ToolFailure(FORBIDDEN)` 失败（HTTP 仍是 200 —— MCP 的错误在 JSON-RPC 信封里），两者的区别只在失败文本：`insufficient role`（档位）vs `reads are gated`（策略门）。凭证不匹配时日志有 WARNING `unknown bearer token` |
 | 实现 | `app/mcp/auth.py` + `app/main.py` 的 `McpAuthMiddleware`（**纯 ASGI**，不是 BaseHTTPMiddleware —— 端点会流式返回，缓冲型中间件会破坏它）。**不用 SDK 自带的 `AuthSettings`/`TokenVerifier`**：那套是 OAuth 资源服务器形态（强制 `issuer_url`/`resource_server_url`、宣告 RFC 9728 发现端点），静态 key 部署下客户端会去走一个永远走不通的 OAuth 流程 |
 | 与 421 的关系 | Host 白名单对**所有**调用方生效：匿名请求带白名单外的 `Host` → **421**（2026-10-12 起；此前未鉴权请求先被 401 挡住，拒绝顺带隐藏了白名单策略，读放开后没有这道前置拒绝，421 是唯一诚实的答案）。有凭证时同样是 421（硬要求 2 的反面测试保留） |
-| 身份传播 | 中间件把身份放进 contextvar，工具层用它填 `Envelope.meta.agent` 与审计行 `agent`/`key_prefix`（真机验证：`"agent": "hermes"`；匿名调用记 `agent=anonymous`、`key_prefix=-`）|
+| 身份传播 | 中间件把身份放进 contextvar，工具层用它填 `Envelope.meta.agent` 与审计行 `agent`/`key_prefix`（真机验证：`"agent": "hermes"`；读门 `public` 下的匿名调用记 `agent=anonymous`、`key_prefix=anonymous`，读门 `key` 下无身份记 `key_prefix=-`）|
 
 ### 4.2 多 key 格式
 
@@ -448,7 +450,7 @@ claude mcp add --transport http paperbox http://<IP>:8077/mcp \
 ```
 
 本机**没有安装** Claude Code，上述片段按官方 MCP 配置形态书写但**未经真机验证**；
-若连接失败，先按 [#2](#2-传输与部署契约)（421 = Host 不在白名单）与 [#4](#4-鉴权身份与审计)（读工具不需要 key；写工具报 `FORBIDDEN` = 缺 key 或档位不足）自查。
+若连接失败，先按 [#2](#2-传输与部署契约)（421 = Host 不在白名单）与 [#4](#4-鉴权身份与审计)自查：读门 `public` 时读工具不需要 key，读门 `key` 时读工具报 `reads are gated`，写工具报 `insufficient role` = 缺 key 或档位不足。
 
 ### 其他 MCP 客户端 / 自研 harness（⚪ 未验证）
 
@@ -475,7 +477,8 @@ Python 侧直接 `pip install mcp` 后用 `mcp.client.streamable_http.streamable
 |---|---|---|
 | 启不来，日志说白名单为空 / `needs a credential` | `MCP_ENABLED=true` 但 `MCP_ALLOWED_HOSTS` 没配，或一把 key 都没有 | 补 `MCP_ALLOWED_HOSTS` 与 `PAPER_API_KEYS`（或 `PAPER_API_KEY`）（[#2](#2-传输与部署契约)） |
 | **421 Misdirected Request**（**裸文本** `Invalid Host header`，不是 JSON-RPC 错误） | 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` | 把**该客户端访问用的 IP/主机名**（`host` 与 `host:*` 两种写法）加进去并重启；看服务端启动日志里打印的生效白名单 |
-| 读工具报 `FORBIDDEN` | 无身份（没带 key）或 key 档位不够 —— 写工具才检查档位 | 补上 `write`/`admin` 档的 key（[#4.1](#41-鉴权)）；`?key=` 不支持 |
+| 读工具报 `FORBIDDEN` | 读门是 `key`（`reads are gated`）而没带可用凭据 | 带一把 `read` 及以上档位的 key；或把 `AUTH_READ_ACCESS` 设回 `public`（[#4.1](#41-鉴权)）；`?key=` 不支持 |
+| 写工具报 `FORBIDDEN` | 无身份（没带 key）或 key 档位低于 `write` | 补一把 `write` 档的 key |
 | **421**（裸文本）配任何凭证状态 | `Host` 不在白名单 | 见上一行；白名单对所有调用方生效（[#4.1](#41-鉴权)） |
 | 首个请求必失败、后续正常 | 父应用 lifespan 没进 `mcp.session_manager.run()`（挂载的子应用不跑自己的 lifespan） | 这是代码层回归，`tests/test_mcp_transport.py` 有专门用例 |
 | 工具列表里少了写工具 | `MCP_WRITE_ENABLED` 或对应 `MCP_ALLOW_*` 关 | **设计如此**（关 = 不注册）；要写能力就开总闸 + 分开关并重启，再以 `tools/list` 为准 |

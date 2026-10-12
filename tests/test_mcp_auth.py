@@ -48,6 +48,65 @@ def keys(monkeypatch):
 
 
 @pytest.fixture()
+def role_keys(monkeypatch, session_factory, keys) -> dict[str, str]:
+    """One live database key per tier, resolvable by the MCP middleware.
+
+    The environment keys are all bootstrap *admins*, so a tier case needs keys from
+    the store; the middleware's own session is pointed at the in-memory engine.
+    """
+    from app.services import api_key_service
+
+    monkeypatch.setattr("app.mcp.auth.SessionLocal", session_factory)
+    setup = session_factory()
+    try:
+        material: dict[str, str] = {}
+        for name, prefix, role in (
+            ("read-agent", "readagent", "read"),
+            ("write-agent", "writeagent", "write"),
+        ):
+            _, full_key = api_key_service.create_key(
+                setup, name=name, prefix=prefix, role=role
+            )
+            material[role] = full_key
+        setup.commit()
+    finally:
+        setup.close()
+    return material
+
+
+def _served(server) -> TestClient:
+    """The production composition for one server build (used by the tier cases)."""
+    app = FastAPI()
+
+    @asynccontextmanager
+    async def lifespan(_):
+        async with server.session_manager.run():
+            yield
+
+    app.router.lifespan_context = lifespan
+    app.add_middleware(auth.McpAuthMiddleware)
+    app.mount("/mcp", build_streamable_http_app(server))
+    return TestClient(app)
+
+
+def _stub_job(monkeypatch, job_id: str = "job-1") -> None:
+    """Only the identity plumbing is under test: stub the repository boundary."""
+    from app.mcp import jobs
+    from app.schemas.job import JobOut
+
+    job = JobOut(job_id=job_id, stage="COMPLETED", progress=1.0)
+    monkeypatch.setattr(jobs, "load_job", lambda requested: job)
+
+
+def _call(client: TestClient, tool: str, arguments: dict, token: str | None = None):
+    """Initialize, then call one tool; returns the ``result`` payload."""
+    rpc(client, "initialize", INITIALIZE_PARAMS, token=token)
+    return rpc(
+        client, "tools/call", {"name": tool, "arguments": arguments}, token=token
+    ).json()["result"]
+
+
+@pytest.fixture()
 def mcp_http(keys) -> TestClient:
     """The production composition: auth middleware outermost, MCP mounted at /mcp."""
     server = build_server()
@@ -397,3 +456,85 @@ def test_a_revoked_database_key_stops_authenticating(monkeypatch, session_factor
         assert api_key_service.authenticate(session, full_key) is None
     finally:
         session.close()
+
+
+# --------------------------------------------------------------------------- #
+# the read door (plan D5/D8): AUTH_READ_ACCESS decides who the reading tools answer
+# --------------------------------------------------------------------------- #
+def test_a_gated_read_door_forbids_a_read_tool_without_a_credential(
+    monkeypatch, keys, mcp_http
+) -> None:
+    """``AUTH_READ_ACCESS=key``: the read tools need a credential like the writes."""
+    monkeypatch.setattr(settings, "auth_read_access", "key")
+    _stub_job(monkeypatch)
+    payload = _call(mcp_http, "paper_job_status", {"job_id": "job-1"})
+    assert payload.get("isError") is True
+    text = payload["content"][0]["text"]
+    assert "FORBIDDEN" in text
+    assert "reads are gated" in text
+
+
+def test_a_gated_read_door_lets_a_read_key_through(
+    monkeypatch, keys, role_keys, mcp_http
+) -> None:
+    """The ``read`` tier is what makes the closed door walkable."""
+    monkeypatch.setattr(settings, "auth_read_access", "key")
+    _stub_job(monkeypatch)
+    payload = _call(
+        mcp_http, "paper_job_status", {"job_id": "job-1"}, token=role_keys["read"]
+    )
+    envelope = Envelope[object].model_validate(payload["structuredContent"])
+    assert envelope.meta.agent == "read-agent"
+
+
+def test_the_read_door_does_not_move_the_write_tier(monkeypatch, keys, mcp_http) -> None:
+    """Plan D2 invariant: the write tools answer the same either way."""
+    monkeypatch.setattr(settings, "mcp_write_enabled", True)
+    monkeypatch.setattr(settings, "mcp_allow_reindex", True)
+    observed: list[str] = []
+    with _served(build_server()) as client:
+        for policy in ("public", "key"):
+            monkeypatch.setattr(settings, "auth_read_access", policy)
+            payload = _call(
+                client, "paper_reindex", {"paper_id": "paper-1"}
+            )
+            assert payload.get("isError") is True
+            observed.append(payload["content"][0]["text"])
+    assert observed[0] == observed[1]
+    assert "FORBIDDEN" in observed[0]
+
+
+def _delete_payload(monkeypatch, session_factory, token: str) -> dict:
+    """Build a server that *has* the delete tool, then call it once.
+
+    The switches decide registration, so they have to be set before ``build_server``
+    runs — hence a fresh server per case instead of the module-scoped client.
+    """
+    monkeypatch.setattr(settings, "mcp_write_enabled", True)
+    monkeypatch.setattr(settings, "mcp_allow_delete", True)
+    monkeypatch.setattr("app.mcp.tools_write.SessionLocal", session_factory)
+    with _served(build_server()) as client:
+        return _call(client, "paper_delete", {"paper_id": "does-not-exist"}, token=token)
+
+
+def test_a_write_key_passes_the_delete_gate(
+    monkeypatch, keys, role_keys, session_factory
+) -> None:
+    """Plan D8: deletion is a ``write`` operation, and the gate is all that changes.
+
+    The paper does not exist, so the call fails later with ``NOT_FOUND`` — which is
+    exactly the proof that the tier check let a ``write`` key through.
+    """
+    payload = _delete_payload(monkeypatch, session_factory, role_keys["write"])
+    text = payload["content"][0]["text"]
+    assert "FORBIDDEN" not in text
+    assert "NOT_FOUND" in text
+
+
+def test_a_read_key_still_cannot_delete(
+    monkeypatch, keys, role_keys, session_factory
+) -> None:
+    """The tier swap lowered deletion to ``write``; ``read`` stays out."""
+    payload = _delete_payload(monkeypatch, session_factory, role_keys["read"])
+    assert payload.get("isError") is True
+    assert "FORBIDDEN" in payload["content"][0]["text"]

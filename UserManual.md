@@ -204,7 +204,9 @@ uv run python scripts/healthcheck.py
 - **`admin`**：上面那些加上**批量/整库重建索引**（`POST /api/papers/reindex`，小时级、打满 embedding）。
   它是 `admin` 唯一的专属端点（2026-10-12 起删除并入 `write`）。
 
-每条请求日志与检索日志（`search_queries.key_prefix`）都记录密钥**前缀**（归因用，永不落完整密钥）；
+MCP 写工具按同一套档位判定，四个写工具都要求 `write`（含 `paper_delete`；MCP 不提供批量重建，
+所以 MCP 面上暂时没有 `admin` 专属工具），且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束。
+每条请求日志、检索日志（`search_queries.key_prefix`）与 MCP 审计行都记录密钥**前缀**（归因用，永不落完整密钥）；
 读门为 `public` 时无凭证请求记 `anonymous`，读门为 `key` 时记 `-`。
 
 ```bash
@@ -694,10 +696,11 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 每个地址都要写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`，只写主机名会漏），改完**重启应用**。
 启动日志会打印生效白名单，是排查 421 的第一手材料。注意这是**裸文本** 421，不是 JSON。
 
-**Q16 MCP 调写工具报 `FORBIDDEN` / 连不上？**
-2026-10-12 起 `/mcp` **不再返回 401/403**：读工具免凭证（不带 key 也能查论文、读正文、下载），
-只有写工具做档位检查 —— 没带 key 或 key 档位不足时，工具返回 `FORBIDDEN`（`insufficient role`），
-HTTP 仍是 200（MCP 的错误在 JSON-RPC 信封里）。排查顺序：① `tools/list` 里有没有这个工具（没有 = 被 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 关了，不是鉴权问题）；② key 是不是 `write`/`admin` 档
+**Q16 MCP 调工具报 `FORBIDDEN` / 连不上？**
+2026-10-12 起 `/mcp` **不再返回 401/403**：传输层对谁都应答，能不能用由工具层决定，失败以
+`FORBIDDEN` 出现在 JSON-RPC 信封里（HTTP 仍是 200）。**先看失败文本**：`insufficient role` = 档位问题
+（写工具没带 key，或 key 档位不够——四个写工具都要求 `write`）；`reads are gated` = 读门关着
+（`AUTH_READ_ACCESS=key` 时读工具也要 key）。排查顺序：① `tools/list` 里有没有这个工具（没有 = 被 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 关了，不是鉴权问题）；② key 是不是 `write` 档（MCP 没有 `admin` 专属工具）；③ 读工具报错就查 `AUTH_READ_ACCESS`
 （`scripts/manage_keys.py list`）；③ key 写错会只打 WARNING 后按匿名处理，日志关键字 `unknown bearer token`。
 **不支持 `?key=` 查询参数**。想区分是谁在调，就给每个 agent **各发一把 key**（`manage_keys.py create`）：
 审计按 key 的**值**认身份，两把相同的 key 在审计里会同名。

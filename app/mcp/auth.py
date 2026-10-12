@@ -17,6 +17,14 @@ do. The transport cannot make that distinction -- it never sees the tool name --
 so a write tool called anonymously fails as ``ToolFailure(FORBIDDEN)`` rather than
 as an HTTP 401/403.
 
+**The read door (plan D5).** ``AUTH_READ_ACCESS`` decides who the six reading tools
+answer: ``public`` (default) resolves a caller without a credential to the anonymous
+*read* identity, ``key`` leaves it unresolved and ``tools_read.require_read`` then
+fails the call with ``FORBIDDEN``. ``tools/list`` is built once at startup, so the
+failure -- not a per-request unregistration -- is what tells the caller the door
+closed. The write tools never depended on this value: they need ``write`` or higher
+either way (deletion included, plan D8).
+
 ``AUTH_ENABLED`` remains the master switch (plan section 3 D1): off, this
 middleware resolves everyone to the anonymous **admin** identity (so the write
 tools' tier check passes and only the ``MCP_ALLOW_*`` switches remain); on, a
@@ -183,6 +191,12 @@ class McpAuthMiddleware:
             return
         if settings.auth_enabled:
             identity = resolve_identity(Request(scope, receive=receive))
+            if identity is None and settings.reads_are_public:
+                # Open read door (plan D2/D5): a caller without a trusted credential
+                # is a legitimate reader and owns a name, so the audit line says
+                # "anonymous" instead of nothing. The write tools' tier check still
+                # refuses it.
+                identity = api_key_service.anonymous_reader()
         else:
             identity = api_key_service.anonymous()
         reset = current_agent.set(identity)

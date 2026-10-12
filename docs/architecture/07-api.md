@@ -176,7 +176,7 @@
 | 传输 | Streamable HTTP，`streamable_http_path="/"` + `stateless_http=True`（无会话状态，两个调用之间不依赖会话） |
 | `Host` 白名单 | 显式 `TransportSecuritySettings(allowed_hosts=…)`（**不依赖 SDK 默认**，SDK 默认只认 `127.0.0.1`/`localhost`）；白名单外一律 **421**；`MCP_ALLOWED_HOSTS` 为空且 `MCP_ENABLED=true` → **启动即报错** |
 | 路径规范化 | `McpMountPathMiddleware` 在服务端内部把 `/mcp` 改写成 `/mcp/`（Starlette 的 `Mount` 正则要求尾斜杠）；**不带尾斜杠也必须一次命中**，不能回 307 |
-| 鉴权 | 自写静态 Bearer（**不用** SDK 的 `AuthSettings`——那是 OAuth 形态）：`McpAuthMiddleware` 置于**最外层**，只解析身份、**不拒绝任何请求**（2026-10-12：读工具免凭证，写工具的档位检查在工具层 —— 传输层看不到工具名，401/403 没有位置可放）；**不支持 `?key=`**；命中后把 agent 名放进 ContextVar 供审计（无凭证时是 `anonymous`） |
+| 鉴权 | 自写静态 Bearer（**不用** SDK 的 `AuthSettings`——那是 OAuth 形态）：`McpAuthMiddleware` 置于**最外层**，只解析身份、**不拒绝任何请求**（传输层看不到工具名，401/403 没有位置可放），**不支持 `?key=`**；命中后把 agent 名放进 ContextVar 供审计。**四档口径**：`AUTH_ENABLED=false` → 匿名 admin；`AUTH_READ_ACCESS=public`（默认）→ 无凭证调用者拿匿名 **read** 身份，读工具照答；`=key` → 无凭证调用者没有身份，`tools_read.require_read` 以 `FORBIDDEN` 拒绝读工具（码集冻结，失败文本里的 `reads are gated` 指明是策略门）。写工具的 `require_role` 与读门无关；`paper_delete` 的档位是 `write`（2026-10-12 起，删除并入写档） |
 `POST /api/papers/reindex` 的选择逻辑与 **`scripts/reindex.py` 共用**
 （`app/services/reindex_service.py`：同一份 SQL、同一套检测），差别只在执行 —— 脚本在本进程同步跑
 （可 Ctrl-C、可 `--dry-run`），端点按论文**入队**后立即返回（单篇 30–370 秒，整库是小时级操作，不能挂在一次 HTTP 请求上）。请求体：`dry_run`（默认 **true**）、`include_all`（全库）、`paper_ids`（指名）、`reasons`（只按某个检测理由）。响应里 `reasons` 说明为什么、`skipped_reasons` 说明"检测到但本次没采纳"，`skipped` 逐条列出跳过原因（例如没有原始文件）。

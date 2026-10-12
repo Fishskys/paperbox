@@ -49,7 +49,7 @@ from app.services import (
     net_guard,
     paper_service,
 )
-from app.services.api_key_service import ROLE_ADMIN, ROLE_WRITE, role_at_least
+from app.services.api_key_service import ROLE_WRITE, role_at_least
 
 #: Switch that must be on for every writing tool (contract section 1.1).
 MASTER_SWITCH = "MCP_WRITE_ENABLED"
@@ -414,7 +414,9 @@ def register(server: MCPServer) -> None:
         async def paper_delete(paper_id: str, dry_run: bool = True) -> Envelope[DeletePreviewData]:
             started = time.perf_counter()
             require(ALLOW_DELETE, "paper_delete")
-            require_role("paper_delete", ROLE_ADMIN)
+            # Plan D8: deletion is a write-tier operation; admin is reserved for
+            # the bulk/whole-library reindex, which has no MCP tool.
+            require_role("paper_delete", ROLE_WRITE)
             with _Session() as session:
                 paper = _load_live_paper(session, paper_id)
                 preview = paper_service.delete_preview(session, paper)

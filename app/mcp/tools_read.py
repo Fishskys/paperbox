@@ -56,6 +56,7 @@ from app.services import (
     search_pipeline,
     search_service,
 )
+from app.services.api_key_service import ROLE_READ, role_at_least
 
 #: Waiting on a job is shared with the writing tools (``app/mcp/jobs.py``).
 MAX_STATUS_WAIT_SECONDS = jobs.MAX_WAIT_SECONDS
@@ -201,6 +202,25 @@ def _first_message(exc: ValidationError) -> str:
 # --------------------------------------------------------------------------- #
 # tools
 # --------------------------------------------------------------------------- #
+def require_read(tool: str) -> None:
+    """Read-door check shared by the six reading tools (plan D5).
+
+    Nothing to do in two deployments: with ``AUTH_ENABLED=false`` every caller is
+    the anonymous admin, and with an open read door (``AUTH_READ_ACCESS=public``,
+    the default) reads answer anyone -- the middleware already resolved the
+    anonymous reader identity, so there is no credential to insist on. Only a gated
+    read door (``key``) turns "no usable credential" into a failure, and that
+    failure reuses the frozen ``FORBIDDEN`` code: ``tools/list`` is built once at
+    startup, so a per-request unregistration is impossible and the error is what
+    tells the caller the door closed.
+    """
+    if not settings.auth_enabled or settings.reads_are_public:
+        return
+    identity = auth.current_identity()
+    if identity is None or not role_at_least(identity.role, ROLE_READ):
+        raise errors.read_requires_credential(tool)
+
+
 def register(server: MCPServer) -> None:
     """Attach every read tool to ``server`` (called once, at import/build time)."""
 
@@ -229,6 +249,7 @@ def register(server: MCPServer) -> None:
         facets: bool = False,
         backend: str | None = None,
     ) -> Envelope[SearchResponse]:
+        require_read("paper_search")
         started = time.perf_counter()
         try:
             request = SearchRequest(
@@ -307,6 +328,7 @@ def register(server: MCPServer) -> None:
         meta={"toolset": settings.mcp_toolset},
     )
     async def paper_get(paper_id: str) -> Envelope[PaperDetailData]:
+        require_read("paper_get")
         started = time.perf_counter()
         with _Session() as session:
             paper = _load_paper(session, paper_id)
@@ -378,6 +400,7 @@ def register(server: MCPServer) -> None:
         limit: int = chunk_service.DEFAULT_LIMIT,
         max_chars: int | None = None,
     ) -> Envelope[ChunkPageData]:
+        require_read("paper_get_chunks")
         started = time.perf_counter()
         budget = _budget(max_chars)
         if limit < 1 or limit > chunk_service.MAX_LIMIT:
@@ -458,6 +481,7 @@ def register(server: MCPServer) -> None:
     async def paper_get_context(
         chunk_id: str, before: int = 1, after: int = 1, max_chars: int | None = None
     ) -> Envelope[ContextData]:
+        require_read("paper_get_context")
         started = time.perf_counter()
         budget = _budget(max_chars)
         if before < 0 or after < 0:
@@ -553,6 +577,7 @@ def register(server: MCPServer) -> None:
         meta={"toolset": settings.mcp_toolset},
     )
     async def paper_get_file(paper_id: str, ctx: Context | None = None) -> Envelope[FileData]:
+        require_read("paper_get_file")
         started = time.perf_counter()
         base_url = _base_url(ctx)
         with _Session() as session:
@@ -606,6 +631,7 @@ def register(server: MCPServer) -> None:
         meta={"toolset": settings.mcp_toolset},
     )
     async def paper_job_status(job_id: str, wait_seconds: int = 0) -> Envelope[Any]:
+        require_read("paper_job_status")
         started = time.perf_counter()
         arguments = {"job_id": job_id, "wait_seconds": wait_seconds}
         try:
