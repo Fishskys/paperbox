@@ -39,6 +39,12 @@
 
 ### Fixed
 
+- **删除 `revoked_at` 的迁移会让旧版「已吊销」的钥匙复活**（2026-10-12）：旧版本把吊销写成
+  `revoked_at`（软删、行留档），而新版本的 `authenticate()` 不再过滤该列 —— 直接 `drop column` 的话，
+  那些本该失效的钥匙会在升级后**重新通过认证**（已复现）。迁移 `8b4f0c2d6a17` 现在先删除所有
+  `revoked_at IS NOT NULL` 的行，并把被删的 prefix 打进升级日志（`api_keys: removed N retired key(s) …`）：
+  「吊销=删除」是新语义，留痕的唯一位置就是那行日志。同版本还补了 `UserManual` 的「升级已有部署」步骤
+  （备份 → 停服 → `alembic upgrade head` → 起服务 → `manage_keys.py list` 核对）。
 - `scripts/acceptance_auth.py` 读放开之后**误判服务端鉴权状态**：它拿 `GET /api/papers` 当探针，
   而该端点现在无论如何都返回 200，于是脚本走进「AUTH_ENABLED=false」分支，只跑 5 项就报通过。
   探针改为打在**有门的端点**（`POST /api/jobs/{uuid}/retry`，不存在的作业 → 401/404 都无副作用），

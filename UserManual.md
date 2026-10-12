@@ -372,7 +372,23 @@ cd infra && docker compose --profile local-docling up -d docling
 | `uv run python scripts/purge_deleted.py --hard` | 清理已删论文的索引文档、对象与数据库行（不可逆） |
 | `uv run python scripts/eval.py` | 对运行中的服务跑定标集评测（检索质量） |
 | `uv run python scripts/bulk_ingest_dir.py <目录>` | 批量导入一个目录（同机零传输） |
-| `uv run python scripts/acceptance_mcp.py [--with-writes]` | MCP 端点一键验收：传输/鉴权/十工具/异常路径，**自带清理**（只读 37 项、带写 50 项） |
+| `uv run python scripts/acceptance_mcp.py [--with-writes]` | MCP 端点一键验收：传输/鉴权/十工具/异常路径，**自带清理**（只读模式 38 项；`--with-writes` 多一节写工具验收，需要 `MCP_WRITE_ENABLED=true` 才有内容） |
+
+**升级已有部署到新版本**（顺序别换）：
+
+```bash
+# 0) 备份（schema 迁移不可逆）
+docker exec paperbox-postgres pg_dump -U postgres paperbox > backup-$(date +%F).sql
+# 1) 停服：迁移期间别让旧代码碰新 schema（旧代码 + 新库会报 UndefinedColumn）
+# 2) 换上新代码，先迁移、再起服务
+uv run alembic upgrade head
+uv run python scripts/manage_keys.py list    # 钥匙还在、prefix 未变即为正常
+```
+
+要点：**代码与 schema 必须一起换** —— 旧代码 + 新库、新代码 + 旧库都会报错（前者选列失败、后者插入缺列）。
+迁移中的破坏性动作会在升级日志里打印（例：`api_keys: removed 2 retired key(s) whose rows would have
+resurrected them: old-a, old-b`），看到它就说明旧版那些「已吊销但留档」的行被清掉了 —— 这是刻意的：
+新版本没有这个状态，留着它们会让本该失效的钥匙**恢复访问**。
 
 ### 1.7 MCP 接入（让 agent 直接查/读论文）
 
