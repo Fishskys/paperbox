@@ -68,12 +68,20 @@ DEFAULT_KEY = "change-me"
 
 @dataclass(frozen=True)
 class AuthIdentity:
-    """Who is calling, as far as the process can tell."""
+    """Who is calling, as far as the process can tell.
+
+    ``is_anonymous`` marks the *virtual* identities — the master switch is off, or
+    the read door is open and no credential was presented. A gate reads it to
+    answer 401 ("present a key") instead of 403 ("that key is too weak"), which is
+    what keeps the write surface's status codes independent of the read policy
+    (plan D2/D4). Every credential resolved from the store carries ``False``.
+    """
 
     name: str
     prefix: str
     role: str
     source: str
+    is_anonymous: bool = False
 
     @property
     def is_shared(self) -> bool:
@@ -81,11 +89,26 @@ class AuthIdentity:
         return self.source == SOURCE_SHARED
 
 
-def anonymous() -> AuthIdentity:
-    """Identity used when ``AUTH_ENABLED=false``: full access, no attribution."""
+def anonymous(role: str = ROLE_ADMIN) -> AuthIdentity:
+    """Virtual identity for a caller nothing was resolved for.
+
+    Defaults to ``admin`` because that is what ``AUTH_ENABLED=false`` means: the
+    master switch off hands every caller full access. The open read door uses the
+    ``read`` tier instead (:func:`anonymous_reader`), so it can never satisfy a
+    write or admin gate.
+    """
     return AuthIdentity(
-        name=ANONYMOUS_NAME, prefix=ANONYMOUS_PREFIX, role=ROLE_ADMIN, source=SOURCE_ANONYMOUS
+        name=ANONYMOUS_NAME,
+        prefix=ANONYMOUS_PREFIX,
+        role=role,
+        source=SOURCE_ANONYMOUS,
+        is_anonymous=True,
     )
+
+
+def anonymous_reader() -> AuthIdentity:
+    """The read-tier virtual identity of an open read door (plan D2/D3)."""
+    return anonymous(role=ROLE_READ)
 
 
 def role_at_least(role: str, minimum: str) -> bool:
@@ -392,6 +415,7 @@ __all__ = [
     "KeyManagementError",
     "SHARED_AGENT",
     "anonymous",
+    "anonymous_reader",
     "authenticate",
     "authenticate_env",
     "create_key",

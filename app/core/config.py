@@ -56,6 +56,13 @@ MCP_TOOLSETS = frozenset({"v1"})
 #: imports this one, so the dependency has to point this way.
 CHUNK_MODES = frozenset({"length", "semantic"})
 
+#: Accepted values of ``AUTH_READ_ACCESS`` (plan D1/D8): whether the read
+#: endpoints consult a credential (``key``) or answer anyone (``public``, the
+#: default — the behaviour of the 2026-10-12 opening).
+READ_ACCESS_PUBLIC = "public"
+READ_ACCESS_KEY = "key"
+READ_ACCESS_MODES = frozenset({READ_ACCESS_PUBLIC, READ_ACCESS_KEY})
+
 
 class Settings(BaseSettings):
     """Typed view over the process environment."""
@@ -119,6 +126,14 @@ class Settings(BaseSettings):
     #: ``api_keys`` (or the environment bootstrap keys). ``MCP_ENABLED`` still decides
     #: whether ``/mcp`` exists at all.
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
+    #: Read-door policy (plan D1/D8), the one knob that moves the read surface:
+    #: ``public`` (default) = a read endpoint never consults the credential, and a
+    #: caller without one is the anonymous **read** identity; ``key`` = reads need a
+    #: ``read`` key like writes need ``write``. The write and admin surfaces do not
+    #: depend on it at all — they follow ``AUTH_ENABLED`` alone (plan D2). While the
+    #: master switch is off the value has nothing to act on; that combination is
+    #: legitimate and deliberately silent (plan D7).
+    auth_read_access: str = Field(default="public", alias="AUTH_READ_ACCESS")
 
     # --- rerank (SPEC-P1 section D2) ---
     #: Whether the embedding service exposes ``/rerank`` (server capability).
@@ -385,6 +400,16 @@ class Settings(BaseSettings):
             raise ValueError("INGEST_CONCURRENCY must be positive")
         return value
 
+    @field_validator("auth_read_access")
+    @classmethod
+    def _check_auth_read_access(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in READ_ACCESS_MODES:
+            raise ValueError(
+                f"AUTH_READ_ACCESS must be one of {sorted(READ_ACCESS_MODES)}"
+            )
+        return normalized
+
     @field_validator("parser_backend")
     @classmethod
     def _check_parser_backend(cls, value: str) -> str:
@@ -532,6 +557,15 @@ class Settings(BaseSettings):
                 "set a real key (PAPER_API_KEY / PAPER_API_KEYS) before enabling auth"
             )
         return self
+
+    @property
+    def reads_are_public(self) -> bool:
+        """Whether a read endpoint answers without consulting a credential (D2).
+
+        Reports the knob alone; callers check ``auth_enabled`` first, because with
+        the master switch off every surface is open regardless of this value.
+        """
+        return self.auth_read_access == READ_ACCESS_PUBLIC
 
     @property
     def mcp_allowed_host_list(self) -> list[str]:

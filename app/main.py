@@ -242,6 +242,12 @@ class AuthContextMiddleware:
     once per dependency. ``/mcp`` has its own middleware with the same rules
     (:mod:`app.mcp.auth`); ``AUTH_ENABLED=false`` resolves everyone to the
     anonymous admin identity without touching the database.
+
+    A caller without a credential gets the anonymous *read* identity while the
+    read door is open (``AUTH_READ_ACCESS=public``, the default): reads are
+    public there, and the log should name the caller instead of saying nothing
+    (plan D2/D3). A credential that was presented but matched nothing stays
+    unresolved, so the write door can keep answering 403 "Invalid API key".
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -265,6 +271,10 @@ class AuthContextMiddleware:
                 )
             finally:
                 session.close()
+        elif settings.reads_are_public:
+            # Open read door: no credential is a legitimate caller and owns the
+            # anonymous read identity (plan D4 judgement 2).
+            identity = api_key_service.anonymous_reader()
         state = scope.setdefault("state", {})
         state["auth_identity"] = identity
         state["auth_token_present"] = bool(token)

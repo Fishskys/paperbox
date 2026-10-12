@@ -184,7 +184,8 @@ uv run python scripts/healthcheck.py
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
-| `AUTH_ENABLED` | 鉴权总开关 | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`）；`true` = **写接口**（导入/重试/重建索引/元数据改动，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)）要 Bearer key，**读接口一律免鉴权**（2026-10-12 起）。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
+| `AUTH_ENABLED` | 鉴权总开关 | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`），读与写全放行；`true` = **写接口**（导入/重试/单篇重建/元数据改动/删除）要 Bearer key，读接口按 `AUTH_READ_ACCESS` 决定。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
+| `AUTH_READ_ACCESS` | 读门策略 | `public` | `public` = 读接口**不读凭证**：缺 key 或 key 写错都照答 200，调用者按匿名 read 身份记日志；`key` = 读接口与写接口同一套规矩（缺凭证 401、凭证不匹配 403），`read` 档密钥因此重新有意义。**只在 `AUTH_ENABLED=true` 时有作用对象**：为 `false` 时本键无效，属合法组合、**启动不告警**；取值非法（不是这两个之一）则启动即报错。无论取哪个值，写接口与批量重建的表现完全一致（见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)） |
 | `PAPER_API_KEY` | 引导管理员密钥（Bearer，agent 名 `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
 | `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
@@ -194,13 +195,17 @@ uv run python scripts/healthcheck.py
 
 #### 1.3.7.1 密钥分发（`AUTH_ENABLED=true` 时）
 
-密钥表 `api_keys` 只存 `sha256(完整密钥)`，完整密钥只在创建时打印一次。三档权限单调序
-`read < write < admin`：**write** 可导入/重试/重建索引/改元数据，**admin** 再可删除。
-自 2026-10-12 起**读不再需要凭证**（REST 与 MCP 的读都开放），所以 `read` 档现在是一把
-"只能看、改不了任何东西"的钥匙 —— 保留它是为了将来做更细的 ACL，日常分发用 `write` 即可。
-MCP 写工具同一套档位（`paper_delete` 需 admin，其余写工具需 write，且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束）。每条请求日志、检索日志
-（`search_queries.key_prefix`）与 MCP 审计行都记录密钥**前缀**（归因用，永不落完整密钥）；
-匿名请求记 `anonymous`（REST）或 `-`（MCP 审计行无前缀）。
+密钥表 `api_keys` 只存 `sha256(完整密钥)`，完整密钥只在创建时打印一次。权限共 **4 级**：`public`（无凭据）
+与三档密钥 `read < write < admin`。
+
+- **`read`**：读接口**全部**可用。读门为 `public`（默认）时它与不带 key 等价；把
+  `AUTH_READ_ACCESS` 设为 `key` 之后，它就是唯一能读的档位（此时不带 key 会被 401 挡住）。
+- **`write`**：上面那些加上**全部增删改** —— 导入、重试、单篇重建索引、元数据改动（含回滚与裁决）、删除。
+- **`admin`**：上面那些加上**批量/整库重建索引**（`POST /api/papers/reindex`，小时级、打满 embedding）。
+  它是 `admin` 唯一的专属端点（2026-10-12 起删除并入 `write`）。
+
+每条请求日志与检索日志（`search_queries.key_prefix`）都记录密钥**前缀**（归因用，永不落完整密钥）；
+读门为 `public` 时无凭证请求记 `anonymous`，读门为 `key` 时记 `-`。
 
 ```bash
 uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role write
@@ -397,7 +402,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 项 | 约定 |
 |---|---|
 | 基址 | `http://<host>:8077`（默认端口 8077） |
-| 鉴权 | **读接口免鉴权**（`GET` 类 + `POST /api/search`：不带 key 直接 200，带了无效 key 也照答 200）；`AUTH_ENABLED=true` 时**写接口**要 `Authorization: Bearer <key>`，缺凭证 401、凭证不匹配 403、档位不足 403（detail 含 `insufficient role`）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套 |
+| 鉴权 | **四档模型**：`public`（无凭据）与三档密钥 `read < write < admin`，详见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)。默认（`AUTH_READ_ACCESS=public`）读接口**不读凭证**：不带 key 直接 200，带了无效 key 也照答 200；改为 `key` 后读接口与写接口同一套规矩（缺凭证 401、凭证不匹配 403）。`AUTH_ENABLED=true` 时写接口要 `Authorization: Bearer ***、凭证不匹配 403、档位不足 403（detail 含 `insufficient role`）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套 |
 | 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
 | 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 [#1.7](#17-mcp-接入让-agent-直接查读论文)） |
 | 错误体 | `{"detail": "..."}`（422 校验错误为 FastAPI 默认结构，含 `loc`/`msg`/`type`） |
@@ -406,11 +411,15 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 
 #### 2.1.1 端点 → 最低密钥档位（`AUTH_ENABLED=true` 时）
 
+四档：`public`（无凭据）< `read` < `write` < `admin`。「读门」= `AUTH_READ_ACCESS`，**只**影响第一行，
+写与 admin 两行在任何读门取值下表现完全一致。
+
 | 档位 | 端点 |
 |---|---|
-| 免鉴权（**读**） | `GET /health`、`GET /`、`GET /docs`；`POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review`。这 13 个业务读接口**不读凭证**：缺 key、key 写错都照常 200 |
-| write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/reindex`（批量）、`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
-| admin | `DELETE /api/papers/{paper_id}` |
+| **public** | `GET /health`、`GET /`、`GET /docs`、`/redoc`、`/openapi.json`（框架/运维端点，任何策略下都不校验凭证） |
+| **read**（13 个业务读） | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review`。读门 `public`（默认）时**不读凭证**：缺 key、key 写错都照常 200（调用者记匿名 read 身份）；读门 `key` 时缺凭证 401、key 写错 403、`read` 档 key 通过 |
+| **write** | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply`；**`DELETE /api/papers/{paper_id}`** |
+| **admin** | **只有** `POST /api/papers/reindex`（批量/整库重建：小时级、打满 embedding） |
 
 ### 2.2 服务与自检
 
@@ -565,8 +574,8 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 202 | 已受理 | 导入/重试/重建索引类接口：返回的是作业，用 `/api/jobs/{job_id}` 轮询进度 |
 | 204 | 成功且无响应体 | `DELETE /api/papers/{paper_id}` |
 | 400 Bad Request | 入站 URL 被安全闸拒绝 | URL 导入指向私网地址且未在 `INGEST_ALLOW_PRIVATE_HOSTS` 白名单内（`SSRF_BLOCKED`）；放行办法见 [#1.3.4](#134-导入与上传) 该键说明 |
-| 401 Unauthorized | **写接口**没带或带了格式不对的凭证（`AUTH_ENABLED=true`） | 读接口不会 401（免鉴权）；写接口缺 `Authorization: Bearer <key>` 时返回，响应头带 `WWW-Authenticate: Bearer` |
-| 403 Forbidden | **写接口**凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时) 档位表）；改了 `.env` 后忘了重启应用也会 403。读接口上无效 key **不会** 403 |
+| 401 Unauthorized | 要凭据的接口没带（或带了格式不对的）凭证：`AUTH_ENABLED=true` 时的**写接口**，以及 `AUTH_READ_ACCESS=key` 时的**读接口** | 缺 `Authorization: Bearer *** 档位不够的 key 打写接口也是 401（视为「你还能带一把更强的 key 进来」）；响应头带 `WWW-Authenticate: Bearer`。读门为 `public`（默认）时读接口**不会** 401 |
+| 403 Forbidden | 凭证不匹配，或档位不足 | key 不对（detail 为 `Invalid API key`）；或 key 有效但**档位低于该端点要求**（detail 含 `insufficient role` 并写明差哪一档，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)）；改了 `.env` 后忘了重启应用也会 403。读门为 `public`（默认）时读接口上无效 key **不会** 403 |
 | 404 Not Found | 路径不存在或功能未开启 | `/api/papers/ingest/dir` 在 `INGEST_LOCAL_ROOTS` 为空时**就是 404**（功能关闭，不是路径写错） |
 | 409 Conflict | 状态冲突 | 目前只有一处：重试一个**不是** `FAILED` 的作业（`only FAILED jobs can be retried`） |
 | 413 Request Entity Too Large | 单请求总字节超限 | 超 `INGEST_MAX_REQUEST_MB`（默认 200 MB）；拆分请求或调大该值 |

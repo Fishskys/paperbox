@@ -13,13 +13,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.security import require_read
+
 from app.schemas.consistency import ConsistencyOut
 from app.services import consistency_service
 
-# 公开读：本 router 全部是纯读端点，不挂凭证（docs/architecture/07-api.md 的「鉴权实现」）。
+# Read door (plan D2): the credential is checked per AUTH_READ_ACCESS; an open
+# door answers a caller without one as the anonymous reader.
 router = APIRouter(
     prefix="/api/consistency",
     tags=["consistency"],
+    dependencies=[Depends(require_read)],
 )
 
 

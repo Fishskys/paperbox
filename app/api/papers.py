@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.core.security import require_admin, require_write
+from app.core.security import require_admin, require_read, require_write
 from app.db.session import get_db
 from app.schemas.paper import (
     ReindexIn,
@@ -50,10 +50,12 @@ from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
 
-# 公开读：本 router 的读端点不挂凭证；写端点（reindex / metadata 改动）与 DELETE 各自带依赖。
+# 读门（plan D2）：读端点按 AUTH_READ_ACCESS 策略校验（默认 public = 不校验凭证，记为匿名 read
+# 身份）；写端点（导入 / 元数据改动 / 单篇重建 / DELETE）各自带 write 依赖，批量重建带 admin。
 router = APIRouter(
     prefix="/api/papers",
     tags=["papers"],
+    dependencies=[Depends(require_read)],
 )
 
 NOT_FOUND = "paper not found"
@@ -337,7 +339,7 @@ def rollback_paper_metadata(
     )
 
 
-@router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
+@router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_write)])
 def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
     """Delete a paper everywhere, following plan section 23.
 
@@ -363,7 +365,7 @@ def delete_paper(paper_id: str, session: Session = Depends(get_db)) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/reindex", response_model=ReindexOut, dependencies=[Depends(require_write)])
+@router.post("/reindex", response_model=ReindexOut, dependencies=[Depends(require_admin)])
 def reindex_library_endpoint(
     body: ReindexIn,
     session: Session = Depends(get_db),

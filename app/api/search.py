@@ -9,18 +9,21 @@ call, the response assembly, the search log -- lives in the pipeline.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.logging import get_logger
+from app.core.security import require_read
 from app.schemas.search import SearchRequest, SearchResponse
 from app.services import search_pipeline, search_service
 
 logger = get_logger(__name__)
 
-# 公开读：检索本身不挂凭证（它只写检索日志，不改业务数据）。
+# Read door (plan D2): POST /search reads (it writes one search-log row, not
+# corpus state), so the credential follows AUTH_READ_ACCESS like any other read.
 router = APIRouter(
     prefix="/api",
     tags=["search"],
+    dependencies=[Depends(require_read)],
 )
 
 

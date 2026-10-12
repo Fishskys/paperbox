@@ -25,62 +25,91 @@
 
 ### 2.1 路由总表（29 条，包含不在 schema 的 `GET /`；另有 `/mcp` 挂载，见 第 2.5 节）
 
-`Bearer` 列：`是` = 该端点挂了档位依赖（写端点 `require_write`、删除 `require_admin`），缺凭证 401 / 凭证不匹配 403 / 档位不足 403；`免` = **不挂任何依赖，凭证根本不参与判定**，所以缺凭证与无效凭证都照答 200。读端点自 2026-10-12 起全部免鉴权（决定与代价见 [#2.2](#22-鉴权实现)）。
+`Bearer` 列写的是该端点的**最低档位**（四档模型：`public` < `read` < `write` < `admin`，见 [#2.2](#22-鉴权实现)）。`public` = 不挂任何依赖、凭证不参与判定，缺凭证与无效凭证都答 200；`read` / `write` / `admin` = 挂了对应档位依赖（读端点由 router 级 `require_read` 统一挂）。有门时：缺凭证 401 + `WWW-Authenticate`、凭证不匹配 403、档位不足 403（`detail` 里说明差哪一档）。唯一的例外在读门：`AUTH_READ_ACCESS=public`（默认）时 **`read` 行不校验凭证**（无凭证调用者记为匿名 read 身份），`write` 与 `admin` 行的表现与读门取值无关。
 
 | 方法 | 路径 | 作用 | Bearer | 关键查询参数 | 出处 |
 |---|---|---|---|---|---|
-| GET | `/health` | 五个依赖的轻量探针（含解析后端 docling，未配置时该项为 `disabled`） | 免 | — | `app/api/health.py` |
-| GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | 免 | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
-| GET | `/` | landing（`include_in_schema=False`） | 免 | — | `app/main.py` 的 `lifespan()` |
-| POST | `/api/papers/ingest` | URL 摄取 | 是 | — | `app/api/ingestion.py` |
-| POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | 是 | — | `app/api/ingestion.py` |
-| POST | `/api/papers/ingest/dir` | 服务端目录导入（零传输） | 是 | — | `app/api/ingestion.py` 的 `ingest_files()` |
-| POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | 是 | — | `app/api/ingestion.py` 的 `ingest_dir()` |
-| POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | 是 | — | `app/api/ingestion.py` 的 `ingest_file()` |
-| GET | `/api/jobs/queue` | 队列深度快照 | 免 | — | `app/api/jobs.py` |
-| GET | `/api/jobs/{job_id}` | 单作业阶段/进度 | 免 | — | `app/api/jobs.py` |
-| POST | `/api/jobs/{job_id}/retry` | 重驱动 FAILED 作业（202） | 是 | — | `app/api/jobs.py` |
-| GET | `/api/jobs` | 最近作业列表 | 免 | `limit`（默认 20，无上下界） | `app/api/jobs.py` |
-| GET | `/api/papers` | 论文列表 | 免 | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py` |
-| GET | `/api/papers/{paper_id}` | 单篇元数据 | 免 | — | `app/api/papers.py` 的 `list_papers()` |
-| GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | 免 | — | `app/api/papers.py` 的 `get_paper()` |
-| GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | 免 | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
-| GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | 免 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
-| GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 免 | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
-| PATCH | `/api/papers/{paper_id}/metadata` | 手动改元数据 | 是 | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
-| POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张（裁决「采纳被拒值」） | 是 | — | `app/api/papers.py` 的 `delete_paper()` |
-| POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把该分歧标为已裁决 | 是 | — | `app/api/papers.py` 的 `delete_paper()` |
-| DELETE | `/api/papers/{paper_id}` | 删除（204） | 是 | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
-| POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | 是 | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
-| POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | 是 | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
-| POST | `/api/metadata/import` | 外部元数据导入 | 是 | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py` |
-| GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py` |
-| POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py` |
-| POST | `/api/metadata/apply` | 按报告批量应用人工决定 | 是 | — | `app/api/metadata.py` |
-| POST | `/api/search` | 论文级混合检索 | 免 | — | `app/api/search.py` 的 `search()` |
-| GET | `/api/search-logs` | 检索日志（只读） | 免 | `limit`、`since`、`mode` | `app/api/search_logs.py` |
+| GET | `/health` | 五个依赖的轻量探针（含解析后端 docling，未配置时该项为 `disabled`） | public | — | `app/api/health.py` |
+| GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | read | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
+| GET | `/` | landing（`include_in_schema=False`） | public | — | `app/main.py` 的 `lifespan()` |
+| POST | `/api/papers/ingest` | URL 摄取 | write | — | `app/api/ingestion.py` |
+| POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | write | — | `app/api/ingestion.py` |
+| POST | `/api/papers/ingest/dir` | 服务端目录导入（零传输） | write | — | `app/api/ingestion.py` 的 `ingest_files()` |
+| POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | write | — | `app/api/ingestion.py` 的 `ingest_dir()` |
+| POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | write | — | `app/api/ingestion.py` 的 `ingest_file()` |
+| GET | `/api/jobs/queue` | 队列深度快照 | read | — | `app/api/jobs.py` |
+| GET | `/api/jobs/{job_id}` | 单作业阶段/进度 | read | — | `app/api/jobs.py` |
+| POST | `/api/jobs/{job_id}/retry` | 重驱动 FAILED 作业（202） | write | — | `app/api/jobs.py` |
+| GET | `/api/jobs` | 最近作业列表 | read | `limit`（默认 20，无上下界） | `app/api/jobs.py` |
+| GET | `/api/papers` | 论文列表 | read | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py` |
+| GET | `/api/papers/{paper_id}` | 单篇元数据 | read | — | `app/api/papers.py` 的 `list_papers()` |
+| GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | read | — | `app/api/papers.py` 的 `get_paper()` |
+| GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | read | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
+| GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | read | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
+| GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | read | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
+| PATCH | `/api/papers/{paper_id}/metadata` | 手动改元数据 | write | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
+| POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张（裁决「采纳被拒值」） | write | — | `app/api/papers.py` 的 `delete_paper()` |
+| POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把该分歧标为已裁决 | write | — | `app/api/papers.py` 的 `delete_paper()` |
+| DELETE | `/api/papers/{paper_id}` | 删除（204） | write | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
+| POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | admin | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
+| POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | write | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
+| POST | `/api/metadata/import` | 外部元数据导入 | write | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py` |
+| GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | read | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py` |
+| POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | write | — | `app/api/metadata.py` |
+| POST | `/api/metadata/apply` | 按报告批量应用人工决定 | write | — | `app/api/metadata.py` |
+| POST | `/api/search` | 论文级混合检索 | read | — | `app/api/search.py` 的 `search()` |
+| GET | `/api/search-logs` | 检索日志（只读） | read | `limit`、`since`、`mode` | `app/api/search_logs.py` |
 
 `/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py` 的 `lifespan()` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py` 的 `search()` 只收 body），日志另开 session：`app/services/search_pipeline.py` 的 `log_search()`。
 
 ### 2.2 鉴权实现
 
-**总开关 `AUTH_ENABLED`（默认 `false`）**：关 = 每个 `/api/*` 调用方拿到匿名 admin 身份
-（日志记 `key=anonymous`），不查库；开 = **写端点与删除**的档位强制生效，读端点仍然免鉴权
-（2026-10-12 的决定：不改库的请求放开；它**取代**了 2026-10-05 计划第 3 节 D2 的「全有或全无」）。`/mcp` 同受该开关（见
-`11-mcp-agent-interface.md` [#4](11-mcp-agent-interface.md#4-鉴权身份与审计)）。
+**四档模型（2026-10-12 读门策略化）**：权限一共 4 级 —— `public`（无凭据）与三级密钥
+`read` < `write` < `admin`。
+
+| 级别 | 覆盖端点 | 何时生效 |
+|---|---|---|
+| `public` | `GET /health`、`GET /`、`/docs`、`/redoc`、`/openapi.json`；**读门为 `public` 时的 13 个业务读** | 框架/运维端点恒为 public；读端点由 `AUTH_READ_ACCESS` 决定 |
+| `read` | 13 个业务读端点（[#2.1](#21-端点总表) 里 `Bearer=read` 的行） | 仅当 `AUTH_READ_ACCESS=key` |
+| `write` | 全部增删改：5 个 `ingest*`、`jobs/{job_id}/retry`、单篇 `papers/{paper_id}/reindex`、`PATCH papers/{paper_id}/metadata`、`metadata/rollback`、`metadata/conflicts/dismiss`、`metadata/import`、`metadata/sources/{source_id}/attach`、`metadata/apply`、**`DELETE papers/{paper_id}`** | `AUTH_ENABLED=true` |
+| `admin` | **只有** `POST /api/papers/reindex`（批量/整库重建：小时级、打满 embedding） | `AUTH_ENABLED=true` |
+
+**两个开关，互不越界**：
+
+| `AUTH_ENABLED` | `AUTH_READ_ACCESS` | 读端点 | 写端点（含删除） | 批量重建（`admin`） |
+|---|---|---|---|---|
+| `false` | 任意 | 开放（匿名 admin） | 开放（匿名 admin） | 开放（匿名 admin） |
+| `true` | `public`（默认） | 开放（匿名 read 身份） | 401 / 403 | 401 / 403 |
+| `true` | `key` | 401 / 403 | 401 / 403 | 401 / 403 |
+
+`AUTH_ENABLED` 管整个凭据面（关 = 读写全放行），`AUTH_READ_ACCESS` **只切读门**，且仅在总开关打开时
+有意义（关时该键没有作用对象，属于合法组合，启动不告警）。**不变式**：`AUTH_ENABLED=true` 时，
+写端点与 `admin` 端点的表现与 `AUTH_READ_ACCESS` 取值无关 —— 门在比档位之前先判 `is_anonymous`，
+所以匿名调用者碰写门恒为 401，不会因为读门开着而变成 403。
+
+**拒绝语义**：
+
+| 调用者 | 读门 `public` | 读门 `key` | 写门（含删除） | 批量重建（`admin`） |
+|---|---|---|---|---|
+| 无凭证 | 200（匿名 read） | 401 + `WWW-Authenticate` | 401 + `WWW-Authenticate` | 401 |
+| 无效凭证 | 200（读门不读凭证） | 403 `Invalid API key` | 403 `Invalid API key` | 403 |
+| `read` 钥匙 | 200 | 200 | 403 `insufficient role` | 403 |
+| `write` 钥匙 | 200 | 200 | 200 | 403 |
+| `admin` 钥匙 | 200 | 200 | 200 | 200 |
 
 | 环节 | 实现 | 出处 |
 |---|---|---|
 | 取凭证 | `Authorization` 头优先；`partition(" ")` 后 scheme 必须为 `bearer`（忽略大小写）且凭证非空 | `app/core/security.py::extract_api_key` |
 | 无 `Authorization` 时回退 | 读 `X-API-Key` | 同上 |
 | 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | 同上 |
-| 解析（每请求一次） | `AuthContextMiddleware`（main.py）解析 Bearer → `api_key_service.authenticate(session, token)`，把身份放 `scope["state"]` 并把前缀绑进日志上下文（**纯 ASGI**；不在依赖里做，因为线程池依赖里绑 contextvar 传播不回日志上下文） | `app/main.py`、`app/services/api_key_service.py` |
+| 解析（每请求一次） | `AuthContextMiddleware`（main.py）解析 Bearer → `api_key_service.authenticate(session, token)`，把身份放 `scope["state"]` 并把前缀绑进日志上下文（**纯 ASGI**；不在依赖里做，因为线程池依赖里绑 contextvar 传播不回日志上下文）。读门为 `public` 且没带凭证时，这里直接给出**匿名 read 身份**（`anonymous_reader()`，前缀 `anonymous`），所以日志不再出现空归因 | `app/main.py`、`app/services/api_key_service.py` |
 | 凭证存储 | `api_keys` 表只存 `sha256(完整密钥)`；`name`/`prefix`/`key_hash` 各唯一；三档 `read < write < admin`；env 引导行（`PAPER_API_KEY`/`PAPER_API_KEYS`）启动时 upsert 成 admin、优先于库行（恢复路径） | `app/db/models.py::ApiKey`、`app/services/api_key_service.py` |
-| 档位强制 | `require_role(min)` 工厂；写端点用 `require_write`（=write）、删除用 `require_admin`（=admin），**端点级**挂载（缺凭证 401、不匹配 403、档位不足 403 `insufficient role`）。**没有 read 档单例**：读端点不挂依赖，凭证根本不被读取（2026-10-12） | `app/core/security.py` |
-| 依赖挂载 | ingestion 整个 router `require_write`；jobs/metadata/papers 是混档 router，**只在写/admin 端点**挂依赖，读端点不挂；search / search_logs / consistency / health 整个 router 无依赖 | 各 `app/api/*.py` |
-| 公开读 | 13 个读端点（[#2.1](#21-端点总表) 里 `Bearer=免` 的业务行）+ `GET /health`；router 构造时不带 dependencies，端点函数也不带 | 同上 |
+| 匿名身份 | 复用 `AuthIdentity`，加 `is_anonymous` 标志与 `anonymous(role)` / `anonymous_reader()` 工厂；唯一用途是让门区分「没带凭证」（401）与「档位不足」（403） | 同上 |
+| 档位强制 | `require_role(min)` 工厂；读端点用 `require_read`（=read）、写端点用 `require_write`（=write，含删除）、批量重建用 `require_admin`（=admin）。缺凭证 401 + `WWW-Authenticate`、不匹配 403 `Invalid API key`、档位不足 403 `insufficient role` | `app/core/security.py` |
+| 依赖挂载 | consistency / jobs / metadata / papers / search / search_logs 六个 router 在**构造时**挂 `require_read`（一处声明覆盖全部读端点）；写与 admin 端点各自在端点级挂更高档位（同一路由两条依赖时以最高档为准） | 各 `app/api/*.py` |
+| 读门为 `public` 时的读端点 | 不校验凭证：缺凭证 200（匿名 read 身份），**无效凭证也 200**（读门不读凭证，2026-10-12 B2 裁定） | `app/core/security.py` |
 
-测试用 `app.dependency_overrides[require_write]` 绕过写档（如 `tests/test_ingest_files.py` 的 `client()`）；读端点没有依赖可绕，契约由 `tests/test_public_reads.py`（30 个路由逐条钉住谁有门谁没有）与 `tests/test_auth_rest.py`（401/403 语义与「无效凭证打读端点仍是 200」）覆盖。
+测试用 `app.dependency_overrides[require_write]` 绕过写档（如 `tests/test_ingest_files.py` 的 `client()`）；路由表契约由 `tests/test_public_reads.py`（30 个路由逐条钉住各自档位，并断言「只有批量重建是 admin」）覆盖，401/403 语义与两态矩阵由 `tests/test_auth_rest.py`（probe 路由 × 5 种凭证 × 两种读门）与 `tests/test_auth_read_access.py`（配置枚举、匿名身份、「总开关关 + `key` 不告警」）覆盖。
 端点→档位全表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)；启动护栏（拒 `change-me`、拒零密钥、auth-off + 非回环 WARNING）见 `app/main.py::lifespan` 与 `app/core/config.py` 的 `_check_auth`。
 
 ### 2.3 错误处理
@@ -178,7 +207,7 @@
 
 | 约定 | 代码是否遵守 | 证据 |
 |---|---|---|
-| `/api/*` 除 `/health` 外都要 Bearer | **已改**：读端点免鉴权、写端点要 `write`、删除要 `admin`（2026-10-12） | [#2.2](#22-鉴权实现)；[MVP-SPEC.md](MVP-SPEC.md) |
+| `/api/*` 除 `/health` 外都要 Bearer | **已改**：四档模型 —— 读端点挂 `read`（读门 `public` 时不校验凭证）、增删改要 `write`、批量重建要 `admin`（2026-10-12） | [#2.2](#22-鉴权实现)；[MVP-SPEC.md](MVP-SPEC.md) |
 | 配置统一走 `app/core/config.py`，禁止硬编码 | 基本遵守；唯一硬编码是 429 的 `Retry-After: 2`（非配置键） | `app/services/upload_admission.py` 的 `RETRY_AFTER_SECONDS` |
 | `paper_id` 为 UUID 字符串 | 遵守（schema 层是 `str`，未做 UUID 格式校验） | `app/schemas/paper.py` |
 | 错误体统一 `{"detail": "…"}` | 手写 `HTTPException` 处遵守；框架请求体校验失败时 `detail` 是**列表** | [MVP-SPEC.md](MVP-SPEC.md)；代码未注册处理器（[#2.3](#23-错误处理)） |
@@ -227,6 +256,8 @@
 
 | 键 | 默认 | 作用 | 出处 |
 |---|---|---|---|
+| `AUTH_ENABLED` | `false` | 鉴权总开关（同时管 `/api/*` 与 `/mcp`）：关 = 每个调用者都是匿名 admin（读写全放行）；开 = 档位强制生效（读门另由 `AUTH_READ_ACCESS` 决定），并拒绝 `change-me` 默认值与零密钥启动 | `app/core/config.py` |
+| `AUTH_READ_ACCESS` | `public` | 读门策略（`public` \| `key`）：`public` = 读端点不校验凭证（缺凭证/无效凭证都 200，调用者记匿名 read 身份），`key` = 读端点与写端点同一套规矩。仅在 `AUTH_ENABLED=true` 时有作用对象；非法取值启动即报错，`AUTH_ENABLED=false` + `key` **不告警** | `app/core/config.py` |
 | `PAPER_API_KEY` | `change-me` | Bearer 密钥（比对对象）；空值 → 全部 403 | `app/core/config.py` |
 | `PAPER_API_HOST` / `PAPER_API_PORT` | `0.0.0.0` / `8077` | 监听地址/端口（仅 uvicorn 启动参数使用） | `config.py` |
 | `APP_ENV` / `LOG_LEVEL` | `local` / `INFO` | 启动日志内容与级别（lifespan 首行） | `config.py` |
