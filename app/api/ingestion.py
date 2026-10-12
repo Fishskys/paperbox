@@ -684,7 +684,7 @@ async def ingest_compressed(
     archive_service.prune_tree(dest)
 
     if accepted_ids:
-        # AGENTS section 1: one file = interactive (a human is waiting), even
+        # Interaction priority: one file = interactive (a human is waiting), even
         # when it arrived inside an archive (review 2026-10-05, P2-17).
         priority = (
             job_queue.PRIORITY_INTERACTIVE

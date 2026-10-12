@@ -30,7 +30,7 @@ What it costs:
   covering the live path (they stay as the specification for what the engine is
   expected to do).
 
-Facts that cost real time to establish (probe: ``tmp/probe_native_hybrid.py``):
+Facts that cost real time to establish (one-off probe against the live cluster):
 
 * ``pagination_depth`` belongs **inside the ``hybrid`` clause** (body key, added
   in OpenSearch 2.19); as a top-level body key *or* as a URL parameter it is a

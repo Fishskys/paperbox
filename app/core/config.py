@@ -4,7 +4,7 @@ All settings come from environment variables (see ``.env`` at the repository
 root, which is git-ignored). Nothing is hard-coded: this machine runs the
 infrastructure inside WSL2 (mirrored networking) while the app runs on Windows,
 and the dependency ports are reachable through ``localhost`` as long as they are
-allowed in WSL's ufw (see ``AGENTS.md`` §3).
+allowed by the host firewall (see ``.env.example``).
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
 
     # --- OpenSearch (full-text + vector index) ---
     opensearch_url: str = Field(default="http://127.0.0.1:9200", alias="OPENSEARCH_URL")
-    # `.env` 是唯一真源（AGENTS §3.4）；这里的默认值只是没配 .env 时的兜底，
+    # `.env` 是唯一真源（见 `UserManual.md` 应用配置章）；这里的默认值只是没配 .env 时的兜底，
     # 必须跟着当前物理索引走 —— v1/v2 已于 2026-09-30 drop。
     opensearch_index: str = Field(default="paper_chunks_v3", alias="OPENSEARCH_INDEX")
     opensearch_alias: str = Field(default="paper_chunks_current", alias="OPENSEARCH_ALIAS")

@@ -163,7 +163,7 @@ def test_the_chunk_mapping_is_strict() -> None:
 
     2026-09-30: ``dynamic`` was ``true``, so a filter field added to a document
     without a mapping update became a searchable-as-``text`` field that no
-    keyword filter could use -- and nothing complained (AGENTS §3.5). ``strict``
+    keyword filter could use -- and nothing complained (see `docs/architecture/01-storage.md`). ``strict``
     turns that into an indexing error; the tests below and just above keep it
     safe by pinning that everything ``build_chunk_document`` emits is declared.
     """

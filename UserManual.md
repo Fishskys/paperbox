@@ -72,7 +72,7 @@ uv run python scripts/healthcheck.py
 > **Windows 开发机**：依赖容器跑在 WSL2 里，第 3 步换成
 > `wsl -e bash -lc "cd /mnt/<盘>/.../paperbox/infra && docker compose up -d"`；
 > 若从 Windows 访问容器端口不通，需要在 WSL 里放行端口（`wsl -e -u root bash -lc "ufw allow 9200/tcp"`，9000/8090/5432 同理）。
-> 地址一律写 `127.0.0.1`，不要写 `localhost`（见 §3.5 Q8）。
+> 地址一律写 `127.0.0.1`，不要写 `localhost`（见 [#3.5](#35-使用中会遇到的问题) Q8）。
 
 ### 1.3 应用配置（根 `.env`）
 
@@ -80,7 +80,7 @@ uv run python scripts/healthcheck.py
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
-| `TZ` | 进程时区 | `Asia/Shanghai` | 应用日志、`.env` 里不带偏移的时间戳、依赖容器的解释口径都看它；见 §1.3.6 |
+| `TZ` | 进程时区 | `Asia/Shanghai` | 应用日志、`.env` 里不带偏移的时间戳、依赖容器的解释口径都看它；见 [#1.3.6](#136-分块) |
 | `POSTGRES_HOST` | PostgreSQL 主机 | `127.0.0.1` | 任意主机名/IP；容器化时用 `host.docker.internal` 或服务名 |
 | `POSTGRES_PORT` | PostgreSQL 端口 | `5432` | 1–65535 |
 | `POSTGRES_USER` | 数据库用户 | `postgres` | 需与容器初始化时的用户一致 |
@@ -102,16 +102,15 @@ uv run python scripts/healthcheck.py
 |---|---|---|---|
 | `EMBEDDING_URL` | 向量/精排推理服务地址 | `http://127.0.0.1:8090` | 与容器 `embedding` 的端口一致 |
 | `EMBEDDING_MODEL` | 向量模型名 | `intfloat/multilingual-e5-large` | 只作为记录与溯源（真正加载的模型由容器侧决定） |
-| `EMBEDDING_DIMENSION` | 向量维度 | `1024` | 必须与索引 `knn_vector.dimension` **和容器模型的实测输出维度**一致；启动时三方对账，不符拒绝启动（见 §3.5 Q19） |
+| `EMBEDDING_DIMENSION` | 向量维度 | `1024` | 必须与索引 `knn_vector.dimension` **和容器模型的实测输出维度**一致；启动时三方对账，不符拒绝启动（见 [#3.5](#35-使用中会遇到的问题) Q19） |
 | `EMBEDDING_BATCH_SIZE` | 单次 `/embed` 的文本数 | `16` | **必须与容器 `MAX_BATCH` 相同**（超批 422） |
 | `EMBEDDING_TIMEOUT` | 单批 HTTP 超时（秒） | `300` | 必须大于最坏排队时间；容器把推理串在一条 FIFO 队列后 |
 | `EMBEDDING_MAX_RETRIES` | 每批额外重试次数 | `2` | 退避 `0.5 × 2^n` 秒 |
 | `RERANK_ENABLED` | 是否具备精排能力 | `true` | 设为 `false` 时精排请求直接跳过（`rerank=true` 也无效） |
-| `RERANK_MODEL` | 精排（交叉编码器）模型名 | `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8` | 可换内置档：`jinaai/jina-reranker-v2-base-multilingual`（中文优先、更重）、`Xenova/ms-marco-MiniLM-L-6-v2`（英文轻量） |
+| `RERANK_MODEL` | 精排（交叉编码器）模型名 | `temsa/mmarco-mMiniLMv2--H384-v1-onnx-cpu-qint8` | 可换内置档：`jinaai/jina-reranker-v2-base-multilingual`（中文优先、更重）、`Xenova/ms-marco-MiniLM-L-6-v2`（英文轻量） |
 | `RERANK_URL` | 精排服务地址 | `http://127.0.0.1:8090` | 与 `EMBEDDING_URL` 同服务 |
 
-> ⚠️ `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`，见 §1.4.4）——应用进程不读，
-> 写进根 `.env` 是空操作（2026-10-07 审查更正）。
+> ⚠️ `RERANK_MODEL_FILE` / `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`，见 [#1.4.4](#144-模型与资源embedding-容器)）——应用进程不读，> 写进根 `.env` 是空操作。
 | `RERANK_TIMEOUT` | 精排请求超时（秒） | `10` | 候选数 = `top_k × RERANK_CANDIDATES`；**设小了会让精排静默降级**（多语言档建议 `60`） |
 | `RERANK_CANDIDATES` | 精排候选过取倍数 | `5` | 合法值 ≥1；候选池 = `top_k × 此值`，同时决定 native 路径每篇进精排的块数上限 |
 
@@ -197,8 +196,7 @@ uv run python scripts/healthcheck.py
 
 密钥表 `api_keys` 只存 `sha256(完整密钥)`，完整密钥只在创建时打印一次。三档权限单调序
 `read < write < admin`：read 可读全部接口；write 增加导入/重试/reindex/元数据写入；
-admin 再增加删除。MCP 工具同一套档位（`paper_delete` 需 admin，其余写工具需 write，
-且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束）。每条请求日志、检索日志
+admin 再增加删除。MCP 工具同一套档位（`paper_delete` 需 admin，其余写工具需 write，且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束）。每条请求日志、检索日志
 （`search_queries.key_prefix`）与 MCP 审计行都记录密钥**前缀**（归因用，永不落完整密钥）。
 
 ```bash
@@ -229,12 +227,10 @@ docker exec paperbox-postgres psql -U postgres -d paperbox -tAc "show timezone; 
 两条容易踩的：
 
 - **`timestamptz` 存的是绝对时刻**。改 `TZ` 不改任何已存数据，只改"怎么解释/渲染"；
-  所以历史时间戳不会因为这次统一而需要迁移。
-- **两个时间戳别混**（2026-10-10 起）：`decided_at` = 这条声明**写入账本**的时刻（`server_default`），
-  `decision_at` = 人类**裁决**它的时刻（`NULL` = 没有人类碰过）。此前只有前者，于是"这几条冲突
-  什么时候被裁决的"只能去翻访问日志 —— 0.5.1 补了 `decision_at`（迁移 `a41f7c2d9b30`），
-  三个裁决入口（`conflicts/dismiss`、`metadata/rollback`、手工 PATCH）都会盖。
-  **0.5.1 之前**的裁决没有这一列；要用访问日志补历史值，跑
+  所以历史时间戳不需要迁移。
+- **两个时间戳别混**（2026-10-10 起）：`decided_at` = 这条声明**写入账本**的时刻（`server_default`），`decision_at` = 人类**裁决**它的时刻（`NULL` = 没有人类碰过）。`decision_at`（迁移 `a41f7c2d9b30`）
+  由三个裁决入口（`conflicts/dismiss`、`metadata/rollback`、手工 PATCH）写入。
+  记录该列之前入库的裁决行不含 `decision_at`；要用访问日志补历史值，跑
   `uv run python scripts/backfill_decision_times.py`（默认试运行，`--apply` 才写）。
 
 ### 1.4 容器配置（`infra/.env`）
@@ -249,9 +245,8 @@ docker exec paperbox-postgres psql -U postgres -d paperbox -tAc "show timezone; 
 | `paperbox-embedding` | 本地构建 `infra/embedding`（`paperbox/embedding-server:0.1`） | `8090` | `EMBEDDING_MODELS_DIR` | `/health` | 首次启动要下载模型（慢）；批次/线程配置过大会 OOM |
 | `paperbox-docling`（可选） | 本地构建 `infra/docling`（`paperbox-docling-cpu:v1.35.0-formula`） | `8091→5001` | `DOCLING_DATA_DIR` | `/health` | 只带 `--profile local-docling` 才启动；内存上限给小了会被 OOM-kill |
 
-**时区**：五个服务统一 `TZ=${TZ:-Asia/Shanghai}`（缺省即 `Asia/Shanghai`，见 §1.3.6）。
-Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO 镜像里没有 tzdata**，
-只给 `TZ` 会打印成 `13:53 Asia`（名字认了、偏移仍是 0）—— 所以它的 compose 里把宿主的
+**时区**：五个服务统一 `TZ=${TZ:-Asia/Shanghai}`（缺省即 `Asia/Shanghai`，见 [#1.3.6](#136-分块)）。
+Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO 镜像里没有 tzdata**，只给 `TZ` 会打印成 `13:53 Asia`（名字认了、偏移仍是 0）—— 所以它的 compose 里把宿主的
 `/usr/share/zoneinfo/Asia/Shanghai` 同时挂到 `/etc/localtime` 与同名 zoneinfo 路径上。
 
 #### 1.4.2 凭据与端口
@@ -275,21 +270,20 @@ Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO �
 | `EMBEDDING_MODELS_DIR` | 向量/精排模型缓存目录 | `./data/embedding-models` | 换机时可整体搬运，避免重新下载 |
 | `DOCLING_DATA_DIR` | docling 缓存目录（可选容器） | `./data/docling` | 模型在镜像里，这里只放缓存 |
 
-> 改数据目录后必须 `docker compose up -d --force-recreate <服务>`（**只 `restart` 不生效**，挂载在创建时就固定了），
-> 且换目录前请先停容器并把旧目录整体复制过去。
+> 改数据目录后必须 `docker compose up -d --force-recreate <服务>`（**只 `restart` 不生效**，挂载在创建时就固定了），> 且换目录前请先停容器并把旧目录整体复制过去。
 
 #### 1.4.4 模型与资源（embedding 容器）
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
 | `EMBEDDING_MODEL` | 向量模型 | `intfloat/multilingual-e5-large` | 1024 维、512 token 上限；换模型要新建索引 |
-| `RERANK_MODEL` | 精排模型 | `temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8` | 与根 `.env` 的 `RERANK_MODEL` 保持一致（否则响应里报的模型名与实际加载的不符） |
+| `RERANK_MODEL` | 精排模型 | `temsa/mmarco-mMiniLMv2--H384-v1-onnx-cpu-qint8` | 与根 `.env` 的 `RERANK_MODEL` 保持一致（否则响应里报的模型名与实际加载的不符） |
 | `RERANK_MODEL_FILE` | 非内置模型的 ONNX 文件 | `model.onnx` | 内置档（jina / ms-marco）请注释掉 |
 | `RERANK_MAX_BATCH` | 精排单次候选上限 | `4` | 内存随候选数增长；轻量英文档可回 `16` |
 | `MAX_BATCH` | `/embed` 单次文本数上限 | `16` | **必须与根 `.env` 的 `EMBEDDING_BATCH_SIZE` 相同** |
 | `ORT_THREADS` | 推理线程数 | `4` | 调大会和同机其他服务抢 CPU，并可能触发 OOM |
 | `INFERENCE_WORKERS` | 推理队列工作线程数 | `1` | 保持 1：并发不再抢内存，削峰交给队列 |
-| `INFERENCE_QUEUE_DEPTH` | 推理队列深度 | `512` | 队满**立即** `503 + Retry-After`；定值规矩见 §3.4 |
+| `INFERENCE_QUEUE_DEPTH` | 推理队列深度 | `512` | 队满**立即** `503 + Retry-After`；定值规矩见 [#3.4](#34-响应里的空值符号) |
 
 #### 1.4.5 可选：docling 解析容器
 
@@ -315,8 +309,7 @@ cd infra && docker compose --profile local-docling up -d docling
 | A. 应用直跑宿主（推荐） | 依赖容器（postgres / opensearch / minio / embedding，另可按需 `--profile local-docling` 起 docling）跑 docker，应用用 `uv run uvicorn` 或 systemd 托管，依赖地址填 `127.0.0.1` | 单机部署、最省事 |
 | B. 应用也容器化 | `docker compose -f docker-compose.yml up -d --build`（根目录那份 compose 只打包应用） | 要统一编排时 |
 
-形态 B 的两个要点：依赖地址要么指向宿主网关 `host.docker.internal`（根 compose 已配 `extra_hosts`），
-要么把两份 compose 加进同一张 external 网络、地址直接写服务名（`postgres:5432` / `opensearch:9200` / `minio:9000` / `embedding:8090`）。
+形态 B 的两个要点：依赖地址要么指向宿主网关 `host.docker.internal`（根 compose 已配 `extra_hosts`），要么把两份 compose 加进同一张 external 网络、地址直接写服务名（`postgres:5432` / `opensearch` / `minio` / `embedding`）。
 
 **安全建议**：`infra/.env` 设 `PAPERBOX_BIND_IP=127.0.0.1`，只暴露应用端口（8077，或经反代走 443）；
 `PAPER_API_KEY` 换成强口令；依赖服务不要直接暴露公网。
@@ -354,7 +347,7 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 |---|---|---|---|
 | `MCP_ENABLED` | 是否挂载 `/mcp` | `false` | 打开时**必须**同时给白名单，否则**启动报错** |
 | `MCP_ALLOWED_HOSTS` | 允许访问的 `Host` 白名单 | 空 | 逗号分隔；**每个 agent 访问用的 IP 与主机名都要写**，且各写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`） |
-| `PAPER_API_KEYS` | 引导管理员多 key（`名字:key` 分号分隔） | 空 | 启动时 upsert 成 `api_keys` 表的 admin 行（agent 名 = 名字）；空则回落到 `PAPER_API_KEY`（agent 名 = `default`）。给 agent 分发**带档位**的 key 用 `scripts/manage_keys.py`（见 §1.3.7.1） |
+| `PAPER_API_KEYS` | 引导管理员多 key（`名字:key` 分号分隔） | 空 | 启动时 upsert 成 `api_keys` 表的 admin 行（agent 名 = 名字）；空则回落到 `PAPER_API_KEY`（agent 名 = `default`）。给 agent 分发**带档位**的 key 用 `scripts/manage_keys.py`（见 [#1.3.7.1](#1371-密钥分发auth_enabledtrue-时)） |
 | `MCP_WRITE_ENABLED` | 写工具总闸 | `false` | 关闭时 4 个写工具**不存在**（不出现在工具列表，按名字也调不到） |
 | `MCP_ALLOW_DELETE` / `MCP_ALLOW_REINDEX` / `MCP_ALLOW_METADATA_WRITE` | 三个写工具分开关 | `false` | 受总闸约束；导入工具只受总闸管 |
 | `MCP_MAX_CHARS` / `MCP_MAX_CHARS_CEILING` | 单次正文预算 / 上限 | `8000` / `32000` | 超上限**报错不裁剪** |
@@ -389,9 +382,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 写 | `paper_delete` | 删除某篇（默认 `dry_run=true`，软删） |
 | 写 | `paper_update_metadata` | 改元数据，返回「旧值 → 新值」 |
 
-四个客户端的配置片段、以及 401/403/421 的排障速查，见 `docs/architecture/11-mcp-agent-interface.md` §10。
-**已真机验收通过：Hermes、codex**（codex 非交互跑要给 `--dangerously-bypass-approvals-and-sandbox`，
-因为 codex 对 MCP 调用走自己的审批策略）；Claude Code（本机未装）与自研 harness 的片段**未验证**。
+四个客户端的配置片段、以及 401/403/421 的排障速查，见 `docs/architecture/11-mcp-agent-interface.md` [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入)。
+**已真机验收通过：Hermes、codex**（codex 非交互跑要给 `--dangerously-bypass-approvals-and-sandbox`，因为 codex 对 MCP 调用走自己的审批策略）；Claude Code（本机未装）与自研 harness 的片段**未验证**。
 **想区分 agent 就各发一把 key**：`AUTH_ENABLED=true` 时推荐 `scripts/manage_keys.py create --role <档位>`（MCP 与 REST 共用，审计记 key 前缀）；env 引导 key 按值认身份，共用一把 key 的 agent 在审计里会同名。
 自检：`hermes mcp test paperbox`（Hermes）或直接 `curl` 一次 `initialize` 握手。
 
@@ -406,7 +398,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 基址 | `http://<host>:8077`（默认端口 8077） |
 | 鉴权 | `AUTH_ENABLED=true` 时除 `/`、`/health`、`/docs` 外所有接口都要 `Authorization: Bearer <key>`；`false`（默认）时免鉴权（匿名=admin）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套；档位不足 403（detail 含 `insufficient role`） |
 | 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
-| 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 §1.7） |
+| 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 [#1.7](#17-mcp-接入让-agent-直接查读论文)） |
 | 签名下载 | `GET /api/downloads/{paper_id}?exp=&sig=`（**免 Bearer**，签名即凭据，TTL 10–3600 s，过期或被改 403） |
 | 错误体 | `{"detail": "..."}`（422 校验错误为 FastAPI 默认结构，含 `loc`/`msg`/`type`） |
 | 幂等性 | 建索引、建快照、清理解包目录等运维接口可重复执行 |
@@ -531,9 +523,9 @@ curl -X POST http://127.0.0.1:8077/api/papers/ingest/files \
 # 混合检索 + 精排 + 过滤面
 curl -X POST http://127.0.0.1:8077/api/search \
   -H "Authorization: Bearer $PAPER_API_KEY" -H 'Content-Type: application/json' \
-  -d '{"query":"low power SRAM leakage reduction","mode":"hybrid","top_k":5,
+ -d '{"query":"low power SRAM leakage reduction""mode":"hybrid""top_k":5
        "rerank":true,"facets":true,
-       "filters":{"year_from":2020,"paper_type":["journal"]}}'
+ "filters":{"year_from":2020"paper_type":["journal"]}}'
 ```
 
 ### 2.6 作业
@@ -574,9 +566,9 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 200 | 成功 | — |
 | 202 | 已受理 | 导入/重试/重建索引类接口：返回的是作业，用 `/api/jobs/{job_id}` 轮询进度 |
 | 204 | 成功且无响应体 | `DELETE /api/papers/{paper_id}` |
-| 400 Bad Request | 入站 URL 被安全闸拒绝 | URL 导入指向私网地址且未在 `INGEST_ALLOW_PRIVATE_HOSTS` 白名单内（`SSRF_BLOCKED`）；放行办法见 §1.3.4 该键说明 |
+| 400 Bad Request | 入站 URL 被安全闸拒绝 | URL 导入指向私网地址且未在 `INGEST_ALLOW_PRIVATE_HOSTS` 白名单内（`SSRF_BLOCKED`）；放行办法见 [#1.3.4](#134-导入与上传) 该键说明 |
 | 401 Unauthorized | 没带或带了格式不对的凭证（`AUTH_ENABLED=true`） | 请求头缺 `Authorization: Bearer <key>`；响应带 `WWW-Authenticate: Bearer` |
-| 403 Forbidden | 凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 §2.1.1 档位表）；改了 `.env` 后忘了重启应用也会 403 |
+| 403 Forbidden | 凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时) 档位表）；改了 `.env` 后忘了重启应用也会 403 |
 | 404 Not Found | 路径不存在或功能未开启 | `/api/papers/ingest/dir` 在 `INGEST_LOCAL_ROOTS` 为空时**就是 404**（功能关闭，不是路径写错） |
 | 409 Conflict | 状态冲突 | 目前只有一处：重试一个**不是** `FAILED` 的作业（`only FAILED jobs can be retried`） |
 | 413 Request Entity Too Large | 单请求总字节超限 | 超 `INGEST_MAX_REQUEST_MB`（默认 200 MB）；拆分请求或调大该值 |
@@ -639,12 +631,10 @@ curl -X POST http://127.0.0.1:8077/api/search \
 ### 3.5 使用中会遇到的问题
 
 **Q1 检索结果顺序没变化、也没有 `rerank_score`？**
-多半是精排降级（见 §3.4）。候选数 = `top_k × RERANK_CANDIDATES`，多语言档每候选约 0.06–0.3 秒，
-`top_k=10` 就可能是几十秒；把 `RERANK_TIMEOUT` 调到 `60` 再看日志里有没有 `rerank request failed`。
+多半是精排降级（见 [#3.4](#34-响应里的空值符号)）。候选数 = `top_k × RERANK_CANDIDATES`，多语言档每候选约 0.06–0.3 秒，`top_k=10` 就可能是几十秒；把 `RERANK_TIMEOUT` 调到 `60` 再看日志里有没有 `rerank request failed`。
 
 **Q2 检索报 503？**
-两处来源：① 推理队列满（日志 `inference queue full (depth=..., workers=1)`）—— 降低并发、稍后重试，
-或调大容器 `INFERENCE_QUEUE_DEPTH`（定值规矩：`depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT / 2`）；
+两处来源：① 推理队列满（日志 `inference queue full (depth=..., workers=1)`）—— 降低并发、稍后重试，或调大容器 `INFERENCE_QUEUE_DEPTH`（定值规矩：`depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT / 2`）；
 ② 向量/精排容器没起来 —— `docker compose ps` 看 `paperbox-embedding` 是否 healthy。
 
 **Q3 导入一直停在 `QUEUED`？**
@@ -652,8 +642,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 若前面有大压缩包在跑，等它结束即可。
 
 **Q4 上传报 429 / 413 / 415 / 422？**
-分别对应：准入限流（按 `Retry-After` 退避）、单请求总字节超限、文件类型不支持（非 PDF，或压缩包不是 zip）、
-参数校验失败（单文件超限/文件数超限/非法过滤器）。对照 §3.1 与 `.env` 里的 `INGEST_*` 上限。
+分别对应：准入限流（按 `Retry-After` 退避）、单请求总字节超限、文件类型不支持（非 PDF，或压缩包不是 zip）、参数校验失败（单文件超限/文件数超限/非法过滤器）。对照 [#3.1](#31-http-状态码) 与 `.env` 里的 `INGEST_*` 上限。
 
 **Q5 刚导入的论文搜不到？**
 ① 先确认作业已完成（`stage=COMPLETED`）；② `GET /api/consistency` 对账，看是「有行无文档」还是索引没建；
@@ -667,8 +656,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 取值的 top-N 上限是 50 —— **上限之外是「没列」不是「没有」**。收窄过滤条件后再看。
 
 **Q8 服务是好的，但每个请求都像卡了几秒？**
-地址写成了 `localhost`。Windows 上 `localhost` 优先解析到 IPv6 回环，而 WSL2 的镜像网络不转发 IPv6 回环，
-每次连接先撞约 8 秒超时才退回 IPv4。**所有地址一律写 `127.0.0.1`**。
+地址写成了 `localhost`。Windows 上 `localhost` 优先解析到 IPv6 回环，而 WSL2 的镜像网络不转发 IPv6 回环，每次连接先撞约 8 秒超时才退回 IPv4。**所有地址一律写 `127.0.0.1`**。
 
 **Q9 Windows 上 `curl` 容器端口不通（连接超时）？**
 WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -lc "ufw allow 9200/tcp"`（9000/8090/5432 同理）。
@@ -676,8 +664,7 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 
 **Q10 解析一篇论文很慢（几十秒到几分钟）？**
 先看是不是开着公式转 LaTeX（`DOCLING_FORMULA_ENRICHMENT=true` 会数倍增加耗时）；
-再确认 `DOCLING_URL` 是否指向一个真实运行的 docling 服务 —— 指向了不存在的主机会等待超时后才降级，
-把地址留空则**立即**降级为 pypdf。
+再确认 `DOCLING_URL` 是否指向一个真实运行的 docling 服务 —— 指向了不存在的主机会等待超时后才降级，把地址留空则**立即**降级为 pypdf。
 
 **Q11 中文检索效果不好？**
 中文最大的瓶颈在检索前的查询改写。开启 `QUERY_REWRITE_ENABLED=true`（需配好 `QUERY_REWRITE_URL` / `MODEL` / `API_KEY`）
@@ -689,13 +676,11 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 「不许静默失效」）；其次是 `PARSER_BACKEND` / `SEARCH_BACKEND` 填了非法值（只接受 `docling|pypdf` 与 `native|python`）。
 
 **Q13 想换精排模型或向量模型？**
-精排：改 `RERANK_MODEL`（写根 `.env`，改完重启应用）；非内置档的 `RERANK_MODEL_FILE` 与限批 `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`），
-然后重建容器并重启应用；只改一边会出现「容器跑新模型、响应报旧模型名」。
+精排：改 `RERANK_MODEL`（写根 `.env`，改完重启应用）；非内置档的 `RERANK_MODEL_FILE` 与限批 `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`），然后重建容器并重启应用；只改一边会出现「容器跑新模型、响应报旧模型名」。
 向量：换模型必须**新建索引**并切换别名（向量维度/空间不可原地替换），然后重算向量（`reindex`）。
 
 **Q14 机器内存吃紧 / 容器被 OOM-kill？**
-按影响顺序调：`RERANK_MAX_BATCH`（精排激活内存≈候选数 × 文本长度）、`ORT_THREADS`、`MAX_BATCH`、
-`INFERENCE_QUEUE_DEPTH`；docling 容器另设 `DOCLING_MEM_LIMIT` / `DOCLING_CPUS`（宁可它被杀，应用会降级 pypdf）。
+按影响顺序调：`RERANK_MAX_BATCH`（精排激活内存≈候选数 × 文本长度）、`ORT_THREADS`、`MAX_BATCH`、`INFERENCE_QUEUE_DEPTH`；docling 容器另设 `DOCLING_MEM_LIMIT` / `DOCLING_CPUS`（宁可它被杀，应用会降级 pypdf）。
 
 **Q15 客户端连 MCP 报 421 / "Invalid Host header"？**
 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` 里。把**该客户端实际访问用的 IP/主机名**加进去 ——
@@ -704,27 +689,24 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 
 **Q16 MCP 报 401 / 403？**
 先看 `AUTH_ENABLED`：`false` 时 `/mcp` 根本不查 key（匿名 admin），报 401/403 说明还有别的问题（如代理剥了头）。
-`true` 时：401 = 没带 `Authorization: Bearer`；403 = key 不匹配（对齐 `api_keys` 表里那把 key，
-或 env 引导 key `PAPER_API_KEY`/`PAPER_API_KEYS`，注意不要多空格）。MCP 工具另有一层
+`true` 时：401 = 没带 `Authorization: Bearer`；403 = key 不匹配（对齐 `api_keys` 表里那把 key，或 env 引导 key `PAPER_API_KEY`/`PAPER_API_KEYS`，注意不要多空格）。MCP 工具另有一层
 **档位检查**：read key 调写工具报 `FORBIDDEN`（`insufficient role`），用 `scripts/manage_keys.py list` 看档位。
 **不支持 `?key=` 查询参数**。想区分是谁在调，就给每个 agent **各发一把 key**（`manage_keys.py create`）：
 审计按 key 的**值**认身份，两把相同的 key 在审计里会同名。
 
 **Q17 agent 的工具列表里没有写工具？**
-设计如此：`MCP_WRITE_ENABLED` 或对应的 `MCP_ALLOW_*` 关掉时，写工具**根本不注册**（不在 `tools/list`，
-按名字猜也调不到）。要开就开总闸 + 分开关并重启，然后用 `tools/list` 确认，别只看文档。
+设计如此：`MCP_WRITE_ENABLED` 或对应的 `MCP_ALLOW_*` 关掉时，写工具**根本不注册**（不在 `tools/list`，按名字猜也调不到）。要开就开总闸 + 分开关并重启，然后用 `tools/list` 确认，别只看文档。
 
 **Q18 怎么确认 MCP 是好的？会不会把我库里的论文弄坏？**
-一条命令：`uv run python scripts/acceptance_mcp.py [--with-writes]`（脚本见 §1.6）。
-它自带清理：导入一份**每次运行内容都不同**的合成 PDF，跑完按快照 diff 删掉**自己新建的那篇**，
-并断言既有论文一篇没少；探针必须落在 `INGEST_LOCAL_ROOTS` 内。
+一条命令：`uv run python scripts/acceptance_mcp.py [--with-writes]`（脚本见 [#1.6](#16-常用运维命令)）。
+它自带清理：导入一份**每次运行内容都不同**的合成 PDF，跑完按快照 diff 删掉**自己新建的那篇**，并断言既有论文一篇没少；探针必须落在 `INGEST_LOCAL_ROOTS` 内。
 带写模式因产品删除是软删，会留一条 `deleted` 状态的探针记录，需要时用 `scripts/purge_deleted.py --hard` 清掉。
 
 **Q19 启动时报 embedding 维度不一致（`RuntimeError ... EMBEDDING_DIMENSION`）？**
 应用启动时会做三方对账：容器模型的**实测输出维度** ↔ `.env` 的 `EMBEDDING_DIMENSION` ↔ 活索引
 `knn_vector` 的 dimension。报错说明三处至少有一处与另两处不符，改完重启即可：
 换过模型就同步 `EMBEDDING_DIMENSION`；索引是旧维度就指向新索引并整库重嵌。
-**换 embedding 模型 = 整库重嵌（同维度也一样）**，完整步骤见 `docs/architecture/04-embedding.md` §9。
+**换 embedding 模型 = 整库重嵌（同维度也一样）**，完整步骤见 `docs/architecture/04-embedding.md` [#9](docs/architecture/04-embedding.md#9-换-embedding-模型-runbook)。
 顺带：`GET http://127.0.0.1:8090/info` 的 `dimension` 是模型加载时实测的真实值（模型还没加载时为 `null`）。
 
 **Q20 怎么确认库里没有「换模型换一半」的残留？**
@@ -734,12 +716,10 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 `embedding_model_mismatch` 问题。修复方式：对名单里的论文跑 `reindex` 重嵌。
 
 **Q21 `docker exec ... psql` 里看到的时间比本地早 8 小时 / 日志时间对不上？**
-看的是**不同层的时区**，不是数据写错了。全栈口径见 §1.3.6：容器与进程都统一
+看的是**不同层的时区**，不是数据写错了。全栈口径见 [#1.3.6](#136-分块)：容器与进程都统一
 `TZ=Asia/Shanghai`（缺省即此值），Postgres 另设 `PGTZ`。两条相关的语义值得先记住：
 
 - `timestamptz` 存的是**绝对时刻**，`psql` 输出成什么样只取决于会话时区；跨层对时间时显式写
   `select decided_at at time zone 'Asia/Shanghai'`，别拿两层的裸字符串直接比。
 - 两个时间戳别混：`decided_at` 是**声明写入账本**的时刻，`decision_at` 才是**人类裁决**的时刻
-  （0.5.1 起；`NULL` = 没裁决过）。账本（`GET /api/papers/{id}/metadata` 的 `provenance`）两个都返回，
-  所以"谁在什么时候裁决的"直接读接口即可。**0.5.1 之前**的裁决只有访问日志能证，
-  正因如此当时排查绕了一圈；要补历史值就 `uv run python scripts/backfill_decision_times.py`。
+  （0.5.1 起；`NULL` = 没裁决过）。账本（`GET /api/papers/{id}/metadata` 的 `provenance`）两个都返回，所以"谁在什么时候裁决的"直接读接口即可。记录该列之前入库的裁决行不含 `decision_at`，要补历史值就用 `uv run python scripts/backfill_decision_times.py`。

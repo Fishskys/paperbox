@@ -53,7 +53,7 @@ STAGING_PREFIX = f"{object_storage.UPLOAD_PREFIX}/"
 
 #: How long the bytes of a job that failed *before* ``STORED`` are held for a
 #: retry (see the module docstring). A code constant on purpose: this is a
-#: housekeeping policy, not a deployment knob (``AGENTS.md`` section 3.4).
+#: housekeeping policy, not a deployment knob (see `UserManual.md`).
 STAGING_RETRY_GRACE_HOURS = 72
 
 #: Minimum age of a staging object before the collector may judge it. The owner

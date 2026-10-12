@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **已实现并真机验收通过（2026-09-21）**。实现计划见 `.hermes/plans/2026-09-21_201622-metadata-discovery-storage.md`；验收脚本 `scripts/acceptance_metadata.py`（7 项全 PASS），实测数字见 `docs/progress/project.md` §17 |
+| 状态 | 实现计划见 `.hermes/plans/2026-09-21_201622-metadata-discovery-storage.md`；验收脚本 `scripts/acceptance_metadata.py`（7 项全 PASS），实测数字见 `docs/progress/project.md` [#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21) |
 | 适用对象 | 所有接触元数据、导入流水线、匹配/合并逻辑的开发与 Agent |
-| 与其它文档的关系 | `.hermes/plans/2026-09-10_215600-paperbox-master-plan.md` 是需求权威；`AGENTS.md` 是环境契约与执行纪律；`docs/architecture/MVP-SPEC.md` 是接口摘要；**本文件是元数据架构的权威**（冲突时以本文件为准，并同步修订本文件） |
+| 与其它文档的关系 | `.hermes/plans/2026-09-10_215600-paperbox-master-plan.md` 是需求权威；`AGENTS.md` 是协作规范（跨项目通用条文 + 本项目项目地图）；`docs/architecture/MVP-SPEC.md` 是接口摘要；**本文件是元数据架构的权威**（冲突时以本文件为准，并同步修订本文件） |
 | 一句话 | **论文（papers）← 来源记录（paper_sources）← 字段声明（paper_field_provenance）**，标识符（paper_identifiers）作去重骨架，venue 与年份分离存储 |
 
 ---
@@ -31,16 +31,16 @@
 
 | Zotero 的做法 | 本项目的落地 |
 |---|---|
-| 发现分层：本地内嵌 → 通用网页元数据 → 标识符解析 → 站点专用抓取 → 模糊反查 → 外部导入 | 同顺序分层（§5），但**不做站点专用抓取**（脆且维护成本高）；外部导入是正式通道 |
+| 发现分层：本地内嵌 → 通用网页元数据 → 标识符解析 → 站点专用抓取 → 模糊反查 → 外部导入 | 同顺序分层（[#5](#5-发现分层)），但**不做站点专用抓取**（脆且维护成本高）；外部导入是正式通道 |
 | 通用 schema + 自由扩展袋（`extra`）承载平台特有 ID | `paper_identifiers`（结构化，比无结构 `extra` 更强）+ `paper_sources.raw`（原样快照） |
 | 主键是本地 key，**标识符只是字段** | `papers.id`（UUID）是主键；DOI/arXiv/IEEE 号都在 `paper_identifiers` |
-| 去重/合并是交互式的（候选 + 字段级挑选） | 无 UI → 用"自动只填空 + 待复核清单 + 可回滚"等价替代（§8、§9） |
+| 去重/合并是交互式的（候选 + 字段级挑选） | 无 UI → 用"自动只填空 + 待复核清单 + 可回滚"等价替代（[#8](#8-合并规则-r2不引入来源权威性排序)、[#9](#9-字段级-provenance-与手动更新)） |
 | 交换格式用 CSL-JSON | 导入/导出接受 CSL-JSON（同时支持 IEEE raw JSON 与本项目通用 JSON） |
 
 **不借鉴 / 做得更好**
 
-- 不做站点专用 translator（IEEE Xplore 之类）；平台接入一律走 API（§14）。
-- **字段级 provenance**：Zotero 基本没有，本项目把"哪个字段、来自哪个来源、何时、置信度、是否被覆盖"全记下来（§9），这是无 UI 情况下唯一的事后可解释手段。
+- 不做站点专用 translator（IEEE Xplore 之类）；平台接入一律走 API（[#14](#14-未做)）。
+- **字段级 provenance**：Zotero 基本没有，本项目把"哪个字段、来自哪个来源、何时、置信度、是否被覆盖"全记下来（[#9](#9-字段级-provenance-与手动更新)），这是无 UI 情况下唯一的事后可解释手段。
 
 **三层模型（核心）**
 
@@ -95,6 +95,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 **约束**：`UNIQUE(paper_id, scheme, normalized_value)`；
 **`UNIQUE(scheme, normalized_value) WHERE paper_id IS NOT NULL`** ← 一个标识符只属于一篇论文（去重底线）。
 多来源声明同一 DOI 时这里只有一行，各来源的主张在 provenance（`field='identifier:doi'`）→ **不需要第三张关联表**。
+删除论文时其 `paper_identifiers` 行被物理删除，以释放被占用的标识符（否则墓碑会永久占住 DOI；与 `papers.fingerprint` 的"删除即释放"一致）。
 
 ### 3.3 `paper_field_provenance`（新增）
 
@@ -106,7 +107,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | `value` | JSONB（标量或结构：作者列表、标识符） |
 | `source_id` | FK paper_sources（NULL = 系统/人工） |
 | `confidence` / `decided_by` | 置信度 / `initial` \| `structured_override` \| `manual` \| `dismissed`（谁定的这个值、或谁裁决的分歧） |
-| `decided_at` / `decision_at` | 声明**写入账本**的时刻（`server_default`，渲染账本时间用它）/ 人类**裁决**它的时刻（`NULL` = 没裁决过；2026-10-10 起） |
+| `decided_at` / `decision_at` | 声明**写入账本**的时刻（`server_default`，渲染账本时间用它）/ 人类**裁决**它的时刻（`NULL` = 没裁决过） |
 | `is_current` | 该字段当前生效值 |
 
 **约束**：`UNIQUE(paper_id, field) WHERE is_current`（每字段一个当前值）；**历史行永不删除**（回滚 = 把历史行置回 `is_current=true`）。
@@ -155,23 +156,23 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 ---
 
-## 5. 发现分层与本期范围
+## 5. 发现分层
 
-| 层 | 机制 | 本期 |
+| 层 | 机制 | 状态 |
 |---|---|---|
 | 1 | **PDF 内嵌元数据**（Info 字典 + XMP：`dc:title`、`prism:doi`…），零网络 | ✅ 做（`source_type='pdf_embedded'`） |
 | 2 | 首页文本启发式（现有：字号判标题、作者块、摘要、年份、DOI/arXiv 正则） | ✅ 已有（`source_type='pdf_heuristic'`） |
-| 2b | **文件名标识符提示**：`1706.03762__topic.pdf` 的主干给出 arXiv id | ✅ 做（`source_type='filename'`，2026-09-30） |
+| 2b | **文件名标识符提示**：`1706.03762__topic.pdf` 的主干给出 arXiv id | ✅ 做（`source_type='filename'`） |
 | 3 | **外部导入**（IEEE 批量 JSON / CSL-JSON / 本项目通用 JSON） | ✅ 做（`import_file`） |
-| 4 | DOI 内容协商（`Accept: application/vnd.citationstyles.csl+json`） | ⏳ 列入计划，本期不做（`crossref`） |
-| 5 | 平台 API：IEEE Xplore（`article_number`/`doi`）、arXiv API（Atom） | ⏳ 列入计划，本期不做（`ieee_api` / `arxiv_api`） |
-| 6 | 模糊反查（Crossref/OpenAlex 标题检索） | ⏳ 列入计划，本期不做；**必须带置信度 + 复核** |
+| 4 | DOI 内容协商（`Accept: application/vnd.citationstyles.csl+json`） | 未实现（`crossref`） |
+| 5 | 平台 API：IEEE Xplore（`article_number`/`doi`）、arXiv API（Atom） | 未实现（`ieee_api` / `arxiv_api`） |
+| 6 | 模糊反查（Crossref/OpenAlex 标题检索） | 未实现；**必须带置信度 + 复核** |
 | 7 | 人工（单篇手动更新 / 人工归属） | ✅ 预留（`manual`） |
 
-> 关键点：**本期不做网络层，但存储模型已经为它们留好位置**——接入时只加一个 importer，不动表。
+> 关键点：**网络层未实现，但存储模型已经为它们留好位置**——接入时只加一个 importer，不动表。
 
 摄取时管道按 **1 → 2 → 2b** 的顺序跑（`app/workers/tasks.py::_backfill_metadata`，代码注释里称这三步为 layer 1/2/3）：
-先读 PDF 自己的说法，再读首页，最后才看文件名。2b 是**最低权威**的一层，理由见 §6 与 §8。
+先读 PDF 自己的说法，再读首页，最后才看文件名。2b 是**最低权威**的一层，理由见 [#6](#6-标识符体系与兜底链) 与 [#8](#8-合并规则-r2不引入来源权威性排序)。
 
 ---
 
@@ -179,12 +180,11 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 - `scheme` 是**开放枚举**（不是列）：接入新平台只加取值，不改表结构。
 - 规范化：DOI（小写、去 `https://doi.org/` 前缀）、arXiv（去版本号）、ISSN（去连字符）等，复用 `paper_service` 已有函数。
-- **兜底链**（无 DOI 时）：`DOI > arXiv > 规范化标题 + 首作者 + 年 > 文件 sha256`——这条链**已经存在**于 `papers.fingerprint`，
-  本次只是把它的输入从"两个固定列"改为"`paper_identifiers` 的主标识符"。
+- **兜底链**（无 DOI 时）：`DOI > arXiv > 规范化标题 + 首作者 + 年 > 文件 sha256`——这条链存在于 `papers.fingerprint`，输入是 `paper_identifiers` 的主标识符。
 - 标识符变更（如导入带来 DOI）→ **指纹升级**，复用既有 `_upgrade_fingerprint` 路径（含 reindex 的 `dedupe=False` 守卫）。
-- **文件名给的 id 是最低一档证据**（2026-09-30 加）：只在论文还不知道任何 arXiv id 时补空，而且**当这个 id 已属于另一篇活论文时直接丢弃**（不写声明、不写来源行）——
+- **文件名给的 id 是最低一档证据**：只在论文还不知道任何 arXiv id 时补空，而且**当这个 id 已属于另一篇活论文时直接丢弃**（不写声明、不写来源行）——
   标识符表本来就会拒绝挂载（`uq` 约束），但声明会被留下来，形成"论文声称自己持有某个不属于它的 id"，回滚时还会被写到 `papers.arxiv_id` 上。
-  名称与身份表打架属于**查重信号**，交给五步匹配器（§7 步 5），不属于元数据填充。
+  名称与身份表打架属于**查重信号**，交给五步匹配器（[#7](#7-匹配外部记录--已入库论文) 步 5），不属于元数据填充。
 
 ---
 
@@ -210,23 +210,19 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
    两个弱来源互相矛盾时按规则 3 处理（只填空 + 登记冲突），不比较谁更可信。
 3. **结构化来源之间**：只填空 + 登记冲突，**不比较谁更权威**。
 4. **字段特例**：`abstract` 取最长；`authors` 取条数最多的一份；`year` 冲突保留现值并登记。
-   **只适用于结构化来源之间**（2026-10-10 补）：这条的前提是"各来源截断程度不同，所以更长 = 更完整"，
-   而弱来源（`pdf_heuristic` / `filename`）不是截断而是**误读** —— 它把标题碎片、摘要句子当成人名，
-   列表反而更长。所以规则 2 必须双向成立：弱来源既不能靠"更新"覆盖结构化值，也不能靠"更长"赢它；
+   **只适用于结构化来源之间**：这条的前提是"各来源截断程度不同，所以更长 = 更完整"，而弱来源（`pdf_heuristic` / `filename`）不是截断而是**误读** —— 它把标题碎片、摘要句子当成人名，列表反而更长。所以规则 2 必须双向成立：弱来源既不能靠"更新"覆盖结构化值，也不能靠"更长"赢它；
    两个弱来源之间按规则 3 处理（保现值 + 登记冲突），规则 4 不替它们比长度。
 5. **回滚**：把某条历史 provenance 置回 `is_current=true`，并把当时的 `papers` 列写回；不删历史。
-   **人工裁决的两个出口（2026-10-10）**：`POST /api/papers/{id}/metadata/rollback` = 「采纳被拒值」
+   **人工裁决的两个出口**：`POST /api/papers/{id}/metadata/rollback` = 「采纳被拒值」
    （落败那条恢复为当前值），`POST /api/papers/{id}/metadata/conflicts/dismiss` = 「保留现值」
    （现值不动，把落败那条标 `decided_by='dismissed'`）。两者都**不删任何声明**，所以裁决完仍可回滚。
-   裁决过的字段不再进 `GET /api/metadata/review` 的冲突清单（清单是"未决分歧"队列，必须有出口），
-   冲突条目同时带上落败声明的 `provenance_id`，界面不必再查一次。
+   裁决过的字段不再进 `GET /api/metadata/review` 的冲突清单（清单是"未决分歧"队列，必须有出口），冲突条目同时带上落败声明的 `provenance_id`，界面不必再查一次。
 
 > 为什么这样：现有 68 篇的历史元数据全部由启发式写入（回填时统一标 `pdf_heuristic`），因此 IEEE 导入能修正它们；
 > 同时避免了维护一张"谁比谁权威"的排序表。
 
-**更正 = 替换，不是并存**（2026-09-30）：R2 判成覆盖（或回滚、手动改）时，`provenance_service._write_identifier` 走
-`replace_identifier`——**删掉同 scheme 的旧行**并强制镜像列跟随。只插入新行是不够的：`primary_identifier` 取"同 scheme 里最早的那一行"，
-于是 `papers.arxiv_id` 与 `papers.fingerprint` 会继续指向刚被否定的旧值（指纹还直接决定查重）。
+**更正 = 替换，不是并存**：R2 判成覆盖（或回滚、手动改）时，`provenance_service._write_identifier` 走
+`replace_identifier`——**删掉同 scheme 的旧行**并强制镜像列跟随。只插入新行是不够的：`primary_identifier` 取"同 scheme 里最早的那一行"，于是 `papers.arxiv_id` 与 `papers.fingerprint` 会继续指向刚被否定的旧值（指纹还直接决定查重）。
 
 ---
 
@@ -240,17 +236,17 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | `POST /api/metadata/apply`（可选批量） | 从报告文件批量应用人工决定（`mode:"overwrite"`, `fields:[…]`） |
 
 **`manual` 是唯一不受 R2 约束的来源**（人工意志优先），但仍写 provenance，因此仍可回滚。
+**元数据改动后要经 `POST /api/papers/{id}/reindex` 才能进检索过滤字段**（过滤字段在 chunk 文档上）。
 
 ---
 
 ## 10. 两种导入顺序
 
-**A. PDF 先（现状）**：流水线建 paper（sha256 指纹 + 首页启发式）→ 之后导入元数据时按 §7 匹配 → 挂 `paper_sources` + 合并 + 升级指纹。
+**A. PDF 先（现状）**：流水线建 paper（sha256 指纹 + 首页启发式）→ 之后导入元数据时按 [#7](#7-匹配外部记录--已入库论文) 匹配 → 挂 `paper_sources` + 合并 + 升级指纹。
 
 **B. 元数据先（新增）**：
 1. 导入匹配不到论文 → 建**壳论文**（`status='AWAITING_FILE'`，字段落库、`fingerprint` 取主标识符、**无 chunks 无文件**）；
-2. PDF 到达 → 流水线**先找壳**（sha256 → 内嵌 DOI → arXiv → 标题+年+作者）→ 命中则**复用同一 `paper_id`**（不新建），
-   把 PDF 挂成 `paper_files(kind='original', source_id=…)`，状态转 `PENDING` 继续跑；
+2. PDF 到达 → 流水线**先找壳**（sha256 → 内嵌 DOI → arXiv → 标题+年+作者）→ 命中则**复用同一 `paper_id`**（不新建），把 PDF 挂成 `paper_files(kind='original', source_id=…)`，状态转 `PENDING` 继续跑；
 3. 壳长期无 PDF：可查（`GET /api/papers?status=AWAITING_FILE`）、housekeeping 报告，**不自动删除**。
 
 ---
@@ -310,10 +306,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
   `paper_identifiers` 侧，导入时要用 IEEE/CSL 形状或手动 PATCH）
 - 标签：`tag:ieee_terms` `tag:author_terms` `tag:dynamic_index_terms` `tag:source_tag`
   （对应 `papers_tags.kind`）
-- 别名（`_GENERIC_ALIASES`）：`doi`→`identifier:doi`、`arxiv_id`/`arxiv`→`identifier:arxiv`、
-  `article_number`/`ieee_article_number`→`identifier:ieee_article_number`、`issn`→`identifier:issn`、
-  `journal`/`conference`→`venue`、`type`/`content_type`→`paper_type`、`start_page`→`pages`、
-  `keywords`→`tag:author_terms`、`tags`→`tag:source_tag`
+- 别名（`_GENERIC_ALIASES`）：`doi`→`identifier:doi`、`arxiv_id`/`arxiv`→`identifier:arxiv`、`article_number`/`ieee_article_number`→`identifier:ieee_article_number`、`issn`→`identifier:issn`、`journal`/`conference`→`venue`、`type`/`content_type`→`paper_type`、`start_page`→`pages`、`keywords`→`tag:author_terms`、`tags`→`tag:source_tag`
 - 值形状：`authors` 可以是数组，也可以是 `;` 分隔的字符串；`venue` 可以是字符串（等价
   `{"name": …}`）或对象 `{"name", "year", "content_type", "issn", "publisher", "location",
   "dates", "publication_number", "is_number"}`；`year` 可以是 `2021` / `"2021"` / `"2021-05"` /
@@ -332,8 +325,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 **`csl_json`**：`DOI` `title` `abstract` `issued`/`published`（→`year`）
 `author[].{family,given}` 或 `{literal}` 或字符串 `container-title`（→venue）`type`（→`paper_type`：
-`article-journal`/`article-magazine`/`article`→journal，`paper-conference`/`proceedings-article`→conference，
-`posted-content`→preprint，`standard`→standard）`ISSN` `volume` `issue` `page`（→`pages`）`URL`
+`article-journal`/`article-magazine`/`article`→journal，`paper-conference`/`proceedings-article`→conference，`posted-content`→preprint，`standard`→standard）`ISSN` `volume` `issue` `page`（→`pages`）`URL`
 `keyword`（字符串按逗号切或数组 →`tag:author_terms`）。
 
 **`source_ref`（去重身份，`_source_ref`）**：`DOI > arXiv > IEEE article_number > 文件(path+sha256)
@@ -358,7 +350,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 ---
 
-## 14. 未做但已列入计划
+## 14. 未做
 
 | 项 | 接入方式 |
 |---|---|
@@ -366,16 +358,5 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | arXiv API | 用 arXiv id 拉 Atom → `arxiv_api` |
 | DOI 内容协商 | `Accept: application/vnd.citationstyles.csl+json` → `crossref` |
 | Crossref / OpenAlex 标题反查 | 无标识符时的模糊兜底，**必须带置信度 + 复核** |
-| RIS / BibTeX 解析 | 本期只支持 IEEE raw JSON / CSL-JSON / 通用 JSON |
-| venue 别名与消歧 | 本期只做 `normalize_text` 级归一化 |
-
----
-
-## 15. 变更记录
-
-| 日期 | 变更 |
-|---|---|
-| 2026-09-21 | 建立本文件：三层模型、4 张新表、R2 合并规则、主版本规则、两种导入顺序、IEEE 映射（定稿，待实现） |
-| 2026-09-21 | **实现完成并真机验收通过**：迁移 `7a2f4c9d51be`（4 张新表 + `papers`/`paper_files`/`papers_tags`/`venues` 加列）、服务 `metadata_{identifiers,sources,tags,merge,matcher,shell,import,manual}.py`、端点 8 个、脚本 3 个（`backfill_metadata` / `import_metadata` / `acceptance_metadata`）。两处与初稿的实现细化：① 删除论文时**释放**其 `paper_identifiers`（否则墓碑永久占住 DOI，与 `papers.fingerprint` 的"删除即释放"一致）；② 元数据改动后要经 `POST /api/papers/{id}/reindex` 才能进检索过滤字段（过滤字段在 chunk 文档上）。 |
-| 2026-09-30 | 加**文件名标识符提示**（§5 层 2b、§6、§8）：`source_type='filename'`、`metadata_service.arxiv_id_from_filename`（`YYMM` 必须是真月份，`notes-2024.12345.pdf` 不算）、`tasks._may_offer_arxiv_id` 两道守卫（论文已知 arXiv id / 该 id 已属于别的活论文）；同时把"更正 = 替换 + 镜像跟随"写成 R2 的正式语义。 |
-| 2026-09-23 | 补 §12.1：三种可导入格式（`ieee_raw` / `csl_json` / `generic`）的字段清单、别名表、值形状、`source_ref` 去重阶梯与 `source_type` 取值（此前只在 §12 末尾一句话带过）。 |
+| RIS / BibTeX 解析 | 只支持 IEEE raw JSON / CSL-JSON / 通用 JSON |
+| venue 别名与消歧 | 只做 `normalize_text` 级归一化 |

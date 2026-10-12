@@ -39,7 +39,7 @@ def make_source(session, paper_id=None, source_type="ieee_api", ref=None) -> Pap
 
 
 def test_a_structural_correction_replaces_the_identifier_and_the_mirror(db_session) -> None:  # noqa: ANN001
-    """``override=True`` means the previous value is wrong (AGENTS §3.9).
+    """``override=True`` means the previous value is wrong (see `docs/architecture/08-metadata.md`).
 
     Two things have to follow, or the paper keeps an identity nobody believes in:
     the identifier row of that scheme (a second row would stay ``is_primary``,

@@ -36,17 +36,14 @@ uv run python scripts/create_index.py
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 ```
 
-另开一个终端自检：`uv run python scripts/healthcheck.py`（五个依赖 + 应用 + 检索管道逐项检查），
-交互式接口文档在 <http://127.0.0.1:8077/docs>。
+另开一个终端自检：`uv run python scripts/healthcheck.py`（五个依赖 + 应用 + 检索管道逐项检查），交互式接口文档在 <http://127.0.0.1:8077/docs>。
 
-> 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pypdf 解析，
-> 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成
+> 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pypdf 解析，> 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成
 > `wsl -e bash -lc "cd /mnt/<盘>/.../paperbox/infra && docker compose up -d"` 即可。
 
 ### 可选：让 Agent 通过 MCP 接入
 
-REST 之外，同一个进程还对外提供 MCP 端点 `/mcp`（Streamable HTTP）：10 个工具（检索、读块与上下文、
-元数据、签名下载、导入、删除、重建索引）与 REST **共用同一套业务实现、密钥与审计**，所以数字和权限
+REST 之外，同一个进程还对外提供 MCP 端点 `/mcp`（Streamable HTTP）：10 个工具（检索、读块与上下文、元数据、签名下载、导入、删除、重建索引）与 REST **共用同一套业务实现、密钥与审计**，所以数字和权限
 口径一致。默认关闭，启用三步（需要改三项配置）：
 
 ```bash
@@ -72,11 +69,9 @@ bearer_token_env_var = "PAPERBOX_MCP_TOKEN"
 ```
 
 写工具（导入 / 删除 / 重建索引 / 改元数据）默认**不注册**（`tools/list` 里看不到），要显式打开
-`MCP_WRITE_ENABLED` 与对应的 `MCP_ALLOW_*`；删除与重建即使开了也默认先跑 `dry_run`。工具契约、
-错误码、四个客户端的接入片段与排障见 [MCP 契约](docs/architecture/11-mcp-agent-interface.md)。
+`MCP_WRITE_ENABLED` 与对应的 `MCP_ALLOW_*`；删除与重建即使开了也默认先跑 `dry_run`。工具契约、错误码、四个客户端的接入片段与排障见 [MCP 契约](docs/architecture/11-mcp-agent-interface.md)。
 
-> 只开 `MCP_ENABLED` 而不开 `AUTH_ENABLED` 时，MCP 面等同匿名 admin（与 REST 同一套开关），
-> 适合本机自用；只要监听地址不止本机，就应当把 `AUTH_ENABLED` 一起打开并按上面发密钥。
+> 只开 `MCP_ENABLED` 而不开 `AUTH_ENABLED` 时，MCP 面等同匿名 admin（与 REST 同一套开关），> 适合本机自用；只要监听地址不止本机，就应当把 `AUTH_ENABLED` 一起打开并按上面发密钥。
 
 具体部署（服务器形态、数据目录、备份迁移）与全部配置项、接口参数、使用示例，参考[用户手册](UserManual.md)。
 
@@ -96,8 +91,7 @@ bearer_token_env_var = "PAPERBOX_MCP_TOKEN"
 PostgreSQL（元数据）  MinIO（PDF 原件与解析产物）  OpenSearch（全文 + 向量）  Embedding 容器（向量与精排推理）
 ```
 
-MCP 端点与 REST **同进程、共用配置/鉴权/日志**：检索与读正文走的是同一份实现，
-所以同一查询在两条路径上的 `total` 与排序逐位相同。契约见
+MCP 端点与 REST **同进程、共用配置/鉴权/日志**：检索与读正文走的是同一份实现，所以同一查询在两条路径上的 `total` 与排序逐位相同。契约见
 [docs/architecture/11-mcp-agent-interface.md](docs/architecture/11-mcp-agent-interface.md)。
 
 | 环节 | 做什么 | 用什么实现 |
@@ -136,9 +130,9 @@ paperbox/
 
 > **给 agent 用**：paperbox 也能作为 **MCP 服务**被 codex / Claude Code / Hermes 等直接调用
 > （检索 + 读正文 + 导入/维护，默认关闭，需配 `MCP_ENABLED` 与白名单）。接入片段与排障见
-> `UserManual.md` §1.7 与 `docs/architecture/11-mcp-agent-interface.md` §10。
+> `UserManual.md` [#1.7](#1-项目简介) 与 `docs/architecture/11-mcp-agent-interface.md` [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入)。
 
-所有接口都在 `/api/**` 下。鉴权由 `AUTH_ENABLED` 全开全关：默认关闭（匿名 admin）；开启时 `/api/*` 与 `/mcp` 都要 `Authorization: Bearer <key>`，密钥按 `read < write < admin` 三档区分（`scripts/manage_keys.py` 分发），日志记密钥前缀。详见 `UserManual.md` §1.3.7.1 与 §2.1。
+所有接口都在 `/api/**` 下。鉴权由 `AUTH_ENABLED` 全开全关：默认关闭（匿名 admin）；开启时 `/api/*` 与 `/mcp` 都要 `Authorization: Bearer <key>`，密钥按 `read < write < admin` 三档区分（`scripts/manage_keys.py` 分发），日志记密钥前缀。详见 `UserManual.md` [#1.3.7.1](#1-项目简介) 与 [#2.1](#2-快速开始)。
 
 | 分组 | 方法 | 端点 | 说明 |
 |---|---|---|---|

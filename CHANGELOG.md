@@ -44,7 +44,7 @@
 
 ### Fixed
 
-- **文档不再把 `decided_at` 当裁决时刻**：`UserManual` §1.3.6 与 Q21、`08-metadata.md` 的字段表、
+- **文档不再把 `decided_at` 当裁决时刻**：`UserManual` [#1.3.6](docs/architecture/08-metadata.md#1-数据模型总览) 与 Q21、`08-metadata.md` 的字段表、
   `metadata-architecture.md` 的字段说明都改成两个时间戳的分工，并补上"`psql` 看到的时间比本地
   早 8 小时"的排查路径（会话时区 vs 绝对时刻）。
 
@@ -90,7 +90,7 @@ paperbox-webui 同步发布 0.5.0（论文库的「重建全库索引」按钮�
   真机上就这样挂着 10 条。现在每个冲突条目带下落败声明的 `provenance_id`，并新增
   `POST /api/papers/{id}/metadata/conflicts/dismiss`（「保留现值」：把那条标 `decided_by='dismissed'`）；
   与既有的 `metadata/rollback`（「采纳被拒值」）配对。两条路都**不删任何声明**，值/来源/时间都留着，
-  所以裁决之后照样能回滚（§8 规则 5）。配套两条语义：
+  所以裁决之后照样能回滚（第 8 节 规则 5）。配套两条语义：
   **人工裁决过的字段不再进冲突清单**（清单是"未决分歧"队列，否则点了按钮行还挂在那儿，永远清不空），
   以及**回滚也会关掉分歧**（否则回滚只是把分歧翻个面：新现值 vs 旧现值）。
 
@@ -170,7 +170,7 @@ paperbox-webui 同步发布 0.5.0（论文库的「重建全库索引」按钮�
     并提示正确路径是整库重嵌（`scripts/reindex.py`）而非 `_reindex` 拷贝（拷贝只能逐字节搬向量，跨维度必然出事）。
   - `/api/consistency` 新增 **embedding 模型普查** `embedding_models.{chunks,documents}`（PG 切块行 vs 索引文档各按模型计数，
     无记录 = `unknown`）与问题码 `embedding_model_mismatch`（单篇论文跨两个已知模型 = "换模型只换一半"的现场）；CLI 输出与 schema 同步。
-- 文档同步：`04-embedding` §5b（三方对账）、§9（**换模型 runbook**：重建容器镜像 → 重启 uvicorn → 维度变了就换新索引 →
+- 文档同步：`04-embedding` 第 5 节b（三方对账）、第 9 节（**换模型 runbook**：重建容器镜像 → 重启 uvicorn → 维度变了就换新索引 →
   整库重嵌 → 用普查验证 → 重跑 `srw_setup.py build`）、`UserManual` Q19/Q20、
   `.env.example` 中英注释、MVP-SPEC；SRW 口径补「换模型后 `paper_repr` 作废」。
 
@@ -188,7 +188,7 @@ paperbox-webui 同步发布 0.5.0（论文库的「重建全库索引」按钮�
   缺凭证 401、不匹配 403、档位不足 403（`insufficient role`）；日志/审计/检索日志只记 key 前缀；
   `scripts/manage_keys.py create|list|revoke` 管理密钥；签名下载仍只认 HMAC。真机双态验收通过。
 - **`scripts/acceptance_auth.py`**：鉴权真机验收（关态 5 项 / 开态 13 项，含 MCP 面与吊销即时生效）。
-- **README §2 增加「让 Agent 通过 MCP 接入」**：发密钥 → 开 `MCP_ENABLED` + `AUTH_ENABLED` + Host 白名单
+- **README 第 2 节 增加「让 Agent 通过 MCP 接入」**：发密钥 → 开 `MCP_ENABLED` + `AUTH_ENABLED` + Host 白名单
   → 重启自检三步，附 Codex 侧配置片段与写工具默认不注册的说明。
 
 ### Changed
@@ -247,10 +247,10 @@ paperbox 从"只有 REST 接口"变成"REST + MCP 双面服务"：agent 可以�
 
 ### Changed
 
-- **补上 MCP 的接入文档**：`UserManual.md` 新增「§1.7 MCP 接入」（开关表、10 个工具、起服务示例），
-  `docs/architecture/11-mcp-agent-interface.md` §10 重写为**四客户端片段**（**Hermes ✅ 与 codex ✅ 均已端到端验收**、
+- **补上 MCP 的接入文档**：`UserManual.md` 新增「[#1.7](UserManual.md#17-mcp-接入让-agent-直接查读论文) MCP 接入」（开关表、10 个工具、起服务示例），
+  `docs/architecture/11-mcp-agent-interface.md` [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入) 重写为**四客户端片段**（**Hermes ✅ 与 codex ✅ 均已端到端验收**、
   Claude Code ⚪ 未安装、自研 harness ⚪ 含 `curl` 最小握手）+ 跨客户端排障速查。
-  **codex 的两个坑**也写进了契约 §10：`codex mcp add` 报成功不等于落盘、codex 对 MCP 调用走自己的审批策略。
+  **codex 的两个坑**也写进了契约 [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入)：`codex mcp add` 报成功不等于落盘、codex 对 MCP 调用走自己的审批策略。
 
 - **README 精简为概览**（简介 / 快速开始 / 架构 / 目录 / 端点一览 / 声明）：配置项、接口参数、使用示例与服务器部署
   迁入用户手册；旧版 README 归档到 `docs/old/README-20261004.md`。
@@ -306,7 +306,7 @@ paperbox 从"只有 REST 接口"变成"REST + MCP 双面服务"：agent 可以�
 - **脚本化**：只读 **37/37**、带写 **50/50**，`EXIT=0`；语料 30 → 31 → **30**；全量 pytest `EXIT=0`；
   三端一致性 `problems=0`（30 live / 2302 块，孤儿对象与孤儿文档均为 0）。
 - **未验证**：Claude Code（本机未安装）与自研 harness 的接入片段；SSRF 闸残留 DNS rebinding 风险。
-  **未做**：速率限制，以及四个细化项（审计字段 / 错误码 / 预算翻页 / 作业等待语义）—— 见契约 §12。
+  **未做**：速率限制，以及四个细化项（审计字段 / 错误码 / 预算翻页 / 作业等待语义）—— 见契约 第 12 节。
 
 ## [0.2.0] - 2026-10-01
 

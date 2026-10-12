@@ -7,7 +7,7 @@
 |---|---|
 | 状态 | 依据 commit `3911a6b` 的工作树实测（2026-09-22） |
 | 关键文件 | `app/main.py`、`app/core/config.py`、本文档集 |
-| 相关文档 | `AGENTS.md`（环境契约/目录）、`.hermes/plans/2026-09-10_215600-paperbox-master-plan.md`（需求）、`docs/progress/project.md`（演进与实测）、`README.md`（使用）、`docs/architecture/MVP-SPEC.md`（接口摘要） |
+| 相关文档 | `AGENTS.md`（协作规范）、`.hermes/plans/2026-09-10_215600-paperbox-master-plan.md`（需求）、`docs/progress/project.md`（演进与实测）、`README.md`（使用）、`docs/architecture/MVP-SPEC.md`（接口摘要） |
 
 ## 1. 职责边界
 
@@ -33,7 +33,7 @@
 | `infra/` | 部署 | 四依赖容器 + embedding 服务 | — | 10 |
 | `scripts/` | 工具 | 运维脚本 / 验收脚本 | — | 10 |
 | `migrations/` | 数据 | Alembic 迁移 | — | 01 |
-| `tests/` | 测试 | 单元测试（含 conftest 内存 SQLite） | — | 各模块§7 |
+| `tests/` | 测试 | 单元测试（含 conftest 内存 SQLite） | — | 各模块[#7](#7-测试) |
 | `docs/` | 文档 | 架构文档集（本目录）+ 既有文档 | — | 本文 |
 
 ## 3. 数据源与存储位置
@@ -60,7 +60,7 @@ HTTP 层 (app/api)
    │     ├── 检索 (app/search/hybrid + opensearch) ← ranking(RRF)
    │     ├── 元数据 (metadata_*) ← provenance ← identifiers ← tags ← venue
    │     ├── 存储 (object_storage: MinIO)
-   │     └── 外部服务 (embedding_service: 容器 :8090)
+ │ └── 外部服务 (embedding_service: 容器 :8090)
    │             ├── /embed （向量）
    │             └── /rerank （精排）
    │
@@ -69,7 +69,7 @@ HTTP 层 (app/api)
 
 关键依赖事实：
 - **队列是唯一入口**：所有导入作业（含 reindex、重试）都进进程内队列调度（`queue.py`），应用必须 `--workers 1`。
-- **`provenance_service.write_field` 是唯一的「claim → papers 列」映射表**（AGENTS §3.9，08 文档详述）：新增可合并字段必须先加映射，否则字段漂移。
+- **`provenance_service.write_field` 是唯一的「claim → papers 列」映射表**（见 [08-metadata.md](08-metadata.md)）：新增可合并字段必须先加映射，否则字段漂移。
 - **过滤字段是索引时快照**：改元数据不自动影响检索过滤 —— 改元数据用 `scripts/refresh_index_metadata.py`（秒级、不重算向量），要连向量一起重算才 reindex（05 文档）。
 - **三端一致性可自检**：`GET /api/consistency` / `scripts/check_consistency.py` 只读对账 PG ↔ MinIO ↔ OpenSearch，不抛异常（01 文档）。
 - **主版本规则**：`published_pdf > original > arxiv_pdf`，只有主版本被解析/索引（08 文档）。
@@ -88,7 +88,7 @@ POST /api/papers/ingest/files（多文件 multipart，流式写 staging 边算 s
         → 回溯元数据（pdf_embedded → 启发式 → merge）
         → PARSING（parsing/pdf.py 抽文本 + structure 识别章节）
         → CHUNKING（chunking.py 切块）
-        → EMBEDDING（embedding_service → 容器 :8090 /embed）
+ → EMBEDDING（embedding_service → 容器 :8090 /embed）
         → INDEXING（`_index_rows` 组装文档：文本 + 向量 + `snapshot.paper_metadata_snapshot`；写别名 paper_chunks_current）
         → COMPLETED（fingerprint 可能升级，DOI > arXiv > title > sha256）
   → housekeeping（周期清理 staging / 解包临时目录）
@@ -112,21 +112,21 @@ POST /mcp（Streamable HTTP，Bearer）
 
 ## 6. 配置项
 
-所有配置键以 `app/core/config.py`（pydantic-settings）为源，仓库根 `.env` 提供值；容器侧变量在 `infra/.env`（AGENTS §3.4）。键名/默认值/作用见各模块文档 §6，或 `.env.example`。
+所有配置键以 `app/core/config.py`（pydantic-settings）为源，仓库根 `.env` 提供值；容器侧变量在 `infra/.env`（见 [UserManual.md 应用配置](../UserManual.md#13-应用配置根-env)）。键名/默认值/作用见各模块文档 [#6](#6-配置项)，或 `.env.example`。
 
 ## 7. 测试
 
-- 单元测试全套在 `tests/`（pytest，跑内存 SQLite，不碰真机）；每个模块文档 §7 列出对应测试文件与覆盖点。
-- 真机验证放 `scripts/`（如 `acceptance_metadata.py`、`bulk_ingest*.py`），脚本自带 `--cleanup`，不污染真实数据（AGENTS §6）。
+- 单元测试全套在 `tests/`（pytest，跑内存 SQLite，不碰真机）；每个模块文档 [#7](#7-测试) 列出对应测试文件与覆盖点。
+- 真机验证放 `scripts/`（如 `acceptance_metadata.py`、`bulk_ingest*.py`），脚本自带 `--cleanup`，不污染真实数据。
 
 ## 8. 未做 / 已知缺口
 
 - 前端在独立仓库 `paperbox-webui`；本仓库只提供 REST API。
-- 已知未连通：`Redis/Celery`（任务用进程内队列）、`OCR`、`arm64` 等（plan §30）。
-- 文档口径：`docs/architecture/metadata-architecture.md` 是**设计背景**（目标/取舍/逐字段映射/术语表），**实现现状**看 `docs/architecture/08-metadata.md`（表 + 实现架构），实测数字看 `docs/progress/project.md` §17。
+- 已知未连通：`Redis/Celery`（任务用进程内队列）、`OCR`、`arm64` 等。
+- 文档口径：`docs/architecture/metadata-architecture.md` 是**设计背景**（目标/取舍/逐字段映射/术语表），**实现现状**看 `docs/architecture/08-metadata.md`（表 + 实现架构），实测数字看 `docs/progress/project.md` [#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21)。
 - MCP 侧：**无速率限制**；仅在 Hermes 与 codex 上做过真机验收（Claude Code 本机未装、自研 harness 片段未验证）；
-  四项细化（审计字段 / 错误码 / 预算翻页 / 作业等待语义）未做，见 11 篇 §12。
-- 各模块的更细缺口见对应文档 §8。
+  四项细化（审计字段 / 错误码 / 预算翻页 / 作业等待语义）未做，见 11 篇 [#12](../progress/project.md#12-查询改写产品化p1-i2026-09-12)。
+- 各模块的更细缺口见对应文档 [#8](#8-未做--已知缺口)。
 
 ## 文档索引
 
@@ -145,8 +145,6 @@ POST /mcp（Streamable HTTP，Bearer）
 | 10 | `10-eval-ops.md` | 评测闭环与运维部署 |
 | 11 | `11-mcp-agent-interface.md` | MCP agent 接口：传输、鉴权、10 个工具契约、验收与客户端接入 |
 
-**同级补充文档**（非编号）：`metadata-architecture.md`（元数据层设计稿：逐字段映射、术语表）、
-`hermes-integration.md`（Hermes 工具定义与调用范式）、`MVP-SPEC.md`（接口摘要）。
+**同级补充文档**（非编号）：`metadata-architecture.md`（元数据层设计稿：逐字段映射、术语表）、`hermes-integration.md`（Hermes 工具定义与调用范式）、`MVP-SPEC.md`（接口摘要）。
 
-**其他目录**：`docs/progress/`（`project.md` 项目级进度 · `parser.md` 解析线）、`docs/examine/`（审查报告快照）、
-`docs/old/`（已完成阶段的规范）、`.hermes/plans/`（各阶段 plan；`2026-09-10_215600-paperbox-master-plan.md` 是权威需求）。
+**其他目录**：`docs/progress/`（`project.md` 项目级进度 · `parser.md` 解析线）、`docs/examine/`（审查报告快照）、`docs/old/`（已完成阶段的规范）、`.hermes/plans/`（各阶段 plan；`2026-09-10_215600-paperbox-master-plan.md` 是权威需求）。

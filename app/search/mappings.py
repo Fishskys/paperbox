@@ -165,7 +165,7 @@ def build_mapping() -> dict:
             # loudly instead of being mapped to ``text`` behind our back. With
             # ``true`` the old rule was "add the field to ``build_mapping()``
             # *before* the first document carries it" -- human discipline that a
-            # filter field silently lost the moment someone forgot (AGENTS §3.5).
+            # filter field silently lost the moment someone forgot (see `docs/architecture/01-storage.md`).
             # ``tests/test_index_snapshot.py`` pins that every field
             # ``build_chunk_document`` emits is declared, so strict stays safe.
             "dynamic": "strict",

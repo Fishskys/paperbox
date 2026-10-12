@@ -2,27 +2,24 @@
 
 > **本文是 MCP 模块的唯一契约真源。** 工具增删、参数语义、返回形状、权限与传输安全都以本文为准；
 > plan（`.hermes/plans/2026-10-04_175312-mcp-agent-interface.md`）记录的是决策过程与任务分解，实现细节若有冲突以本文为准。
-> 前身是 `hermes-integration.md`（2026-09 起草的 5 个只读工具）——那份文档的工具定义已并入本文 §5，原文件只保留"为什么这样调用"的范式说明。
+> 工具定义以本文 [#5](#5-工具契约-v110-个) 为准；`hermes-integration.md` 只保留「为什么这样调用」的范式说明。
 
 **端点**：`http://<host>:8077/mcp`（Streamable HTTP；带不带尾斜杠都可以 —— 服务端内部会把 `/mcp`
-改写为挂载点根路径，**不会**回 307 让客户端重来一次；2026-10-04 真机验收发现并修，见 §2 末尾）
-**状态**：v1（工具集冻结，见 §8）　**客户端验收**：**Hermes ✅ 与 codex ✅ 端到端通过**（见 §9/§10）；
-Claude Code 与自研 harness 片段**未验证**（见 §12）
+改写为挂载点根路径，**不会**回 307 让客户端重来一次）
+**状态**：v1（工具集冻结，见 [#8](#8-版本与变更规约)）　**客户端验收**：**Hermes ✅ 与 codex ✅ 端到端通过**（见 [#9](#9-验收hermes)/[#10](#10-客户端接入)）；
+Claude Code 与自研 harness 片段**未验证**（见 [#12](#12-未做与未验证事项当前口径)）
 
-> **实现进度（2026-10-05，终态）**：**10 个工具全部落地并验收** —— 读 6 个（`paper_search` / `paper_get` /
+> **工具集**：10 个 —— 读 6 个（`paper_search` / `paper_get` /
 > `paper_get_chunks` / `paper_get_context` / `paper_get_file` / `paper_job_status`）+ 写 4 个
 > （`paper_import` / `paper_reindex` / `paper_delete` / `paper_update_metadata`，默认不可见）。
-> 传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、
-> 宿主机 lifespan 托管 session manager、静态 Bearer 鉴权、SSRF 闸、签名下载、结构化审计均已落地。
-> **脚本化验收**：`scripts/acceptance_mcp.py` 只读面 **37/37**、带写面 **50/50**（退出码即结论，自带清理）。
-> **真机验收（30 篇语料）**：`paper_search` 真实排序（int8 交叉编码器在位，3.2s）→ 9 条 citation
+> 传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、> 宿主机 lifespan 托管 session manager、静态 Bearer 鉴权、SSRF 闸、签名下载、结构化审计。
+> **验收脚本**：`scripts/acceptance_mcp.py` —— 只读面 **37/37**、带写面 **50/50**（退出码即结论，自带清理）。
+> **在 30 篇语料上**：`paper_search` 真实排序（int8 交叉编码器在位，3.2s）→ 9 条 citation
 > **全部带页码与章节**；`paper_get` 报 15 块 + 7 个字段的来源账本；分页游标不重叠；`paper_get_context`
 > 窗口 5 块且恰好 1 块 `primary`；**签名下载 200 / 2.2 MB 真 PDF / 篡改签名 403**；
 > REST 与 MCP 同查询 **total 与排序逐位相同**（不变式 2）。
-> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、
-> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、
-> `app/services/download_signing.py` + `app/api/downloads.py`（签名链接与流式下载）、`app/mcp/citations.py`。
-> 剩余待办口径见 **§12**（四个细化项 + 速率限制；均非缺口，不阻塞发布）。
+> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、> `app/services/download_signing.py` + `app/api/downloads.py`（签名链接与流式下载）、`app/mcp/citations.py`。
+> 未做项见 **[#12](#12-未做与未验证事项当前口径)**（四个细化项 + 速率限制；均非缺口）。
 
 ---
 
@@ -56,7 +53,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 - 三个细分开关**都受总闸 `MCP_WRITE_ENABLED` 约束**；总闸关 = 写工具全部不可见。
 - **关掉的工具不出现在 `tools/list`** —— agent 不该看到一个它不能用工具（不是"能看见但报错"）。
-- **key 不是权限系统**：`key → agent 名` 只用于身份与审计（§4.3），权限一律由上面的全局开关决定。
+- **key 不是权限系统**：`key → agent 名` 只用于身份与审计（[#4.3](#43-审计)），权限一律由上面的全局开关决定。
 
 ---
 
@@ -130,7 +127,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 - `code` **复用现有语义**：14 个作业 `error_code`（`app/core/errors.py`）+ 8 个解析降级码 + HTTP 状态含义。
   **本模块只新增两个码**：`WRITE_DISABLED`（权限关闭，`hint` 指向对应环境变量名）、`SSRF_BLOCKED`（入站 URL 被安全闸拦下）。
-- **实际送达形态（实现事实，2026-10-04 验证）**：MCP SDK 的失败通道只有文本 —— 工具抛
+- **实际送达形态（实现事实）**：MCP SDK 的失败通道只有文本 —— 工具抛
   `mcp.server.mcpserver.exceptions.ToolError` 时，客户端拿到 `isError: true` 且
   `content[0].text = "Error executing tool <name>: {\"error\": {...}}"`（SDK 加前缀，JSON 由我们提供，可解析）；
   抛**其它**异常会被 SDK 当崩溃，客户端只见 `Error executing tool <name>`（无细节）、服务端 ERROR + traceback。
@@ -144,7 +141,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 ### 4.1 鉴权
 
-> 2026-10-05 起按 plan `2026-10-05_145619-api-auth-keys-roles` 重写：MCP 与 REST **共用同一套密钥**
+> MCP 与 REST **共用同一套密钥**
 > （`app/services/api_key_service.py` 是唯一认证来源），并受 `AUTH_ENABLED` 总开关（**全开全关**）控制。
 
 | 项 | 契约 |
@@ -185,20 +182,19 @@ env 引导行每次启动与 `.env` 重新同步：env 里删掉的名字，其 
 ```jsonc
 {"event":"mcp_call","agent":"hermes","key_prefix":"hermes","tool":"paper_delete","paper_id":"...",
  "args_digest":{"dry_run":false},"outcome":"ok","code":null,
- "affected":{"chunks":37,"objects":2},"took_ms":412,"transport":"http"}
+ "affected":{"chunks":37"objects":2}"took_ms":412"transport":"http"}
 ```
 
 - 脱敏：只记密钥**前缀**（`key_prefix`），永不记完整 key；不记正文全文（只记字符数/块数）；`query` 只记前 200 字符。
-- 检索类工具仍落 `search_queries`（现有表，2026-10-05 起该表也带 `key_prefix` 列）；写工具**必须**记 `affected`。
+- 检索类工具仍落 `search_queries`（现有表，带 `key_prefix` 列）；写工具**必须**记 `affected`。
 - 请求日志同理：应用日志行带 `[key=<前缀>]`（`AUTH_ENABLED=false` 时为 `anonymous`）。范围口径：前缀随**请求**日志走；
-  后台流水线日志没有请求上下文，靠 `job_id` 回链（plan §7.6，主人已确认够用）。
+  后台流水线日志没有请求上下文，靠 `job_id` 回链（plan [#7.6](#7-不变式实现必须守改这块前先读)，主人已确认够用）。
 
 ---
 
 ## 5. 工具契约 v1（10 个）
 
-> 输入/输出全部是 **Pydantic 模型**（`app/mcp/models.py` + 复用 `app/schemas/search.py::SearchFilters`），
-> `tools/list` 的 JSON Schema 由类型自动生成：**不允许裸 `object`**（单测快照钉住）。
+> 输入/输出全部是 **Pydantic 模型**（`app/mcp/models.py` + 复用 `app/schemas/search.py::SearchFilters`），> `tools/list` 的 JSON Schema 由类型自动生成：**不允许裸 `object`**（单测快照钉住）。
 > 每个工具的 description 必须写：何时该用 / 何时不该用 / 一个可复制的参数示例。
 
 ### 5.1 读工具（默认可用）
@@ -210,13 +206,12 @@ env 引导行每次启动与 `.env` 重新同步：env 里删掉的名字，其 
 | `query` | string | — | **必填**，自由文本（中英文） |
 | `mode` | enum | `hybrid` | `keyword` / `semantic` / `hybrid` |
 | `top_k` | int | `10` | 1–50 |
-| `filters` | `SearchFilters` | 无 | 见 §5.3 |
+| `filters` | `SearchFilters` | 无 | 见 [#5.3](#53-filters复用-searchfilters) |
 | `rerank` | bool | **`true`** | 交叉编码器重排。**代价**：`top_k=10` 时 p50 ≈5.5 s（关掉 ≈1.3 s）——快速扫一遍再决定时可传 `false` |
 | `facets` | bool | `false` | 同时返回各过滤键在当前条件下的可选值与论文数（agent 摸底用） |
 | `backend` | string | 跟随部署 | `native`（默认）/ `python`，仅影响 `hybrid` |
 
-**返回** `data`：`results[]`（每篇含 `paper_id`/`title`/`authors`/`year`/`venue`/`score`/`relevance`/`evidence[]`）、
-`total`（命中论文数真值）、`candidates`（喂进聚合的块数）、`rerank{...}`、`rewrite{...}`、`facets`。
+**返回** `data`：`results[]`（每篇含 `paper_id`/`title`/`authors`/`year`/`venue`/`score`/`relevance`/`evidence[]`）、`total`（命中论文数真值）、`candidates`（喂进聚合的块数）、`rerank{...}`、`rewrite{...}`、`facets`。
 **`citations[]`**：逐篇 evidence 展开。
 
 #### `paper_get`
@@ -269,23 +264,20 @@ env 引导行每次启动与 `.env` 重新同步：env 里删掉的名字，其 
 
 | 工具 | 参数 | 默认 | 行为 |
 |---|---|---|---|
-| `paper_import` | `source`（必填）、`source_type`=`url`\|`local_path`、`wait_seconds`=`120`、`dry_run`=`false` | — | 建导入作业；**短暂等待**：完成返回 `paper_id`，超时返回 `job_id`。`url` **必过 SSRF 闸**（§6） |
+| `paper_import` | `source`（必填）、`source_type`=`url`\|`local_path`、`wait_seconds`=`120`、`dry_run`=`false` | — | 建导入作业；**短暂等待**：完成返回 `paper_id`，超时返回 `job_id`。`url` **必过 SSRF 闸**（[#6](#6-入站-url-的安全闸ssrf)） |
 | `paper_reindex` | `paper_id`（必填）、**`dry_run`=`true`**、`wait_seconds`=`120` | — | `dry_run=true` 只返回影响面预览（现有块数、是否已有作业在跑）**不执行** |
 | `paper_delete` | `paper_id`（必填）、**`dry_run`=`true`** | — | `dry_run=true` 返回影响面（论文、块数、对象数）；显式 `false` 才执行（**软删**） |
 | `paper_update_metadata` | `paper_id`（必填）、`fields: MetadataPatch`（必填）、`dry_run`=`false` | — | 改元数据，返回"字段旧值→新值"；回滚走 REST |
 
 - 写工具**只支持 URL 与服务端路径**两种导入源：MCP 不传文件字节（要传文件走 REST `/api/papers/ingest/files`）。
-- `local_path` 指的是**服务端上的一个 PDF 文件路径**（不是目录 —— 目录批量导入走 REST `/ingest/dir`，
-  它有逐文件报告和自己的 `dry_run`），必须落在 `INGEST_LOCAL_ROOTS` 白名单内（默认空 = 该能力关闭）。
+- `local_path` 指的是**服务端上的一个 PDF 文件路径**（不是目录 —— 目录批量导入走 REST `/ingest/dir`，它有逐文件报告和自己的 `dry_run`），必须落在 `INGEST_LOCAL_ROOTS` 白名单内（默认空 = 该能力关闭）。
 - **开关决定"存不存在"**：`MCP_WRITE_ENABLED` 关 → 四个写工具**都不注册**；分别打开
   `MCP_ALLOW_DELETE`/`MCP_ALLOW_REINDEX`/`MCP_ALLOW_METADATA_WRITE` 才注册对应工具
   （`paper_import` 只受总开关管）。没注册的工具不出现在 `tools/list`，按名字猜也调不到。
 - **危险操作默认是预览**：`paper_delete` / `paper_reindex` 的 `dry_run` 默认 `true`，且
   `dry_run=true` 时**零次**改动型 service 调用（单测用"调用即抛错"的替身钉住）。
 - **`paper_import` 的 sha256 去重**：与 REST 同一套流水线，导入一个**内容已存在**的 PDF 会命中已有论文
-  （返回那篇的 `paper_id`，不是新建）。⚠️ 因此"导入→删除"式的验收脚本必须先快照语料，
-  只删自己新建的那篇（2026-10-04 真踩过：夹具与语料里的 arXiv 1706.03762 逐字节相同，
-  一次误删把语料论文删了，靠"重放原件 + 重建索引"复原）。
+  （返回那篇的 `paper_id`，不是新建）。⚠️ 因此"导入→删除"式的验收脚本必须先快照语料，只删自己新建的那篇。
 
 ### 5.3 `filters`（复用 `SearchFilters`）
 
@@ -334,7 +326,7 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 6. **内容预算恒定**：单次正文有上限（`MCP_MAX_CHARS`，默认 8000），超出**显式标注**并给翻页；**超上限的显式请求报错不裁剪**。
 7. **无会话状态**：每次调用从请求取身份与参数；服务端不依赖 MCP 会话。
 8. **零数据库迁移**：本模块不改 schema。
-9. **入站 URL 一律过 SSRF 闸**（§6）。
+9. **入站 URL 一律过 SSRF 闸**（[#6](#6-入站-url-的安全闸ssrf)）。
 10. **类型即契约**：输入/输出都是 Pydantic 模型，`tools/list` 的 schema 自动生成并进单测快照。
 11. **传输安全必须显式**：`transport_security` 必传；启动日志打印生效白名单。
 12. **白名单缺失即失败**：`MCP_ENABLED=true` 且 `MCP_ALLOWED_HOSTS` 空 → 启动报错退出。
@@ -344,7 +336,7 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 ## 8. 版本与变更规约
 
 - `MCP_TOOLSET=v1`（默认）：工具集与参数形状**冻结**；`tools/list` 每个工具带 `_meta.toolset="v1"`。
-- **加工具/改参数** = 改版本号（`v2`）并在文档里记录迁移；**破坏性变更必须重跑两个任务式验收**（§9）。
+- **加工具/改参数** = 改版本号（`v2`）并在文档里记录迁移；**破坏性变更必须重跑两个任务式验收**（[#9](#9-验收hermes)）。
 - 工具下线：先在 `v1` 标 deprecated，再在 `v2` 移除。
 
 ---
@@ -353,7 +345,7 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
 
 **脚本化验收（可重复、可进 CI）**：`scripts/acceptance_mcp.py` 一次跑完传输 + 鉴权 + 六读工具 +
 四个写工具 + 异常路径，共 **50 项断言**（只读面 37 项 / 加上写工具 50 项），退出码 0 = 全过。
-本地实测（2026-10-04）：只读面 **37/37**（`EXIT=0`）、带写 **50/50**（`EXIT=0`，语料 30 → 31 → **30**）。
+本地实测：只读面 **37/37**（`EXIT=0`）、带写 **50/50**（`EXIT=0`）。
 
 ```bash
 # key 走环境变量（别用 --token：命令行会进 shell 历史与调用方日志）
@@ -362,18 +354,15 @@ PAPER_API_KEY=<key> uv run python scripts/acceptance_mcp.py --with-writes  # 加
 uv run python scripts/acceptance_mcp.py --json report.json                 # 机器可读副本
 ```
 
-脚本的**自清理纪律**（吃过一次亏：拿一份与语料某篇逐字节相同的夹具做「导入→删除」，结果按 id 删掉了那篇真论文；所以现在归属不由名字或哈希判定，而由**运行前快照**判定）：导入的探针 PDF 是**每次运行唯一字节**的合成件，
-跑完用**语料快照 diff** 找出"这次新建的那篇"再删；若 diff 不是恰好一篇，**直接中止、什么都不删**；
+脚本的**自清理纪律**（归属由**运行前快照**判定，不由名字或哈希判定）：导入的探针 PDF 是**每次运行唯一字节**的合成件，跑完用**语料快照 diff** 找出"这次新建的那篇"再删；若 diff 不是恰好一篇，**直接中止、什么都不删**；
 `decide_cleanup()` 拒绝删除任何**运行前就存在**的论文，`missing_from()` 在收尾处断言"既有论文一篇没少"。
-探针必须落在 `INGEST_LOCAL_ROOTS` 之内（脚本默认取该变量第一项，可用 `--probe-dir` 覆盖），
-否则服务端会正确拒绝（`FORBIDDEN`）。
+探针必须落在 `INGEST_LOCAL_ROOTS` 之内（脚本默认取该变量第一项，可用 `--probe-dir` 覆盖），否则服务端会正确拒绝（`FORBIDDEN`）。
 
 **会留下的唯一痕迹**：`paper_delete` 是**软删**（产品行为），所以带写模式每跑一次会在库里留一条
 `deleted` 状态的探针记录（`live` 数不变）。要彻底清掉：`uv run python scripts/purge_deleted.py --hard`
-（本次验收后已跑过，语料恢复 `live=30 / deleted=0`，三端一致性 `problems=0`）。
+（语料恢复 `live=30 / deleted=0`，三端一致性 `problems=0`）。
 
-两个踩过的客户端坑，脚本里已固化：**httpx 默认 `trust_env=True` 会走 Windows 系统代理**，
-带自定义 `Host` 的请求于是变成 502（服务器其实正确回 421）——脚本用 `trust_env=False`；
+两个客户端坑，脚本里已固化：**httpx 默认 `trust_env=True` 会走 Windows 系统代理**，带自定义 `Host` 的请求于是变成 502（服务器其实正确回 421）——脚本用 `trust_env=False`；
 **搜索结果在 `data.results`**，而 `citations` 挂在**信封**上（不在 `data` 里）。
 
 两个任务式验收（无人工提示）：
@@ -381,23 +370,21 @@ uv run python scripts/acceptance_mcp.py --json report.json                 # 机
 1. "**找出 3 篇关于 X 的论文，带页码引用**"。
 2. "**读取指定论文的 Method 部分，概括关键步骤并给出对应页码**"。
 
-> **验收记录（2026-10-04，Hermes 真机，两个任务都通过）**：证据与原始日志见
+> **验收记录（Hermes 真机，两个任务都通过）**：证据与原始日志见
 > `docs/examine/mcp-hermes-acceptance-20261004/`（含调用链与答复摘录）。任务①用「面向代码的大语言模型」
-> （库里 ≥3 篇）通过；任务②用《Attention Is All You Need》的 Method 部分通过（§3.1 p.3 / §3.2.1 p.4 /
-> §3.3 p.5 / §3.5 p.6，逐节带页码）。五个会话日志里 `curl` / `/api` 兜底命中数**均为 0**。
+> （库里 ≥3 篇）通过；任务②用《Attention Is All You Need》的 Method 部分通过（[#3.1](#31-成功信封所有工具一致) p.3 / [#3.2.1](#3-统一返回契约) p.4 /
+> [#3.3](#33-错误信封iserror-true) p.5 / [#3.5](#3-统一返回契约) p.6，逐节带页码）。五个会话日志里 `curl` / `/api` 兜底命中数**均为 0**。
 > **语料覆盖的诚实结论**：前三次尝试的主题（低功耗 SRAM 漏电 / III-V 环栅纳米线 / LLM 模拟电路设计）
 > 库里只有 0 / 1 / 2 篇，Hermes 如实说明「不足 3 篇」并列举非匹配候选、没有编造——所以「3 篇」是
 > **语料规模问题**而非接口问题。
 
-两段都要能看到：工具调用链（`paper_search` → `paper_get` → `paper_get_chunks`/`paper_get_context`）、
-带页码/章节的引用、`citations[]` 被真正使用；且**没有**出现 agent 退回 curl/REST 兜底。
+两段都要能看到：工具调用链（`paper_search` → `paper_get` → `paper_get_chunks`/`paper_get_context`）、带页码/章节的引用、`citations[]` 被真正使用；且**没有**出现 agent 退回 curl/REST 兜底。
 
 ---
 
 ## 10. 客户端接入
 
-> **状态口径**：只有 **Hermes 做了真机任务式验收**（§9）。其余客户端的片段按各自 CLI 的**实际形态**写成，
-> 状态逐条标注；「配置已就绪」≠「端到端已验证」。
+> **状态口径**：只有 **Hermes 做了真机任务式验收**（[#9](#9-验收hermes)）。其余客户端的片段按各自 CLI 的**实际形态**写成，> 状态逐条标注；「配置已就绪」≠「端到端已验证」。
 
 ### Hermes（✅ 端到端验收通过）
 
@@ -413,7 +400,7 @@ hermes mcp test paperbox                                    # 期望：Connected
 工具在 Hermes 里是 `mcp__paperbox__<tool>`（例：`mcp__paperbox__paper_search`）。
 **改完必须重启 Hermes**（无热加载；网关 host 的会话重启后会自动恢复）。
 
-### codex CLI（✅ 端到端验收通过，2026-10-04）
+### codex CLI（✅ 端到端验收通过）
 
 ```bash
 # token 从环境变量读，不进配置文件
@@ -423,16 +410,12 @@ codex mcp list      # 期望：paperbox / streamable_http / enabled / Bearer tok
 codex mcp get paperbox
 ```
 
-本机实测（2026-10-04，codex-cli 0.153.4）**已通过**：`codex exec` 用 `paper_search` ×2 + `paper_get` ×3，
-正确答出《Attention Is All You Need》（arXiv 1706.03762, NIPS 2017）并给出**页级引用**
+本机实测（codex-cli 0.153.4）**已通过**：`codex exec` 用 `paper_search` ×2 + `paper_get` ×3，正确答出《Attention Is All You Need》（arXiv 1706.03762, NIPS 2017）并给出**页级引用**
 （p.1 Abstract、p.2 Introduction，附原文引文）。**两个必须知道的坑**：
 
-1. **`codex mcp add` 报 Added ≠ 落盘成功**。本机出现过一次"Added global MCP server 'paperbox'"，
-   但随后 `codex mcp list` / `config.toml` 里**没有**该条目，codex 静默地带着 0 个 MCP 工具跑完，
-   还一本正经地报告"我没有 paperbox 工具"（**没有任何报错**）。所以：**每步都要复核** ——
+1. **`codex mcp add` 报 Added ≠ 落盘成功**。本机出现过一次"Added global MCP server 'paperbox'"，但随后 `codex mcp list` / `config.toml` 里**没有**该条目，codex 静默地带着 0 个 MCP 工具跑完，还一本正经地报告"我没有 paperbox 工具"（**没有任何报错**）。所以：**每步都要复核** ——
    `codex mcp get paperbox` 看配置真的在，再跑一次真会话看工具真的在。
-2. **codex 对 MCP 工具调用走它的审批策略**：默认 `approval: never` 时每次调用都会被拒，
-   客户端只会看到 `MCP tool call requires approval, but approval policy is never`。
+2. **codex 对 MCP 工具调用走它的审批策略**：默认 `approval: never` 时每次调用都会被拒，客户端只会看到 `MCP tool call requires approval, but approval policy is never`。
    **非交互验收**（`codex exec`）加 `--dangerously-bypass-approvals-and-sandbox`；
    **交互式会话**里批准一次即可，或把审批策略切到 `on-request`/`untrusted`。
 
@@ -444,12 +427,8 @@ codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
   '用 paperbox 的 MCP 工具找一篇讲 Transformer 的论文，给出标题和页码引用'
 ```
 
-**顺带一条审计事实**：`PAPER_API_KEYS` 是按**值**认身份的 —— 两个 agent 共用同一把 key 时，
-审计行里都会记成先出现的那个名字（本次 codex 的调用在服务端记成了 `agent=hermes`，因为我给两者配了同一把 key）。
+**顺带一条审计事实**：`PAPER_API_KEYS` 是按**值**认身份的 —— 两个 agent 共用同一把 key 时，审计行里都会记成先出现的那个名字。
 **想区分 agent，就必须给每个 agent 各发一把不同的 key。**
-
-> 排查记录（第一版失败原因，留档）：① CC Switch 代理没监听 → `502`；② 代理起来后该账号
-> `HTTP 402 INSUFFICIENT_BALANCE`（7 个模型全 402）→ 与 paperbox 无关，额度解决后即通。
 
 ### Claude Code（⚪ 未验证，本机未安装）
 
@@ -462,24 +441,23 @@ claude mcp add --transport http paperbox http://<IP>:8077/mcp \
 ```jsonc
 // 或项目内 .mcp.json（可提交给协作者，但别把 key 提交上去）
 { "mcpServers": { "paperbox": {
-    "type": "http", "url": "http://<IP>:8077/mcp",
+ "type": "http""url": "http://<IP>:8077/mcp"
     "headers": { "Authorization": "Bearer <key>" } } } }
 ```
 
 本机**没有安装** Claude Code，上述片段按官方 MCP 配置形态书写但**未经真机验证**；
-若连接失败，先按 §2（421 = Host 不在白名单）与 §4（401/403 = key 问题）自查。
+若连接失败，先按 [#2](#2-传输与部署契约)（421 = Host 不在白名单）与 [#4](#4-鉴权身份与审计)（401/403 = key 问题）自查。
 
 ### 其他 MCP 客户端 / 自研 harness（⚪ 未验证）
 
-任何支持 **Streamable HTTP** 的 MCP 客户端都行，只要满足两点：请求带 `Authorization: Bearer <key>`，
-且它的 `Host` 在 `MCP_ALLOWED_HOSTS` 里。最小握手（不需要任何 SDK）：
+任何支持 **Streamable HTTP** 的 MCP 客户端都行，只要满足两点：请求带 `Authorization: Bearer <key>`，且它的 `Host` 在 `MCP_ALLOWED_HOSTS` 里。最小握手（不需要任何 SDK）：
 
 ```bash
 curl -sS -X POST "http://<IP>:8077/mcp" \
   -H "Authorization: Bearer <key>" \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":
+ -d '{"jsonrpc":"2.0""id":1"method":"initialize""params":
        {"protocolVersion":"2025-06-18","capabilities":{},
         "clientInfo":{"name":"my-harness","version":"0"}}}'
 ```
@@ -493,21 +471,21 @@ Python 侧直接 `pip install mcp` 后用 `mcp.client.streamable_http.streamable
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 启不来，日志说白名单为空 / `needs a credential` | `MCP_ENABLED=true` 但 `MCP_ALLOWED_HOSTS` 没配，或一把 key 都没有 | 补 `MCP_ALLOWED_HOSTS` 与 `PAPER_API_KEYS`（或 `PAPER_API_KEY`）（§2） |
+| 启不来，日志说白名单为空 / `needs a credential` | `MCP_ENABLED=true` 但 `MCP_ALLOWED_HOSTS` 没配，或一把 key 都没有 | 补 `MCP_ALLOWED_HOSTS` 与 `PAPER_API_KEYS`（或 `PAPER_API_KEY`）（[#2](#2-传输与部署契约)） |
 | **421 Misdirected Request**（**裸文本** `Invalid Host header`，不是 JSON-RPC 错误） | 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` | 把**该客户端访问用的 IP/主机名**（`host` 与 `host:*` 两种写法）加进去并重启；看服务端启动日志里打印的生效白名单 |
 | **401** 且带 `WWW-Authenticate: Bearer` | 没带 `Authorization` 头（或缺 key） | 客户端配置里补 header；`?key=` 不支持 |
-| **403** | key 不匹配 | 对齐 `PAPER_API_KEYS` / `PAPER_API_KEY`；确认没多空格；共用同一把 key 的 agent 在审计里会同名（§4.2） |
+| **403** | key 不匹配 | 对齐 `PAPER_API_KEYS` / `PAPER_API_KEY`；确认没多空格；共用同一把 key 的 agent 在审计里会同名（[#4.2](#42-多-key-格式)） |
 | 首个请求必失败、后续正常 | 父应用 lifespan 没进 `mcp.session_manager.run()`（挂载的子应用不跑自己的 lifespan） | 这是代码层回归，`tests/test_mcp_transport.py` 有专门用例 |
 | 工具列表里少了写工具 | `MCP_WRITE_ENABLED` 或对应 `MCP_ALLOW_*` 关 | **设计如此**（关 = 不注册）；要写能力就开总闸 + 分开关并重启，再以 `tools/list` 为准 |
 | 现象是"连不上"而不是明确报错 | 客户端没装 MCP 支持（例：Hermes 缺 `mcp` 包会被静默禁用） | 装依赖、重启，再 `hermes mcp test paperbox` |
 | 超时 / 长导入没结果 | 客户端 per-tool timeout < `MCP_WAIT_SECONDS` | 把客户端 timeout 提到 ≥ 等待上限（Hermes 用 `timeout: 300`）；或用 `paper_job_status` 续查 |
 | `localhost` 连不上 | Windows 先解析到 IPv6 回环 | `url` 一律写 IP |
 | `paper_import` 报 `FORBIDDEN`（路径不在允许的根里） | 本地路径导入受 `INGEST_LOCAL_ROOTS` 限制 | 把探针/文件放进白名单目录，或给 `--probe-dir` 指到那里 |
-| codex 说"我没有 paperbox 工具"却在配置里看得见 | `codex mcp add` 的成功提示**不等于落盘**；或 codex 的审批策略拦下了 MCP 调用 | `codex mcp get paperbox` 复核配置 → 跑真会话复核工具；非交互用 `--dangerously-bypass-approvals-and-sandbox`（§10） |
+| codex 说"我没有 paperbox 工具"却在配置里看得见 | `codex mcp add` 的成功提示**不等于落盘**；或 codex 的审批策略拦下了 MCP 调用 | `codex mcp get paperbox` 复核配置 → 跑真会话复核工具；非交互用 `--dangerously-bypass-approvals-and-sandbox`（[#10](#10-客户端接入)） |
 
 ---
 
-## 12. 待办与未验证事项（当前口径）
+## 12. 未做与未验证事项（当前口径）
 
 **未验证**（不要当成可用承诺）：
 
@@ -519,10 +497,10 @@ Python 侧直接 `pip install mcp` 后用 `mcp.client.streamable_http.streamable
 
 | 项 | 内容 | 为什么现在不做 |
 |---|---|---|
-| T-A4 | 审计字段细化（更多上下文字段、采样策略） | 现有审计已够定位问题；字段豪华化收益低 |
-| T-A7 | 错误码细化（把 `INTERNAL` 类再分） | 现有 14 + 2 个错误码已覆盖真实失败面 |
-| T-A8 | 预算与翻页边界细化（更细的 `truncated` 语义） | 现有游标语义在真机验收中够用 |
-| T-A9 | 作业等待语义细化（分段等待 / 进度回传） | `wait_seconds` + 轮询已满足 §9 的两个任务 |
+| 审计字段细化 | 更多上下文字段、采样策略 | 现有审计已够定位问题；字段豪华化收益低 |
+| 错误码细化 | 把 `INTERNAL` 类再分 | 现有 14 + 2 个错误码已覆盖真实失败面 |
+| 预算与翻页边界细化 | 更细的 `truncated` 语义 | 现有游标语义在真机验收中够用 |
+| 作业等待语义细化 | 分段等待 / 进度回传 | `wait_seconds` + 轮询已满足 [#9](#9-验收hermes) 的两个任务 |
 | — | **速率限制** | 审计能看见调用量，但没有任何 per-key 限流；局域网单用户场景暂不需要 |
 
 **已验收（可作为承诺）**：10 个工具 + 传输/鉴权/错误契约在 **Hermes** 与 **codex** 上端到端通过；

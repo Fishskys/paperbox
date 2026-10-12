@@ -19,8 +19,8 @@ sees it, and ``POST /api/jobs/{id}/retry`` re-drives it.
 
 The two ``PARSE_*`` codes come from the docling backend (2026-09-29).  The
 pipeline itself does **not** fail when docling is down -- it degrades to pypdf
-and records ``degraded_reason`` + a ``paper_degradations`` row (AGENTS.md
-section 3.10/3.11).  These codes exist for the paths that demand the docling
+and records ``degraded_reason`` + a ``paper_degradations`` row (see
+`docs/architecture/03-parsing-chunking.md`).  These codes exist for the paths that demand the docling
 backend without a fallback: probes, and any future "strict parse" caller.  A
 job that fails this way is worth retrying (the service may have been
 restarting), which is exactly what ``POST /api/jobs/{id}/retry`` is for.

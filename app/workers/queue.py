@@ -18,7 +18,7 @@ This module keeps the "no Redis, no Celery" design (plan section 30) but adds:
   two priority classes.
 
 The queue is deliberately in-process: the pipeline lives in the web process
-(``--workers 1``, see ``AGENTS.md`` section 1), so the queue is the single owner
+(``--workers 1``), so the queue is the single owner
 of job execution. A restart does not lose work either -- :func:`recover` re-queues
 jobs left in ``RECEIVED``/``QUEUED`` and marks jobs that were mid-pipeline as
 ``INTERRUPTED``, which ``POST /api/jobs/{id}/retry`` can re-drive.
