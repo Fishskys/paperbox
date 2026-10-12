@@ -26,8 +26,6 @@ import hmac
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
-
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -197,7 +195,7 @@ def authenticate(session: Session, token: str | None) -> AuthIdentity | None:
         return env_identity
     row = (
         session.execute(
-            select(ApiKey).where(ApiKey.key_hash == digest, ApiKey.revoked_at.is_(None))
+            select(ApiKey).where(ApiKey.key_hash == digest)
         )
         .scalars()
         .first()
@@ -300,13 +298,13 @@ def startup_bootstrap() -> None:
         )
 
 
-def live_key_count(session: Session) -> int:
-    """Number of usable keys (env rows included). Guard for ``AUTH_ENABLED=true``."""
-    return int(
-        session.execute(
-            select(func.count()).select_from(ApiKey).where(ApiKey.revoked_at.is_(None))
-        ).scalar_one()
-    )
+def key_count(session: Session) -> int:
+    """Number of keys the store holds (env rows included).
+
+    Every row is a usable key: revoking deletes, so there is no retired state to
+    exclude. Used as the startup guard for ``AUTH_ENABLED=true``.
+    """
+    return int(session.execute(select(func.count()).select_from(ApiKey)).scalar_one())
 
 
 # --------------------------------------------------------------------------- #
@@ -424,7 +422,19 @@ def get_by_prefix(session: Session, prefix: str) -> ApiKey | None:
 
 
 def revoke_key(session: Session, prefix: str) -> ApiKey:
-    """Revoke one key; environment bootstrap rows refuse while env references them."""
+    """Delete one key; whoever holds it stops authenticating immediately.
+
+    A **hard delete**, not a tombstone (2026-10-12). A retired row that lingers
+    buys nothing an operator wants: it squats on the prefix (so the prefix could
+    not be re-issued without hand-written SQL) and it forced every lookup to filter
+    on a column that was almost always ``NULL``. What actually happens to a key
+    that is taken out of service is that it is re-issued — and that path replaces
+    the row (see :func:`replace_key`) — so the store keeps only keys somebody can
+    hold.
+
+    Environment bootstrap rows refuse: the environment is their source of truth,
+    so deleting one would be undone on the next restart.
+    """
     row = get_by_prefix(session, prefix)
     if row is None:
         raise KeyManagementError(f"no key with prefix {prefix!r}")
@@ -433,7 +443,7 @@ def revoke_key(session: Session, prefix: str) -> ApiKey:
             f"key {prefix!r} comes from the environment and cannot be revoked here; "
             "remove it from PAPER_API_KEY / PAPER_API_KEYS and restart"
         )
-    row.revoked_at = datetime.now(timezone.utc)
+    session.delete(row)
     session.flush()
     return row
 
@@ -475,7 +485,7 @@ __all__ = [
     "get_by_prefix",
     "hash_key",
     "list_keys",
-    "live_key_count",
+    "key_count",
     "replace_key",
     "revoke_key",
     "role_at_least",

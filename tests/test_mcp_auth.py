@@ -436,7 +436,7 @@ def test_a_database_key_authenticates_through_the_shared_service(
         session.close()
 
 
-def test_a_revoked_database_key_stops_authenticating(monkeypatch, session_factory) -> None:
+def test_a_deleted_database_key_stops_authenticating(monkeypatch, session_factory) -> None:
     from app.services import api_key_service
 
     monkeypatch.setattr(settings, "paper_api_key", "")

@@ -64,7 +64,7 @@ async def lifespan(_: FastAPI):
     if settings.auth_enabled:
         session = SessionLocal()
         try:
-            usable_keys = api_key_service.live_key_count(session)
+            usable_keys = api_key_service.key_count(session)
         finally:
             session.close()
         if usable_keys == 0:

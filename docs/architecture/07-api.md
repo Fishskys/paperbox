@@ -103,7 +103,7 @@
 | 无 `Authorization` 时回退 | 读 `X-API-Key` | 同上 |
 | 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | 同上 |
 | 解析（每请求一次） | `AuthContextMiddleware`（main.py）解析 Bearer → `api_key_service.authenticate(session, token)`，把身份放 `scope["state"]` 并把前缀绑进日志上下文（**纯 ASGI**；不在依赖里做，因为线程池依赖里绑 contextvar 传播不回日志上下文）。读门为 `public` 且没带凭证时，这里直接给出**匿名 read 身份**（`anonymous_reader()`，前缀 `anonymous`），所以日志不再出现空归因 | `app/main.py`、`app/services/api_key_service.py` |
-| 凭证存储 | `api_keys` 表只存 `sha256(完整密钥)`；**`prefix` 是钥匙唯一的标识**（日志归因 + 审计标签，`[a-z0-9_-]{2,32}`，唯一）与 `key_hash` 各唯一；三档 `read < write < admin`；env 引导行（`PAPER_API_KEY`/`PAPER_API_KEYS`）启动时 upsert 成 admin、优先于库行（恢复路径） | `app/db/models.py::ApiKey`、`app/services/api_key_service.py` |
+| 凭证存储 | `api_keys` 表只存 `sha256(完整密钥)`；**`prefix` 是钥匙唯一的标识**（日志归因 + 审计标签，`[a-z0-9_-]{2,32}`，唯一）与 `key_hash` 各唯一；三档 `read < write < admin`；**吊销即删除该行**（硬删、无 tombstone，重发 = 同 prefix 再 `create`）；env 引导行（`PAPER_API_KEY`/`PAPER_API_KEYS`）启动时 upsert 成 admin、优先于库行（恢复路径） | `app/db/models.py::ApiKey`、`app/services/api_key_service.py` |
 | 匿名身份 | 复用 `AuthIdentity`，加 `is_anonymous` 标志与 `anonymous(role)` / `anonymous_reader()` 工厂；唯一用途是让门区分「没带凭证」（401）与「档位不足」（403） | 同上 |
 | 档位强制 | `require_role(min)` 工厂；读端点用 `require_read`（=read）、写端点用 `require_write`（=write，含删除）、批量重建用 `require_admin`（=admin）。缺凭证 401 + `WWW-Authenticate`、不匹配 403 `Invalid API key`、档位不足 403 `insufficient role` | `app/core/security.py` |
 | 依赖挂载 | consistency / jobs / metadata / papers / search / search_logs 六个 router 在**构造时**挂 `require_read`（一处声明覆盖全部读端点）；写与 admin 端点各自在端点级挂更高档位（同一路由两条依赖时以最高档为准） | 各 `app/api/*.py` |

@@ -145,6 +145,54 @@ def test_an_environment_row_is_never_replaced(
     assert authenticates(session_factory, "env-secret")
 
 
+def test_revoke_deletes_the_key_once_confirmed(
+    monkeypatch, cli, session_factory, capsys
+) -> None:
+    assert run_cli(monkeypatch, "create", "--prefix", "hermes", "--role", "read") == 0
+    full_key = printed_key(capsys)
+
+    assert run_cli(monkeypatch, "revoke", "hermes", "--yes") == 0
+    assert "deleted: hermes" in capsys.readouterr().out
+    assert not authenticates(session_factory, full_key)
+
+    assert run_cli(monkeypatch, "list") == 0
+    assert "hermes" not in capsys.readouterr().out
+    # and the prefix is free again, so re-issuing needs no hand-written SQL
+    assert run_cli(monkeypatch, "create", "--prefix", "hermes", "--role", "read") == 0
+
+
+def test_revoke_without_confirmation_changes_nothing(
+    monkeypatch, cli, session_factory, capsys
+) -> None:
+    assert run_cli(monkeypatch, "create", "--prefix", "hermes", "--role", "read") == 0
+    full_key = printed_key(capsys)
+
+    assert run_cli(monkeypatch, "revoke", "hermes") == 1
+    assert "--yes" in capsys.readouterr().err
+    assert authenticates(session_factory, full_key)
+
+
+def test_revoking_an_unknown_prefix_is_refused(monkeypatch, cli, capsys) -> None:
+    assert run_cli(monkeypatch, "revoke", "ghost", "--yes") == 1
+    assert "no key with prefix" in capsys.readouterr().err
+
+
+def test_an_environment_row_refuses_revocation(
+    monkeypatch, cli, session_factory, capsys
+) -> None:
+    monkeypatch.setattr(settings, "paper_api_key", "env-secret")
+    session = session_factory()
+    try:
+        keys.sync_env_bootstrap(session)
+        session.commit()
+    finally:
+        session.close()
+
+    assert run_cli(monkeypatch, "revoke", "default", "--yes") == 1
+    assert "PAPER_API_KEYS" in capsys.readouterr().err
+    assert authenticates(session_factory, "env-secret")
+
+
 def test_bad_input_is_refused_without_a_prompt(
     monkeypatch, cli, session_factory, capsys
 ) -> None:

@@ -285,7 +285,7 @@ def test_the_signing_secret_still_lives_without_auth(client, monkeypatch, sessio
     """P1-16 must not disturb the key machinery: anonymous callers still resolve."""
     session = session_factory()
     try:
-        assert keys.live_key_count(session) >= 0
+        assert keys.key_count(session) >= 0
     finally:
         session.close()
 

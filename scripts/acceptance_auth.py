@@ -354,20 +354,20 @@ def run() -> None:
                 session.commit()
             finally:
                 session.close()
-            # A revoked key is an unknown credential: observable where a credential is
+            # A deleted key is an unknown credential: observable where a credential is
             # read at all — a gated endpoint, or a closed read door.
             revoked = client.post(
                 f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}",
                 headers=bearer(material["read"]),
             )
-            check(revoked.status_code == 403, "a revoked key stops authenticating")
+            check(revoked.status_code == 403, "a deleted key stops authenticating")
             if not door_open:
                 revoked_read = client.get(
                     f"{BASE}/api/papers", headers=bearer(material["read"])
                 )
                 check(
                     revoked_read.status_code == 403,
-                    "a revoked key stops reading on a closed read door",
+                    "a deleted key stops reading on a closed read door",
                     f"status={revoked_read.status_code}",
                 )
         else:

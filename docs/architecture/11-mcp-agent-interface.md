@@ -162,7 +162,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 ### 4.2 多 key 格式
 
-**首选**（带档位、可吊销、日志可归因；**一把钥匙只有一个标识：`prefix`**）：
+**首选**（带档位、可吊销=删除该行、日志可归因；**一把钥匙只有一个标识：`prefix`**）：
 
 ```bash
 uv run python scripts/manage_keys.py create --prefix hermes --role write

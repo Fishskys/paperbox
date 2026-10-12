@@ -230,7 +230,18 @@ uv run python scripts/manage_keys.py revoke hermes --yes
 `source=env` 的引导行**永远不会**被替换或吊销（下次启动会被 env 重新写回），要从 `.env` 移除并重启。
 注意：`prefix` 不能改 —— 想换标识就是换一把新钥匙（`prefix` 是唯一标识，也是日志归因的依据）。
 
-注意：吊销立即生效（下一次请求即 403）。
+**吊销 = 删除**（2026-10-12 起）：`revoke <prefix> --yes` 直接把那一行从库里删掉，立即生效
+（下一次请求即 403），**没有 tombstone、不可恢复**。留一行退役记录只会占着 `prefix`、让人以为「还能找回来」；
+一把钥匙真正退役时的动作是**重发**（见上），那条路会把这一行替换掉。
+
+**密钥丢失 / 忘记了的恢复**（2026-10-12 补）：
+
+| 情况 | 怎么办 |
+|---|---|
+| 记得前缀、忘了密钥值 | **找不回来**（库里只有 sha256，不可逆）。用 `list` 确认前缀，然后**重发**：同 prefix 再 `create`，确认替换 → 旧密钥立刻失效、新密钥打印一次 |
+| 引导密钥 `PAPER_API_KEY` 忘了 | 它明文写在仓库根 `.env`（`AUTH_ENABLED=true` 时非 `change-me`），本机可读；`.env` 也丢了就**写一个新的值**并重启 —— 启动时会 upsert 成 `source=env` 的 admin 行，**不需要知道旧值** |
+| 一把能用的钥匙都没有（进不去） | ① 首选：在 `.env` 写一个新的 `PAPER_API_KEY`（或 `PAPER_API_KEYS=前缀:key`）并重启，离线、不需要旧值；② 或者用 `manage_keys.py create --prefix rescue --role admin` 从库里新建一把（需要能连 Postgres）；③ 应急：临时 `AUTH_ENABLED=false` 重启（读写全放行，只在紧窗口用，用完改回） |
+| 改/重发了钥匙之后 | **客户端不会自动更新**：webui 的 `PAPERBOX_API_KEY`、Hermes 的 `mcp_servers.paperbox.headers.Authorization`（以及 codex 若接入）都要各自换成新密钥，否则一直 403 |
 
 #### 1.3.6 时区（2026-10-10 起全栈统一）
 
@@ -749,3 +760,12 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
   `select decided_at at time zone 'Asia/Shanghai'`，别拿两层的裸字符串直接比。
 - 两个时间戳别混：`decided_at` 是**声明写入账本**的时刻，`decision_at` 才是**人类裁决**的时刻
   （0.5.1 起；`NULL` = 没裁决过）。账本（`GET /api/papers/{id}/metadata` 的 `provenance`）两个都返回，所以"谁在什么时候裁决的"直接读接口即可。记录该列之前入库的裁决行不含 `decision_at`，要补历史值就用 `uv run python scripts/backfill_decision_times.py`。
+
+**Q22 所有密钥都忘了 / 进不去怎么办？**
+不会锁死。首选在仓库根 `.env` 里写一个新的 `PAPER_API_KEY`（**不需要知道旧值**）并重启 —— 启动时它会被
+upsert 成 `source=env` 的 admin 行；也可以直接用 `uv run python scripts/manage_keys.py create --prefix rescue
+--role admin` 从库里新建一把（需要能连 Postgres）。应急手段是临时 `AUTH_ENABLED=false` 重启（读写全放行，
+用完必须改回）。两件要记住的事：**已发出的密钥值找不回来**（库里只有 sha256，非对称不可逆），要换就重发
+（同 prefix 再 `create`）；**换完钥匙客户端不会自动更新** —— webui 的 `PAPERBOX_API_KEY`、Hermes 的
+`mcp_servers.paperbox.headers.Authorization` 都要各自换，否则一直 403。完整流程见
+[#1.3.7.1](#1371-密钥分发auth_enabledtrue-时)。

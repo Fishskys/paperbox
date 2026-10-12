@@ -841,6 +841,8 @@ class ApiKey(TimestampMixin, Base):
     ``source='env'`` rows are the bootstrap admins derived from
     ``PAPER_API_KEY``/``PAPER_API_KEYS``: they are re-synced from the environment
     on every startup and cannot be revoked while the environment references them.
+    Withdrawing a key **deletes** the row (no ``revoked_at`` tombstone): a retired
+    row would only squat on the prefix, and the real lifecycle is re-issuing.
     """
 
     __tablename__ = "api_keys"
@@ -861,7 +863,6 @@ class ApiKey(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     source: Mapped[str] = mapped_column(String(8), nullable=False)
     note: Mapped[str | None] = mapped_column(String(255))
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<ApiKey prefix={self.prefix} role={self.role} source={self.source}>"

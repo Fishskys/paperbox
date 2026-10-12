@@ -124,11 +124,10 @@ def cmd_list(_args: argparse.Namespace) -> int:
     if not rows:
         print("no keys (the environment bootstrap may add some at startup)")
         return 0
-    print(f"{'prefix':<24} {'role':<8} {'source':<6} {'status':<9} note")
+    print(f"{'prefix':<24} {'role':<8} {'source':<6} note")
     for row in rows:
-        status = "revoked" if row.revoked_at is not None else "active"
         note = f" — {row.note}" if row.note else ""
-        print(f"{row.prefix:<24} {row.role:<8} {row.source:<6} {status:<9}{note}")
+        print(f"{row.prefix:<24} {row.role:<8} {row.source:<6}{note}")
     print("\n(hash-only storage: the full keys are not recoverable, by design)")
     return 0
 
@@ -136,8 +135,8 @@ def cmd_list(_args: argparse.Namespace) -> int:
 def cmd_revoke(args: argparse.Namespace) -> int:
     if not args.yes:
         print(
-            f"refused: revoking {args.prefix!r} immediately locks out whoever "
-            "holds it — pass --yes to confirm",
+            f"refused: revoking {args.prefix!r} deletes the key and immediately "
+            "locks out whoever holds it — pass --yes to confirm",
             file=sys.stderr,
         )
         return 1
@@ -150,7 +149,10 @@ def cmd_revoke(args: argparse.Namespace) -> int:
         return 1
     finally:
         session.close()
-    print(f"revoked: {row.prefix} — it stops authenticating immediately")
+    print(
+        f"deleted: {row.prefix} — it stops authenticating immediately; "
+        f"re-issue with create --prefix {row.prefix}"
+    )
     return 0
 
 
@@ -185,7 +187,7 @@ def main() -> int:
 
     sub.add_parser("list", help="list keys (no key material)")
 
-    revoke = sub.add_parser("revoke", help="revoke a key by prefix")
+    revoke = sub.add_parser("revoke", help="delete a key by prefix")
     revoke.add_argument("prefix", help="prefix of the key to revoke")
     revoke.add_argument("--yes", action="store_true", help="confirm the revocation")
 

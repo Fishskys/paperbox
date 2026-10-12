@@ -150,18 +150,55 @@ def test_the_prefix_is_unique(session_factory) -> None:
         session.close()
 
 
-def test_revocation_takes_effect_on_the_next_lookup(session_factory) -> None:
+def test_revoking_deletes_the_row(session_factory) -> None:
+    """Revoking is a hard delete: the row does not linger to squat on the prefix."""
     session = session_factory()
     try:
         _, full_key = keys.create_key(session, prefix="tmp", role="write")
         session.commit()
         assert keys.authenticate(session, full_key) is not None
-        row = keys.revoke_key(session, "tmp")
-        assert row.revoked_at is not None
+
+        keys.revoke_key(session, "tmp")
+        session.commit()
         assert keys.authenticate(session, full_key) is None
+        assert keys.get_by_prefix(session, "tmp") is None
+        assert keys.list_keys(session) == []
+        # the prefix is free again, so re-issuing needs no hand-written SQL
+        keys.create_key(session, prefix="tmp", role="read")
+        session.commit()
+        assert keys.get_by_prefix(session, "tmp").role == "read"
+
         # idempotence is not promised for unknown prefixes
         with pytest.raises(keys.KeyManagementError):
             keys.revoke_key(session, "missing")
+    finally:
+        session.close()
+
+
+def test_replacing_a_prefix_keeps_one_row_and_kills_the_old_secret(session_factory) -> None:
+    session = session_factory()
+    try:
+        _, first = keys.create_key(session, prefix="rotate", role="read")
+        session.commit()
+        row, second = keys.replace_key(session, prefix="rotate", role="admin", note="rotated")
+        session.commit()
+        assert row.note == "rotated"
+        assert keys.authenticate(session, second).role == keys.ROLE_ADMIN
+        assert keys.authenticate(session, first) is None
+        assert [r.prefix for r in keys.list_keys(session)] == ["rotate"]
+    finally:
+        session.close()
+
+
+def test_replacing_an_environment_row_is_refused(monkeypatch, session_factory) -> None:
+    monkeypatch.setattr(settings, "paper_api_key", "env-secret")
+    session = session_factory()
+    try:
+        keys.sync_env_bootstrap(session)
+        session.commit()
+        with pytest.raises(keys.KeyManagementError):
+            keys.replace_key(session, prefix="default", role="read")
+        assert keys.authenticate(session, "env-secret") is not None
     finally:
         session.close()
 
@@ -218,19 +255,22 @@ def test_bootstrap_upserts_admins_and_prunes_stale_rows(monkeypatch, session_fac
         session.close()
 
 
-def test_live_key_count_ignores_revoked_rows(monkeypatch, session_factory) -> None:
+def test_the_key_count_tracks_created_and_deleted_keys(
+    monkeypatch, session_factory
+) -> None:
+    """Every row is a usable key: revoking deletes, so there is nothing to exclude."""
     monkeypatch.setattr(settings, "paper_api_key", "")
     monkeypatch.setattr(settings, "paper_api_keys", "")
     session = session_factory()
     try:
-        assert keys.live_key_count(session) == 0
+        assert keys.key_count(session) == 0
         _, first = keys.create_key(session, prefix="aaa", role="read")
         keys.create_key(session, prefix="bbb", role="read")
         session.commit()
-        assert keys.live_key_count(session) == 2
+        assert keys.key_count(session) == 2
         keys.revoke_key(session, "aaa")
         session.commit()
-        assert keys.live_key_count(session) == 1
+        assert keys.key_count(session) == 1
         assert keys.authenticate(session, first) is None
     finally:
         session.close()
