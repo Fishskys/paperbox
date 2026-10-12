@@ -98,6 +98,15 @@ def mcp_rpc(
     )
 
 
+def tool_names(response: httpx.Response) -> set[str]:
+    """Names in a ``tools/list`` response (empty when the call did not answer)."""
+    try:
+        tools = response.json()["result"]["tools"]
+    except Exception:  # noqa: BLE001 - a failed call carries no tool list
+        return set()
+    return {str(tool.get("name")) for tool in tools}
+
+
 def one_live_paper_id() -> str | None:
     session = SessionLocal()
     try:
@@ -117,26 +126,30 @@ def run() -> None:
         check(response.status_code == 200, "/health answers without a credential")
 
         # ---- detect the server's auth state ---- #
-        probe = client.get(f"{BASE}/api/papers")
-        auth_on = probe.status_code in (401, 403)
+        # Probe a GATED endpoint: since 2026-10-12 reads answer 200 with or without
+        # AUTH_ENABLED, so ``GET /api/papers`` no longer reveals the state. This is a
+        # job that does not exist, so the second branch (auth off) is a harmless 404.
+        probe = client.post(f"{BASE}/api/jobs/{uuid.uuid4()}/retry")
+        auth_on = probe.status_code == 401
         check(
-            probe.status_code in (200, 401, 403),
+            probe.status_code in (401, 404),
             "auth state detected",
-            f"GET /api/papers without key -> {probe.status_code} "
+            f"POST /api/jobs/<uuid>/retry without key -> {probe.status_code} "
             f"(AUTH_ENABLED={'true' if auth_on else 'false'})",
         )
 
         material: dict[str, str] = {}
         if auth_on:
-            # ---- 401 / 403 semantics ---- #
-            missing = client.get(f"{BASE}/api/papers")
+            # ---- 401 / 403 semantics (on a gated endpoint) ---- #
+            missing = client.post(f"{BASE}/api/jobs/{uuid.uuid4()}/retry")
             check(
                 missing.status_code == 401
                 and "www-authenticate" in missing.headers,
                 "missing credential is a 401 with a Bearer challenge",
             )
-            unknown = client.get(
-                f"{BASE}/api/papers", headers={"Authorization": "Bearer not-a-key"}
+            unknown = client.post(
+                f"{BASE}/api/jobs/{uuid.uuid4()}/retry",
+                headers={"Authorization": "Bearer not-a-key"},
             )
             check(unknown.status_code == 403, "unknown credential is a 403")
 
@@ -146,11 +159,21 @@ def run() -> None:
                 "write": make_key("write", "aaccwrite", "acceptance-write"),
                 "admin": make_key("admin", "aaccadmin", "acceptance-admin"),
             }
-            listed = client.get(
+            # The read tier gates nothing any more (reads are public): the only thing
+            # a read key still buys is "recognised as a caller, allowed to do nothing".
+            # Assert exactly that, rather than a read that would pass without any key.
+            read_listed = client.get(
                 f"{BASE}/api/papers",
                 headers={"Authorization": f"Bearer {material['read']}"},
             )
-            check(listed.status_code == 200, "read key lists papers (200)")
+            read_gated = client.post(
+                f"{BASE}/api/jobs/{uuid.uuid4()}/retry",
+                headers={"Authorization": f"Bearer {material['read']}"},
+            )
+            check(
+                read_listed.status_code == 200 and read_gated.status_code == 403,
+                "read key reads (like everyone) but cannot touch a gated endpoint (403)",
+            )
 
             random_id = str(uuid.uuid4())
             forbidden = client.delete(
@@ -186,8 +209,10 @@ def run() -> None:
                 session.commit()
             finally:
                 session.close()
-            revoked = client.get(
-                f"{BASE}/api/papers",
+            # A revoked key is an unknown credential: observable only where a
+            # credential is read at all (a gated endpoint), never on a public read.
+            revoked = client.post(
+                f"{BASE}/api/jobs/{uuid.uuid4()}/retry",
                 headers={"Authorization": f"Bearer {material['read']}"},
             )
             check(revoked.status_code == 403, "revoked key stops authenticating")
@@ -203,9 +228,8 @@ def run() -> None:
             )
 
         # ---- MCP surface (only when mounted) ---- #
-        # Probe WITH a credential first: with auth on, the middleware 401s any
-        # /mcp path even when the endpoint is not mounted, so the no-key probe
-        # cannot distinguish "closed" from "absent".
+        # Probe WITH a credential first: /mcp is a mount, so a missing endpoint looks
+        # like a 404 either way and the anonymous probe alone cannot tell it apart.
         init_params = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "acceptance", "version": "0"}}
         if auth_on and material.get("admin"):
             handshake = mcp_rpc(client, "initialize", init_params, material["admin"])
@@ -214,11 +238,32 @@ def run() -> None:
             else:
                 check(handshake.status_code == 200, "/mcp accepts a database key (G4)",
                       f"status={handshake.status_code}")
+                # Since 2026-10-12 the transport never refuses: reads are open, and
+                # what an anonymous caller may do is decided per tool. So the anonymous
+                # probe asserts the contract that actually holds -- handshake + read
+                # work, and a registered write tool refuses with FORBIDDEN.
                 anonymous = mcp_rpc(client, "initialize", init_params, None)
                 check(
-                    anonymous.status_code == 401,
-                    "/mcp without a credential is a 401 (AUTH_ENABLED=true)",
+                    anonymous.status_code == 200,
+                    "/mcp handshake answers anonymously (reads are public)",
+                    f"status={anonymous.status_code}",
                 )
+                listing = mcp_rpc(client, "tools/list", {}, None)
+                names = tool_names(listing)
+                if "paper_reindex" in names:
+                    refusal = mcp_rpc(
+                        client,
+                        "tools/call",
+                        {"name": "paper_reindex", "arguments": {"paper_id": str(uuid.uuid4())}},
+                        None,
+                    )
+                    check(
+                        "FORBIDDEN" in refusal.text,
+                        "an anonymous write tool call is a FORBIDDEN",
+                        refusal.text[:80],
+                    )
+                else:
+                    print("[SKIP] anonymous write tool: write tools are not registered")
         else:
             anonymous = mcp_rpc(client, "initialize", init_params, None)
             if anonymous.status_code == 404:
