@@ -316,6 +316,23 @@ class KeyManagementError(ValueError):
     """A create/revoke request the store refuses (bad input or constraint)."""
 
 
+class KeyPrefixTaken(KeyManagementError):
+    """The prefix already belongs to a key; ``existing`` is that row.
+
+    A separate type so a caller can *offer* to replace it: a key is identified by
+    its prefix alone, so re-issuing a key necessarily reuses the prefix, and that
+    is a decision for the operator rather than an error to report.
+    """
+
+    def __init__(self, existing: ApiKey) -> None:
+        self.existing = existing
+        super().__init__(
+            f"prefix {existing.prefix!r} already belongs to a key "
+            f"(role={existing.role}, source={existing.source}, "
+            f"created {existing.created_at:%Y-%m-%d})"
+        )
+
+
 def create_key(
     session: Session,
     *,
@@ -337,6 +354,11 @@ def create_key(
         )
     if role not in ROLES:
         raise KeyManagementError(f"role must be one of {sorted(ROLES)}")
+    existing = get_by_prefix(session, prefix)
+    if existing is not None:
+        # Checked up front (rather than letting the constraint fire) so the caller
+        # learns *which* key holds the prefix and when it was created.
+        raise KeyPrefixTaken(existing)
     full_key = generate_full_key(prefix)
     row = ApiKey(
         id=new_uuid(),
@@ -357,8 +379,39 @@ def create_key(
             session.add(row)
             session.flush()
     except IntegrityError as exc:
+        # Reached only on a genuine race (two creates at once) or a hash collision.
         raise KeyManagementError("a key with this prefix already exists") from exc
     return row, full_key
+
+
+def replace_key(
+    session: Session,
+    *,
+    prefix: str,
+    role: str,
+    note: str | None = None,
+) -> tuple[ApiKey, str]:
+    """Issue a new key under ``prefix``, deleting the row it replaces.
+
+    Deletion and insertion happen in the caller's transaction, so the prefix never
+    has two owners and no unheld row is left behind. Whoever holds the old secret
+    is locked out the moment this commits — there is no grace period, because a
+    "replaced" key that still authenticates is exactly the state an operator
+    rotates away from.
+
+    Environment bootstrap rows refuse: the environment is their source of truth,
+    so deleting one would be undone on the next restart.
+    """
+    existing = get_by_prefix(session, prefix)
+    if existing is not None:
+        if existing.source == "env":
+            raise KeyManagementError(
+                f"key {prefix!r} comes from the environment and cannot be replaced "
+                "here; remove it from PAPER_API_KEY / PAPER_API_KEYS and restart"
+            )
+        session.delete(existing)
+        session.flush()
+    return create_key(session, prefix=prefix, role=role, note=note)
 
 
 def get_by_prefix(session: Session, prefix: str) -> ApiKey | None:
@@ -410,6 +463,7 @@ __all__ = [
     "ApiKey",
     "AuthIdentity",
     "KeyManagementError",
+    "KeyPrefixTaken",
     "SHARED_AGENT",
     "anonymous",
     "anonymous_reader",
@@ -422,6 +476,7 @@ __all__ = [
     "hash_key",
     "list_keys",
     "live_key_count",
+    "replace_key",
     "revoke_key",
     "role_at_least",
     "startup_bootstrap",

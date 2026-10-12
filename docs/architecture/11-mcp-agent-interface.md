@@ -169,6 +169,9 @@ uv run python scripts/manage_keys.py create --prefix hermes --role write
 # 完整密钥 pb_<prefix>_<32hex> 只打印这一次；库里只存 sha256
 ```
 
+重发就是把同一个 `prefix` 再 `create` 一次：CLI 先展示库里那一行并询问，确认后在同一事务里删除旧行、签发新钥匙
+（旧密钥立即失效）——见 `UserManual.md` [#1.3.7.1](../../UserManual.md#1371-密钥分发auth_enabledtrue-时)。
+
 **环境引导**（启动时 upsert 成 admin 行，不可经脚本吊销——从 `.env` 移除并重启）：
 
 ```

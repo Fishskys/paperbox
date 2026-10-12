@@ -15,6 +15,11 @@ the MCP surface (``AUTH_ENABLED=true``). Rows derived from the environment
 ``source=env`` and refuse ``revoke``/replacement: remove them from the env file and
 restart instead.
 
+Re-issuing is reusing the prefix: ``create`` on a prefix that is already taken
+prints what is there and asks before replacing it (deleting that row and issuing a
+new key), so log attribution survives a rotation. ``--yes`` answers the question up
+front; without a terminal to ask, the command refuses rather than guessing.
+
 Exit codes: 0 success, 1 refused (bad input, clash, unknown prefix),
 2 the database is unreachable.
 """
@@ -34,15 +39,64 @@ from app.db.session import SessionLocal  # noqa: E402
 from app.services import api_key_service as keys  # noqa: E402
 
 
+def _confirm_replacement(existing, *, assume_yes: bool) -> bool:
+    """Describe the key in the way, then ask. ``False`` means "do not touch it".
+
+    Returns ``False`` when there is nobody to ask (no terminal) and ``--yes`` was
+    not given: the command is about to invalidate a credential somebody may be
+    holding, so the safe answer has to be the default one.
+    """
+    print(f"prefix {existing.prefix!r} is already taken:", file=sys.stderr)
+    print(
+        f"  role={existing.role} source={existing.source} "
+        f"created={existing.created_at:%Y-%m-%d %H:%M}"
+        + (f" note={existing.note!r}" if existing.note else ""),
+        file=sys.stderr,
+    )
+    if existing.source == "env":
+        print(
+            "  it comes from the environment: remove it from PAPER_API_KEY / "
+            "PAPER_API_KEYS and restart instead",
+            file=sys.stderr,
+        )
+        return False
+    print(
+        "  replacing it deletes that row and issues a new key — whoever holds the "
+        "old secret is locked out immediately",
+        file=sys.stderr,
+    )
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        print(
+            "  stdin is not a terminal: re-run with --yes to replace it without asking",
+            file=sys.stderr,
+        )
+        return False
+    answer = input(f"replace {existing.prefix!r} and issue a new key? [y/N] ").strip().lower()
+    return answer in {"y", "yes"}
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     session = SessionLocal()
     try:
-        row, full_key = keys.create_key(
-            session,
-            prefix=args.prefix,
-            role=args.role,
-            note=args.note,
-        )
+        try:
+            row, full_key = keys.create_key(
+                session,
+                prefix=args.prefix,
+                role=args.role,
+                note=args.note,
+            )
+        except keys.KeyPrefixTaken as taken:
+            if not _confirm_replacement(taken.existing, assume_yes=args.yes):
+                print("refused: nothing was changed", file=sys.stderr)
+                return 1
+            row, full_key = keys.replace_key(
+                session,
+                prefix=args.prefix,
+                role=args.role,
+                note=args.note,
+            )
         session.commit()
     except keys.KeyManagementError as exc:
         print(f"refused: {exc}", file=sys.stderr)
@@ -120,6 +174,14 @@ def main() -> int:
         help="permission tier: read < write < admin",
     )
     create.add_argument("--note", help="what this key is for")
+    create.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "replace an existing key with the same prefix without asking "
+            "(deletes the old row; required when stdin is not a terminal)"
+        ),
+    )
 
     sub.add_parser("list", help="list keys (no key material)")
 
