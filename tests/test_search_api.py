@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.security import require_api_key
 from app.db.session import get_db
 from app.main import app
 from app.search import hybrid
@@ -37,7 +36,6 @@ def client(factory):  # noqa: F811 - fixture comes from the import above
             session.close()
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[require_api_key] = lambda: "test-key"
     try:
         yield TestClient(app)
     finally:

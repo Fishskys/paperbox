@@ -25,29 +25,29 @@
 
 ### 2.1 路由总表（29 条，包含不在 schema 的 `GET /`；另有 `/mcp` 挂载，见 第 2.5 节）
 
-`Bearer` 列：`是` = 该 router 构造时带 `dependencies=[Depends(require_api_key)]`。
+`Bearer` 列：`是` = 该端点挂了档位依赖（写端点 `require_write`、删除 `require_admin`），缺凭证 401 / 凭证不匹配 403 / 档位不足 403；`免` = **不挂任何依赖，凭证根本不参与判定**，所以缺凭证与无效凭证都照答 200。读端点自 2026-10-12 起全部免鉴权（决定与代价见 [#2.2](#22-鉴权实现)）。
 
 | 方法 | 路径 | 作用 | Bearer | 关键查询参数 | 出处 |
 |---|---|---|---|---|---|
 | GET | `/health` | 五个依赖的轻量探针（含解析后端 docling，未配置时该项为 `disabled`） | 免 | — | `app/api/health.py` |
-| GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | 是 | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
+| GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | 免 | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
 | GET | `/` | landing（`include_in_schema=False`） | 免 | — | `app/main.py` 的 `lifespan()` |
 | POST | `/api/papers/ingest` | URL 摄取 | 是 | — | `app/api/ingestion.py` |
 | POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | 是 | — | `app/api/ingestion.py` |
 | POST | `/api/papers/ingest/dir` | 服务端目录导入（零传输） | 是 | — | `app/api/ingestion.py` 的 `ingest_files()` |
 | POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | 是 | — | `app/api/ingestion.py` 的 `ingest_dir()` |
 | POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | 是 | — | `app/api/ingestion.py` 的 `ingest_file()` |
-| GET | `/api/jobs/queue` | 队列深度快照 | 是 | — | `app/api/jobs.py` |
-| GET | `/api/jobs/{job_id}` | 单作业阶段/进度 | 是 | — | `app/api/jobs.py` |
+| GET | `/api/jobs/queue` | 队列深度快照 | 免 | — | `app/api/jobs.py` |
+| GET | `/api/jobs/{job_id}` | 单作业阶段/进度 | 免 | — | `app/api/jobs.py` |
 | POST | `/api/jobs/{job_id}/retry` | 重驱动 FAILED 作业（202） | 是 | — | `app/api/jobs.py` |
-| GET | `/api/jobs` | 最近作业列表 | 是 | `limit`（默认 20，无上下界） | `app/api/jobs.py` |
-| GET | `/api/papers` | 论文列表 | 是 | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py` |
-| GET | `/api/papers/{paper_id}` | 单篇元数据 | 是 | — | `app/api/papers.py` 的 `list_papers()` |
-| GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | 是 | — | `app/api/papers.py` 的 `get_paper()` |
+| GET | `/api/jobs` | 最近作业列表 | 免 | `limit`（默认 20，无上下界） | `app/api/jobs.py` |
+| GET | `/api/papers` | 论文列表 | 免 | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py` |
+| GET | `/api/papers/{paper_id}` | 单篇元数据 | 免 | — | `app/api/papers.py` 的 `list_papers()` |
+| GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | 免 | — | `app/api/papers.py` 的 `get_paper()` |
 | GET | `/api/downloads/{paper_id}` | **签名**短链下载（MCP `paper_get_file` 用；**免 Bearer**，签名即凭据，`exp`/`sig` 过期或被改 → 403） | 免 | `exp`、`sig` | `app/api/downloads.py` |
-| GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | 是 | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
-| GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | 是 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
-| GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 是 | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
+| GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | 免 | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
+| GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | 免 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
+| GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 免 | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
 | PATCH | `/api/papers/{paper_id}/metadata` | 手动改元数据 | 是 | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张（裁决「采纳被拒值」） | 是 | — | `app/api/papers.py` 的 `delete_paper()` |
 | POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把该分歧标为已裁决 | 是 | — | `app/api/papers.py` 的 `delete_paper()` |
@@ -58,15 +58,16 @@
 | GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | 是 | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | 是 | — | `app/api/metadata.py` |
 | POST | `/api/metadata/apply` | 按报告批量应用人工决定 | 是 | — | `app/api/metadata.py` |
-| POST | `/api/search` | 论文级混合检索 | 是 | — | `app/api/search.py` 的 `search()` |
-| GET | `/api/search-logs` | 检索日志（只读） | 是 | `limit`、`since`、`mode` | `app/api/search_logs.py` |
+| POST | `/api/search` | 论文级混合检索 | 免 | — | `app/api/search.py` 的 `search()` |
+| GET | `/api/search-logs` | 检索日志（只读） | 免 | `limit`、`since`、`mode` | `app/api/search_logs.py` |
 
 `/docs`、`/redoc`、`/openapi.json` 由 FastAPI 默认挂载（`app/main.py` 的 `lifespan()` 未加保护），匿名可读。`POST /api/search` 不注入 DB session（`app/api/search.py` 的 `search()` 只收 body），日志另开 session：`app/services/search_pipeline.py` 的 `log_search()`。
 
 ### 2.2 鉴权实现
 
-**总开关 `AUTH_ENABLED`（默认 `false`，全开全关）**：关 = 每个 `/api/*` 调用方拿到匿名 admin 身份
-（日志记 `key=anonymous`），不查库；开 = 下表的档位强制生效。`/mcp` 同受该开关（见
+**总开关 `AUTH_ENABLED`（默认 `false`）**：关 = 每个 `/api/*` 调用方拿到匿名 admin 身份
+（日志记 `key=anonymous`），不查库；开 = **写端点与删除**的档位强制生效，读端点仍然免鉴权
+（2026-10-12 的决定：不改库的请求放开；它**取代**了 2026-10-05 计划第 3 节 D2 的「全有或全无」）。`/mcp` 同受该开关（见
 `11-mcp-agent-interface.md` [#4](11-mcp-agent-interface.md#4-鉴权身份与审计)）。
 
 | 环节 | 实现 | 出处 |
@@ -76,11 +77,12 @@
 | 有 `Authorization` 但 scheme 非 Bearer | 直接返回 `None`，**不回退** `X-API-Key` | 同上 |
 | 解析（每请求一次） | `AuthContextMiddleware`（main.py）解析 Bearer → `api_key_service.authenticate(session, token)`，把身份放 `scope["state"]` 并把前缀绑进日志上下文（**纯 ASGI**；不在依赖里做，因为线程池依赖里绑 contextvar 传播不回日志上下文） | `app/main.py`、`app/services/api_key_service.py` |
 | 凭证存储 | `api_keys` 表只存 `sha256(完整密钥)`；`name`/`prefix`/`key_hash` 各唯一；三档 `read < write < admin`；env 引导行（`PAPER_API_KEY`/`PAPER_API_KEYS`）启动时 upsert 成 admin、优先于库行（恢复路径） | `app/db/models.py::ApiKey`、`app/services/api_key_service.py` |
-| 档位强制 | `require_role(min)` 工厂；router 级 `require_api_key`(=read)/`require_write`/`require_admin` 单例，端点级叠加（缺凭证 401、不匹配 403、档位不足 403 `insufficient role`） | `app/core/security.py` |
-| 依赖挂载 | ingestion 整个 router `require_write`；jobs/metadata/papers router 级 read + 写/admin 端点级叠加；search/search_logs/consistency 级 read | 各 `app/api/*.py` |
-| 豁免 | `health.py` 无 dependencies；`GET /`、`/docs` 等框架端点无保护；`GET /api/downloads/{paper_id}` 只认 HMAC 签名 | 同上、`app/api/downloads.py` |
+| 档位强制 | `require_role(min)` 工厂；写端点用 `require_write`（=write）、删除用 `require_admin`（=admin），**端点级**挂载（缺凭证 401、不匹配 403、档位不足 403 `insufficient role`）。**没有 read 档单例**：读端点不挂依赖，凭证根本不被读取（2026-10-12） | `app/core/security.py` |
+| 依赖挂载 | ingestion 整个 router `require_write`；jobs/metadata/papers 是混档 router，**只在写/admin 端点**挂依赖，读端点不挂；search / search_logs / consistency / downloads / health 整个 router 无依赖 | 各 `app/api/*.py` |
+| 公开读 | 13 个读端点（[#2.1](#21-端点总表) 里 `Bearer=免` 的业务行）+ `GET /health`；router 构造时不带 dependencies，端点函数也不带 | 同上 |
+| 豁免（凭证是别的东西） | `GET /api/downloads/{paper_id}` 只认 URL 里的 HMAC 签名，**既不看 Bearer 也不看档位** | `app/api/downloads.py` |
 
-测试用 `app.dependency_overrides[require_api_key]`/`[require_write]` 绕过对应档位（如 `tests/test_ingest_files.py` 的 `client()`）。
+测试用 `app.dependency_overrides[require_write]` 绕过写档（如 `tests/test_ingest_files.py` 的 `client()`）；读端点没有依赖可绕，契约由 `tests/test_public_reads.py`（30 个路由逐条钉住谁有门谁没有）与 `tests/test_auth_rest.py`（401/403 语义与「无效凭证打读端点仍是 200」）覆盖。
 端点→档位全表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)；启动护栏（拒 `change-me`、拒零密钥、auth-off + 非回环 WARNING）见 `app/main.py::lifespan` 与 `app/core/config.py` 的 `_check_auth`。
 
 ### 2.3 错误处理
@@ -147,7 +149,7 @@
 | 传输 | Streamable HTTP，`streamable_http_path="/"` + `stateless_http=True`（无会话状态，两个调用之间不依赖会话） |
 | `Host` 白名单 | 显式 `TransportSecuritySettings(allowed_hosts=…)`（**不依赖 SDK 默认**，SDK 默认只认 `127.0.0.1`/`localhost`）；白名单外一律 **421**；`MCP_ALLOWED_HOSTS` 为空且 `MCP_ENABLED=true` → **启动即报错** |
 | 路径规范化 | `McpMountPathMiddleware` 在服务端内部把 `/mcp` 改写成 `/mcp/`（Starlette 的 `Mount` 正则要求尾斜杠）；**不带尾斜杠也必须一次命中**，不能回 307 |
-| 鉴权 | 自写静态 Bearer（**不用** SDK 的 `AuthSettings`——那是 OAuth 形态）：`McpAuthMiddleware` 置于**最外层**（先鉴权再谈 Host），缺凭据 401 / 不匹配 403；**不支持 `?key=`**；命中后把 agent 名放进 ContextVar 供审计 |
+| 鉴权 | 自写静态 Bearer（**不用** SDK 的 `AuthSettings`——那是 OAuth 形态）：`McpAuthMiddleware` 置于**最外层**，只解析身份、**不拒绝任何请求**（2026-10-12：读工具免凭证，写工具的档位检查在工具层 —— 传输层看不到工具名，401/403 没有位置可放）；**不支持 `?key=`**；命中后把 agent 名放进 ContextVar 供审计（无凭证时是 `anonymous`） |
 `POST /api/papers/reindex` 的选择逻辑与 **`scripts/reindex.py` 共用**
 （`app/services/reindex_service.py`：同一份 SQL、同一套检测），差别只在执行 —— 脚本在本进程同步跑
 （可 Ctrl-C、可 `--dry-run`），端点按论文**入队**后立即返回（单篇 30–370 秒，整库是小时级操作，不能挂在一次 HTTP 请求上）。请求体：`dry_run`（默认 **true**）、`include_all`（全库）、`paper_ids`（指名）、`reasons`（只按某个检测理由）。响应里 `reasons` 说明为什么、`skipped_reasons` 说明"检测到但本次没采纳"，`skipped` 逐条列出跳过原因（例如没有原始文件）。
@@ -178,7 +180,7 @@
 
 | 约定 | 代码是否遵守 | 证据 |
 |---|---|---|
-| `/api/*` 除 `/health` 外都要 Bearer | 遵守 | [#2.2](#22-鉴权实现)；[MVP-SPEC.md](MVP-SPEC.md) |
+| `/api/*` 除 `/health` 外都要 Bearer | **已改**：读端点免鉴权、写端点要 `write`、删除要 `admin`（2026-10-12） | [#2.2](#22-鉴权实现)；[MVP-SPEC.md](MVP-SPEC.md) |
 | 配置统一走 `app/core/config.py`，禁止硬编码 | 基本遵守；唯一硬编码是 429 的 `Retry-After: 2`（非配置键） | `app/services/upload_admission.py` 的 `RETRY_AFTER_SECONDS` |
 | `paper_id` 为 UUID 字符串 | 遵守（schema 层是 `str`，未做 UUID 格式校验） | `app/schemas/paper.py` |
 | 错误体统一 `{"detail": "…"}` | 手写 `HTTPException` 处遵守；框架请求体校验失败时 `detail` 是**列表** | [MVP-SPEC.md](MVP-SPEC.md)；代码未注册处理器（[#2.3](#23-错误处理)） |
@@ -222,7 +224,7 @@
 12. **无 CORS 中间件**：全仓 grep `CORS` 0 命中，浏览器跨源调用会失败；Hermes/脚本这类非浏览器客户端不受影响。
 13. **`/mcp` 不能有重定向**：客户端（如 Hermes）在 307 后**不会重放 `Authorization`**，所以 `/mcp` 必须在服务端内部补斜杠一次命中；断言这件事必须 `follow_redirects=False`，否则 TestClient 会自动跟随、测试等于没测。
 14. **MCP 写工具"关 = 不注册"**：`MCP_WRITE_ENABLED` 与三个 `MCP_ALLOW_*` 决定工具是否注册，不是运行时才拒绝；想确认当下能力请看 `tools/list`，不要看文档。
-15. **`/api/downloads/{paper_id}` 是唯一免 Bearer 的业务端点**：凭证是 URL 里的 HMAC 签名（覆盖 `paper_id:exp`），TTL 10–3600 s；它不是"公开下载"，泄露链接就等于限时授权。
+15. **`/api/downloads/{paper_id}` 是唯一"凭证不是 Bearer"的端点**（读端点免鉴权是另一回事）：凭证是 URL 里的 HMAC 签名（覆盖 `paper_id:exp`），TTL 10–3600 s；它不是"公开下载"，泄露链接就等于限时授权。
 
 ## 6. 配置项（键 → 默认值 → 作用 → 出处）
 
@@ -270,7 +272,7 @@
 | `tests/test_job_retry.py` | 重试的原子认领与路由（服务层） | `README.md`（已精简） |
 | `tests/test_search_log.py` | 检索日志行序列化与写入降级（服务层） | `README.md`（已精简） |
 
-未覆盖（本模块视角）：`security.py` 的 401/403 分支（tests/ 内 grep `api_key_matches|extract_api_key|verify_api_key` 0 命中，所有 API 测试用 `dependency_overrides` 绕过）、`GET /health`、`GET /api/search-logs` 路由、`GET /api/jobs/queue` 路由、`GET /api/jobs` 路由、`main.py` 的 lifespan 与 `request_id_middleware`（`TestClient` 只出现在 5 个文件：`test_ingest_files/file`、`test_ingest_dir`、`test_ingest_compressed`、`test_metadata_api`、`test_manual_metadata`）。
+未覆盖（本模块视角）：`security.py` 的 `require_role` 内部分支细节（`extract_api_key` 的 Bearer/`X-API-Key` 回退有 `tests/test_auth_rest.py` 覆盖，Authorization 头存在但 scheme 非 Bearer 就不回退这一条仍无单测）、`GET /health`、`GET /api/search-logs` 路由、`GET /api/jobs/queue` 路由、`GET /api/jobs` 路由、`main.py` 的 lifespan 与 `request_id_middleware`（`TestClient` 只出现在 5 个文件：`test_ingest_files/file`、`test_ingest_dir`、`test_ingest_compressed`、`test_metadata_api`、`test_manual_metadata`）。
 
 ## 8. 未做 / 已知缺口
 
@@ -286,4 +288,4 @@
 10. **MCP 无速率限制**：审计能看见谁调了多少，但没有任何 per-key 限流（"限流未做"是明确记录在案的缺口）。
 11. **MCP 只在 Hermes 与 codex 上做过真机验收**：Claude Code（本机未安装）与自研 harness 的片段**未验证**；SSRF 闸残留 DNS rebinding 风险（解析与连接之间的竞态，已在 `net_guard.py` 明文标注）。
 9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` [#2](MVP-SPEC.md#2-api-一览实测-openapijson)未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` 第 3.4 节 的导入示例含无效的 `-F source_type=…`（README 已精简，原 第 3.4 节 示例移除）且响应示例字段名写作 `total_records`（同上），代码实际返回 `total`（`app/schemas/metadata.py`、`app/services/metadata_import.py`）；[MVP-SPEC.md](MVP-SPEC.md) 提示该文件部分表述已过期。
-10. **鉴权零单测**：401/403 与 `X-API-Key` 回退路径均无测试；测试统一绕过依赖，因此「precondition 挂了但鉴权漏配」这类回归不会被发现。
+10. **鉴权测试覆盖不全**：路由表（谁有门谁没门）与 401/403 语义已由 `tests/test_public_reads.py`、`tests/test_auth_rest.py` 钉住；仍缺「`Authorization` 头存在但 scheme 非 Bearer 时**不回退** `X-API-Key`」与 `AuthContextMiddleware` 数据库探测失败路径的用例。

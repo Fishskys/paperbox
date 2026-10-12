@@ -1,16 +1,27 @@
 """Static bearer auth for ``/mcp``, and the agent identity it carries.
 
-The contract (``docs/architecture/11-mcp-agent-interface.md`` section 4) is small
-on purpose: one credential path -- ``Authorization: Bearer <key>`` -- resolved by
-:mod:`app.services.api_key_service`, the same source the REST dependency uses
-(MCP and HTTP share keys by construction). Missing credential is 401, a
-credential that matches nothing is 403, and a key in the query string is **not**
+The contract (``docs/architecture/11-mcp-agent-interface.md`` section 4) resolves
+one credential path -- ``Authorization: Bearer pb_<prefix>_<secret>`` -- through
+:mod:`app.services.api_key_service`, the same source the REST dependency uses (MCP
+and HTTP share keys by construction). A key in the query string is **not**
 supported at all (it would land in proxy logs and shell history).
 
-``AUTH_ENABLED`` is the all-on/all-off master switch (plan section 3 D1): off, this
-middleware never checks a credential and serves everyone as the anonymous admin
-identity; on, every call must present a key. ``MCP_ENABLED`` only decides
-whether ``/mcp`` exists.
+**Anonymous is a caller (decision of 2026-10-12).** The transport no longer
+refuses requests: it resolves whatever credential is present (an unknown one is
+logged and treated as absent) and publishes the identity, possibly ``None``. What
+an anonymous caller may *do* is decided per tool, where the tool name is finally
+known: the six read tools answer without a credential, and the four write tools
+require a key whose tier reaches ``write``/``admin`` (``tools_write.require_role``,
+which fails on ``None``). This mirrors REST, where reads carry no gate and writes
+do. The transport cannot make that distinction -- it never sees the tool name --
+so a write tool called anonymously fails as ``ToolFailure(FORBIDDEN)`` rather than
+as an HTTP 401/403.
+
+``AUTH_ENABLED`` remains the master switch (plan section 3 D1): off, this
+middleware resolves everyone to the anonymous **admin** identity (so the write
+tools' tier check passes and only the ``MCP_ALLOW_*`` switches remain); on, a
+credential is required for writes and optional for reads. ``MCP_ENABLED`` only
+decides whether ``/mcp`` exists.
 
 Why not the SDK's built-in ``AuthSettings`` / ``TokenVerifier``: that machinery
 models an OAuth resource server -- ``issuer_url`` and ``resource_server_url`` are
@@ -31,7 +42,6 @@ from __future__ import annotations
 from contextvars import ContextVar
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import settings
@@ -42,14 +52,14 @@ from app.services.api_key_service import AuthIdentity
 
 logger = get_logger(__name__)
 
-#: Path prefix owned by the MCP endpoint (everything under it is guarded).
+#: Path prefix owned by the MCP endpoint (its identity gets resolved per request).
 MCP_PATH = "/mcp"
-
-#: Sent with a 401 so an MCP client knows a bearer token is what it is missing.
-WWW_AUTHENTICATE = 'Bearer realm="paperbox"'
 
 #: Agent name used when the shared key authenticated the caller.
 SHARED_AGENT = api_key_service.SHARED_AGENT
+
+#: Agent name for a request that presented no usable credential (open reads).
+ANONYMOUS_NAME = api_key_service.ANONYMOUS_NAME
 
 #: Where the token came from (kept for the audit line and for tests).
 SOURCE_KEYS = api_key_service.SOURCE_KEYS
@@ -64,9 +74,13 @@ current_agent: ContextVar[AgentIdentity | None] = ContextVar("mcp_agent", defaul
 
 
 def agent_name() -> str:
-    """The caller's agent name (``default`` when there is no request context)."""
+    """The caller's agent name (``anonymous`` when no identity was resolved).
+
+    With the read tools open, "no identity" is a normal state, and the audit line
+    has to say so instead of implying a named agent called.
+    """
     identity = current_agent.get()
-    return identity.name if identity else SHARED_AGENT
+    return identity.name if identity else ANONYMOUS_NAME
 
 
 def current_identity() -> AgentIdentity | None:
@@ -118,43 +132,46 @@ def warn_about_shared_keys() -> list[str]:
     return clashes
 
 
-def authorize(request: Request) -> JSONResponse | None:
-    """Return a 401/403 response when the request may not talk to ``/mcp``.
+def resolve_identity(request: Request) -> AgentIdentity | None:
+    """Resolve the request's credential, or ``None`` when there is none to trust.
 
-    Ordering note: this runs **before** the transport sees the request, so an
-    unauthenticated caller gets 401 even when its ``Host`` is not on the allowlist --
-    a client that has not authenticated learns nothing about which host names the
-    server accepts. The 421 check still applies to authenticated requests (contract
-    section 2), and both cases are covered by tests.
+    Never refuses: a missing header and an unknown token both resolve to ``None``,
+    which is a legitimate caller here -- reads are open (decision of 2026-10-12).
+    An unknown token is worth a WARNING, because it usually means a rotated or
+    mistyped key that will start failing on the write tools.
 
-    ``AUTH_ENABLED=false`` never reaches here: the middleware assigns the
-    anonymous identity directly (plan section 3 D1 -- the switch is all-on/all-off).
+    The resolved identity lands in ``request.scope["state"]["mcp_agent"]`` so the
+    middleware can publish it; ``None`` leaves that key unset, which callers read
+    as "anonymous" (``auth.current_identity()``).
     """
     token = parse_bearer(request.headers.get("authorization"))
     if token is None:
-        return JSONResponse(
-            {"error": "missing or malformed Authorization header"},
-            status_code=401,
-            headers={"WWW-Authenticate": WWW_AUTHENTICATE},
-        )
+        return None
     session = SessionLocal()
     try:
         identity = api_key_service.authenticate(session, token)
     finally:
         session.close()
     if identity is None:
-        logger.warning("mcp auth refused: unknown bearer token")
-        return JSONResponse({"error": "invalid credentials"}, status_code=403)
+        logger.warning(
+            "mcp auth: unknown bearer token, treating the call as anonymous"
+        )
+        return None
     request.scope.setdefault("state", {})["mcp_agent"] = identity
-    return None
+    return identity
 
 
 class McpAuthMiddleware:
-    """ASGI middleware: authenticate ``/mcp`` and publish the agent identity.
+    """ASGI middleware: resolve the ``/mcp`` caller's identity and publish it.
 
     Written as raw ASGI rather than ``BaseHTTPMiddleware`` because the MCP endpoint
     streams responses (SSE for some methods) and a buffering middleware would break
     that; this one only inspects the request and then gets out of the way.
+
+    It does **not** reject anything: the tools decide (``tools_write.require_role``
+    for writes, nothing for reads). The transport never sees the tool name, so it is
+    the wrong layer for that decision -- a refusal here would have to gate the read
+    tools too.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -164,17 +181,13 @@ class McpAuthMiddleware:
         if scope["type"] != "http" or not str(scope.get("path", "")).startswith(MCP_PATH):
             await self.app(scope, receive, send)
             return
-        request = Request(scope, receive=receive)
         if settings.auth_enabled:
-            refusal = authorize(request)
-            if refusal is not None:
-                await refusal(scope, receive, send)
-                return
-            identity = request.scope.get("state", {}).get("mcp_agent")
+            identity = resolve_identity(Request(scope, receive=receive))
         else:
             identity = api_key_service.anonymous()
         reset = current_agent.set(identity)
-        bind_key_prefix(identity.prefix)
+        if identity is not None:
+            bind_key_prefix(identity.prefix)
         try:
             await self.app(scope, receive, send)
         finally:
@@ -183,17 +196,17 @@ class McpAuthMiddleware:
 
 __all__ = [
     "AgentIdentity",
+    "ANONYMOUS_NAME",
     "MCP_PATH",
     "McpAuthMiddleware",
     "SHARED_AGENT",
     "SOURCE_KEYS",
     "SOURCE_SHARED",
-    "WWW_AUTHENTICATE",
     "agent_name",
-    "authorize",
     "current_agent",
     "current_identity",
     "parse_bearer",
     "resolve_agent",
+    "resolve_identity",
     "warn_about_shared_keys",
 ]

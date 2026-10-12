@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.downloads import stream_original
 
 from app.core.logging import get_logger
-from app.core.security import require_admin, require_api_key, require_write
+from app.core.security import require_admin, require_write
 from app.db.session import get_db
 from app.schemas.paper import (
     ReindexIn,
@@ -48,10 +48,10 @@ from app.workers import queue as job_queue
 
 logger = get_logger(__name__)
 
+# 公开读：本 router 的读端点不挂凭证；写端点（reindex / metadata 改动）与 DELETE 各自带依赖。
 router = APIRouter(
     prefix="/api/papers",
     tags=["papers"],
-    dependencies=[Depends(require_api_key)],
 )
 
 NOT_FOUND = "paper not found"

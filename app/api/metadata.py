@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import get_logger
-from app.core.security import require_api_key, require_write
+from app.core.security import require_write
 from app.db.session import get_db
 from app.schemas.metadata import (
     ApplyIn,
@@ -38,10 +38,10 @@ from app.services import paper_service, provenance_service
 
 logger = get_logger(__name__)
 
+# 公开读：/review 不挂凭证；import / attach / apply 三个写端点仍要 write 档。
 router = APIRouter(
     prefix="/api/metadata",
     tags=["metadata"],
-    dependencies=[Depends(require_api_key)],
 )
 
 UNSUPPORTED_MEDIA = "send the records as multipart/form-data (file) or application/json"

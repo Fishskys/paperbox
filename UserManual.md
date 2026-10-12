@@ -184,7 +184,7 @@ uv run python scripts/healthcheck.py
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
-| `AUTH_ENABLED` | 鉴权总开关（**全开全关**） | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`）；`true` = `/api/*` 与 `/mcp` 都要求 Bearer key。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
+| `AUTH_ENABLED` | 鉴权总开关 | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`）；`true` = **写接口**（导入/重试/重建索引/元数据改动，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)）要 Bearer key，**读接口一律免鉴权**（2026-10-12 起）。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
 | `PAPER_API_KEY` | 引导管理员密钥（Bearer，agent 名 `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**（它同时是签名下载密钥的回落）；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
 | `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
@@ -195,9 +195,12 @@ uv run python scripts/healthcheck.py
 #### 1.3.7.1 密钥分发（`AUTH_ENABLED=true` 时）
 
 密钥表 `api_keys` 只存 `sha256(完整密钥)`，完整密钥只在创建时打印一次。三档权限单调序
-`read < write < admin`：read 可读全部接口；write 增加导入/重试/reindex/元数据写入；
-admin 再增加删除。MCP 工具同一套档位（`paper_delete` 需 admin，其余写工具需 write，且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束）。每条请求日志、检索日志
-（`search_queries.key_prefix`）与 MCP 审计行都记录密钥**前缀**（归因用，永不落完整密钥）。
+`read < write < admin`：**write** 可导入/重试/重建索引/改元数据，**admin** 再可删除。
+自 2026-10-12 起**读不再需要凭证**（REST 与 MCP 的读都开放），所以 `read` 档现在是一把
+"只能看、改不了任何东西"的钥匙 —— 保留它是为了将来做更细的 ACL，日常分发用 `write` 即可。
+MCP 写工具同一套档位（`paper_delete` 需 admin，其余写工具需 write，且仍受 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 服务端开关约束）。每条请求日志、检索日志
+（`search_queries.key_prefix`）与 MCP 审计行都记录密钥**前缀**（归因用，永不落完整密钥）；
+匿名请求记 `anonymous`（REST）或 `-`（MCP 审计行无前缀）。
 
 ```bash
 uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role write
@@ -396,7 +399,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 项 | 约定 |
 |---|---|
 | 基址 | `http://<host>:8077`（默认端口 8077） |
-| 鉴权 | `AUTH_ENABLED=true` 时除 `/`、`/health`、`/docs` 外所有接口都要 `Authorization: Bearer <key>`；`false`（默认）时免鉴权（匿名=admin）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套；档位不足 403（detail 含 `insufficient role`） |
+| 鉴权 | **读接口免鉴权**（`GET` 类 + `POST /api/search`：不带 key 直接 200，带了无效 key 也照答 200）；`AUTH_ENABLED=true` 时**写接口**要 `Authorization: Bearer <key>`，缺凭证 401、凭证不匹配 403、档位不足 403（detail 含 `insufficient role`）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套 |
 | 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
 | 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 [#1.7](#17-mcp-接入让-agent-直接查读论文)） |
 | 签名下载 | `GET /api/downloads/{paper_id}?exp=&sig=`（**免 Bearer**，签名即凭据，TTL 10–3600 s，过期或被改 403） |
@@ -408,8 +411,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 
 | 档位 | 端点 |
 |---|---|
-| 免鉴权 | `GET /health`、`GET /`、`GET /docs`；`GET /api/downloads/{paper_id}`（只认签名） |
-| read | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review` |
+| 免鉴权（**读**） | `GET /health`、`GET /`、`GET /docs`；`POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review`。这 13 个业务读接口**不读凭证**：缺 key、key 写错都照常 200 |
+| 免鉴权（凭证是签名） | `GET /api/downloads/{paper_id}`：只认 URL 里的 `exp`/`sig`（HMAC），与 key 无关 |
 | write | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/reindex`（批量）、`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply` |
 | admin | `DELETE /api/papers/{paper_id}` |
 
@@ -567,8 +570,8 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | 202 | 已受理 | 导入/重试/重建索引类接口：返回的是作业，用 `/api/jobs/{job_id}` 轮询进度 |
 | 204 | 成功且无响应体 | `DELETE /api/papers/{paper_id}` |
 | 400 Bad Request | 入站 URL 被安全闸拒绝 | URL 导入指向私网地址且未在 `INGEST_ALLOW_PRIVATE_HOSTS` 白名单内（`SSRF_BLOCKED`）；放行办法见 [#1.3.4](#134-导入与上传) 该键说明 |
-| 401 Unauthorized | 没带或带了格式不对的凭证（`AUTH_ENABLED=true`） | 请求头缺 `Authorization: Bearer <key>`；响应带 `WWW-Authenticate: Bearer` |
-| 403 Forbidden | 凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时) 档位表）；改了 `.env` 后忘了重启应用也会 403 |
+| 401 Unauthorized | **写接口**没带或带了格式不对的凭证（`AUTH_ENABLED=true`） | 读接口不会 401（免鉴权）；写接口缺 `Authorization: Bearer <key>` 时返回，响应头带 `WWW-Authenticate: Bearer` |
+| 403 Forbidden | **写接口**凭证不对，或档位不足 | key 不匹配；或 key 有效但**权限档位低于该端点要求**（detail 含 `insufficient role`，见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时) 档位表）；改了 `.env` 后忘了重启应用也会 403。读接口上无效 key **不会** 403 |
 | 404 Not Found | 路径不存在或功能未开启 | `/api/papers/ingest/dir` 在 `INGEST_LOCAL_ROOTS` 为空时**就是 404**（功能关闭，不是路径写错） |
 | 409 Conflict | 状态冲突 | 目前只有一处：重试一个**不是** `FAILED` 的作业（`only FAILED jobs can be retried`） |
 | 413 Request Entity Too Large | 单请求总字节超限 | 超 `INGEST_MAX_REQUEST_MB`（默认 200 MB）；拆分请求或调大该值 |
@@ -687,10 +690,11 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 每个地址都要写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`，只写主机名会漏），改完**重启应用**。
 启动日志会打印生效白名单，是排查 421 的第一手材料。注意这是**裸文本** 421，不是 JSON。
 
-**Q16 MCP 报 401 / 403？**
-先看 `AUTH_ENABLED`：`false` 时 `/mcp` 根本不查 key（匿名 admin），报 401/403 说明还有别的问题（如代理剥了头）。
-`true` 时：401 = 没带 `Authorization: Bearer`；403 = key 不匹配（对齐 `api_keys` 表里那把 key，或 env 引导 key `PAPER_API_KEY`/`PAPER_API_KEYS`，注意不要多空格）。MCP 工具另有一层
-**档位检查**：read key 调写工具报 `FORBIDDEN`（`insufficient role`），用 `scripts/manage_keys.py list` 看档位。
+**Q16 MCP 调写工具报 `FORBIDDEN` / 连不上？**
+2026-10-12 起 `/mcp` **不再返回 401/403**：读工具免凭证（不带 key 也能查论文、读正文、下载），
+只有写工具做档位检查 —— 没带 key 或 key 档位不足时，工具返回 `FORBIDDEN`（`insufficient role`），
+HTTP 仍是 200（MCP 的错误在 JSON-RPC 信封里）。排查顺序：① `tools/list` 里有没有这个工具（没有 = 被 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 关了，不是鉴权问题）；② key 是不是 `write`/`admin` 档
+（`scripts/manage_keys.py list`）；③ key 写错会只打 WARNING 后按匿名处理，日志关键字 `unknown bearer token`。
 **不支持 `?key=` 查询参数**。想区分是谁在调，就给每个 agent **各发一把 key**（`manage_keys.py create`）：
 审计按 key 的**值**认身份，两把相同的 key 在审计里会同名。
 

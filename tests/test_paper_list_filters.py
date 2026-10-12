@@ -12,7 +12,6 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.security import require_api_key
 from app.db.models import Paper, PaperTag, PapersTag, Venue, new_uuid
 from app.db.session import get_db
 from app.main import app
@@ -169,7 +168,6 @@ def client(factory):  # noqa: F811 - fixture comes from the import above
             session.close()
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[require_api_key] = lambda: "test-key"
     try:
         yield TestClient(app)
     finally:

@@ -7,7 +7,7 @@
 > **状态**：本文件保留作实现依据与字段语义参考；**当前实际状态一律以 `docs/progress/project.md` 为准**。
 
 ## 0. 全局约定
-- 鉴权（实现计划 `.hermes/plans/2026-10-05_145619-api-auth-keys-roles.md`）：`AUTH_ENABLED=false`（默认）时 `/api/*` 免鉴权（匿名=admin）；`=true` 时除 `/health` 外都要 `Authorization: Bearer <key>`，key 解析自 `api_keys` 表（`app/services/api_key_service.py`，REST 与 `/mcp` 共用），三档 `read < write < admin`（端点→档位表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)），缺凭证 401、key 不匹配 403、档位不足 403（`insufficient role`）。`GET /api/downloads/{paper_id}` 只认 HMAC 签名（免 Bearer）。
+- 鉴权（实现计划 `.hermes/plans/2026-10-05_145619-api-auth-keys-roles.md`；**读放开**见 `.hermes/plans/2026-10-12_191700-public-reads-open.md`）：**读接口一律免鉴权** —— 不改库的请求（检索、查询、对账、日志、原文下载）不读凭证，缺 key 与无效 key 都是 200。`AUTH_ENABLED=false`（默认）时全部免鉴权（匿名=admin）；`=true` 时**写接口**要 `Authorization: Bearer <key>`（`api_keys` 表解析，`app/services/api_key_service.py`，REST 与 `/mcp` 共用），三档 `read < write < admin` —— 写需 `write`、删除需 `admin`（端点→档位表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)），缺凭证 401、key 不匹配 403、档位不足 403（`insufficient role`）。`GET /api/downloads/{paper_id}` 的凭证是 HMAC 签名。
 - `paper_id` = UUID 字符串。论文状态：`PENDING / PROCESSING / INDEXED / FAILED / DELETED`（软删除用 `deleted_at`）。
 - 配置统一走 `app/core/config.py`（pydantic-settings），从根目录 `.env` 读取；禁止硬编码地址/密钥。
 - 依赖服务地址（Windows 宿主经 `127.0.0.1` 直连 WSL 端口，需在 WSL 的 ufw 白名单内；不要写 `localhost`，IPv6 回环不转发会每次多等 8 秒）：

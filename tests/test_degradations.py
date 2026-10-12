@@ -16,7 +16,6 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from app.api.papers import router as papers_router  # noqa: F401 - import side effect
-from app.core.security import require_api_key
 from app.db.models import Paper, PaperDegradation, new_uuid
 from datetime import datetime, timezone
 
@@ -519,7 +518,6 @@ def client():
             session.close()
 
     app.dependency_overrides[get_db] = override_db
-    app.dependency_overrides[require_api_key] = lambda: "test"
     try:
         yield TestClient(app), factory
     finally:

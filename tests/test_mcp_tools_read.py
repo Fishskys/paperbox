@@ -24,7 +24,6 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
 from app.core.config import settings
-from app.core.security import require_api_key
 from app.db.models import Paper, PaperChunk
 from app.db.session import get_db
 from app.main import app as paperbox_app
@@ -538,7 +537,6 @@ def paper_client(session_factory):
             session.close()
 
     paperbox_app.dependency_overrides[get_db] = _db
-    paperbox_app.dependency_overrides[require_api_key] = lambda: "test-key"
     try:
         yield TestClient(paperbox_app)
     finally:

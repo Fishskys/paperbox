@@ -13,14 +13,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.security import require_api_key
 from app.schemas.consistency import ConsistencyOut
 from app.services import consistency_service
 
+# 公开读：本 router 全部是纯读端点，不挂凭证（docs/architecture/07-api.md 的「鉴权实现」）。
 router = APIRouter(
     prefix="/api/consistency",
     tags=["consistency"],
-    dependencies=[Depends(require_api_key)],
 )
 
 

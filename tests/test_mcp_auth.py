@@ -199,44 +199,110 @@ def test_the_shared_key_reports_the_default_agent(mcp_http) -> None:
     assert response.status_code == 200
 
 
-def test_a_missing_header_is_a_401_with_a_challenge(mcp_http) -> None:
+def test_a_missing_credential_calls_the_read_surface_anonymously(mcp_http) -> None:
+    """Reads are open (2026-10-12): no header is a caller, not an error."""
     response = rpc(mcp_http, "initialize", INITIALIZE_PARAMS)
-    assert response.status_code == 401
-    assert response.headers["www-authenticate"].startswith("Bearer")
-    assert "Authorization" in response.json()["error"]
+    assert response.status_code == 200
+    assert response.json()["result"]["serverInfo"]["name"] == "paperbox"
 
 
-def test_an_unknown_key_is_a_403(mcp_http) -> None:
-    response = rpc(mcp_http, "initialize", INITIALIZE_PARAMS, token="not-a-key")
-    assert response.status_code == 403
+def test_an_unknown_key_is_treated_as_anonymous(mcp_http, caplog) -> None:
+    """B2: an invalid credential must not turn an open read into a refusal."""
+    response = rpc(mcp_http, "tools/list", {}, token="not-a-key")
+    assert response.status_code == 200
+    assert "unknown bearer token" in caplog.text
 
 
-def test_a_non_bearer_scheme_is_refused(mcp_http) -> None:
+def test_a_non_bearer_scheme_is_treated_as_anonymous(mcp_http) -> None:
+    """``Basic`` is not a credential we recognise; the call proceeds anonymously."""
     response = mcp_http.post(
         "/mcp/",
-        content=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": INITIALIZE_PARAMS}),
+        content=json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": INITIALIZE_PARAMS}
+        ),
         headers={**HEADERS, "Authorization": f"Basic {HERMES_KEY}"},
     )
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 def test_a_key_in_the_query_string_does_not_authenticate(mcp_http) -> None:
-    """v1 explicitly does not support ``?key=``: keys in URLs end up in logs."""
-    response = rpc(mcp_http, "initialize", INITIALIZE_PARAMS, query=f"?key={HERMES_KEY}")
-    assert response.status_code == 401
+    """v1 explicitly does not support ``?key=``: keys in URLs end up in logs.
 
-
-def test_auth_runs_before_the_host_allowlist(mcp_http) -> None:
-    """Ordering: an unauthenticated caller learns nothing about our Host policy.
-
-    A foreign Host without credentials is 401 (not 421); with credentials it is 421,
-    which is the transport's own decision (hard requirement 2).
+    The call still answers (anonymous reads), but the query string must not produce
+    an identity — the write tools are where that would matter.
     """
-    anonymous = rpc(mcp_http, "initialize", INITIALIZE_PARAMS, host="evil.example")
-    assert anonymous.status_code == 401
+    response = rpc(mcp_http, "initialize", INITIALIZE_PARAMS, query=f"?key={HERMES_KEY}")
+    assert response.status_code == 200
 
-    authenticated = rpc(mcp_http, "initialize", INITIALIZE_PARAMS, token=HERMES_KEY, host="evil.example")
-    assert authenticated.status_code == 421
+
+def test_an_anonymous_read_tool_reports_the_anonymous_agent(mcp_http) -> None:
+    """An open read is still audited: ``agent=anonymous``, no key prefix."""
+    from app.mcp import jobs
+    from app.schemas.job import JobOut
+
+    job = JobOut(job_id="job-1", stage="COMPLETED", progress=1.0)
+    original = jobs.load_job
+    jobs.load_job = lambda job_id: job
+    try:
+        payload = rpc(
+            mcp_http,
+            "tools/call",
+            {"name": "paper_job_status", "arguments": {"job_id": "job-1"}},
+        ).json()["result"]
+    finally:
+        jobs.load_job = original
+    envelope = Envelope[object].model_validate(payload["structuredContent"])
+    assert envelope.meta.agent == "anonymous"
+
+
+def test_an_anonymous_write_tool_call_is_forbidden(monkeypatch, keys) -> None:
+    """B4: opening the reads does not open the writes — no identity fails the tier."""
+    monkeypatch.setattr(settings, "mcp_write_enabled", True)
+    monkeypatch.setattr(settings, "mcp_allow_reindex", True)
+    server = build_server()
+    app = FastAPI()
+
+    @asynccontextmanager
+    async def lifespan(_):
+        async with server.session_manager.run():
+            yield
+
+    app.router.lifespan_context = lifespan
+    app.add_middleware(auth.McpAuthMiddleware)
+    app.mount("/mcp", build_streamable_http_app(server))
+    with TestClient(app) as client:
+        rpc(client, "initialize", INITIALIZE_PARAMS)
+        payload = rpc(
+            client,
+            "tools/call",
+            {"name": "paper_reindex", "arguments": {"paper_id": "paper-1"}},
+        ).json()["result"]
+    assert payload.get("isError") is True
+    assert "FORBIDDEN" in payload["content"][0]["text"]
+
+
+def test_the_host_allowlist_applies_to_every_caller(mcp_http) -> None:
+    """Anonymous traffic now reaches the transport, so the Host policy sees it too.
+
+    Before 2026-10-12 auth ran first, so an unauthenticated caller got 401 without
+    learning anything about the allowlist; with reads open there is no earlier
+    refusal to hide behind and 421 is the honest answer for a foreign ``Host`` both
+    with and without a credential (hard requirement 2).
+    """
+    assert (
+        rpc(mcp_http, "initialize", INITIALIZE_PARAMS, host="evil.example").status_code
+        == 421
+    )
+    assert (
+        rpc(
+            mcp_http,
+            "initialize",
+            INITIALIZE_PARAMS,
+            token=HERMES_KEY,
+            host="evil.example",
+        ).status_code
+        == 421
+    )
 
 
 def test_authenticated_traffic_from_an_allowed_host_is_served(mcp_http) -> None:
@@ -246,21 +312,18 @@ def test_authenticated_traffic_from_an_allowed_host_is_served(mcp_http) -> None:
     assert response.status_code == 200
 
 
-def test_rest_routes_keep_their_own_auth(monkeypatch) -> None:
-    """The MCP guard must not have relaxed (or tightened) the REST surface."""
-    from app.main import app as paperbox_app
-
-    monkeypatch.setattr(settings, "mcp_allowed_hosts", "testserver,testserver:*")
-    monkeypatch.setattr(settings, "auth_enabled", True)
-    with TestClient(paperbox_app) as client:
-        assert client.get("/health").status_code == 200
-        # /api/* is still guarded by the REST dependency, whatever the MCP keys are.
-        assert client.get("/api/papers").status_code in (401, 403)
+def test_anonymous_traffic_from_an_allowed_host_is_served(mcp_http) -> None:
+    response = rpc(mcp_http, "initialize", INITIALIZE_PARAMS, host="testserver")
+    assert response.status_code == 200
 
 
-# --------------------------------------------------------------------------- #
-# the master switch, all-on/all-off (plan section 3 D1)
-# --------------------------------------------------------------------------- #
+# The REST half of this decision is pinned by ``tests/test_public_reads.py`` (the
+# route table: reads declare no gate) and ``tests/test_auth_rest.py`` (401/403
+# semantics on the write gates). It used to be re-asserted here through the real
+# app, which started the production lifespan — Postgres, OpenSearch, MinIO and the
+# docling probes inside a unit test.
+
+
 def test_auth_off_the_endpoint_answers_anonymously(monkeypatch, keys) -> None:
     """AUTH_ENABLED=false: no credential, and the identity is anonymous admin."""
     monkeypatch.setattr(settings, "auth_enabled", False)

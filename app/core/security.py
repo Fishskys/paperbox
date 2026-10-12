@@ -1,4 +1,4 @@
-"""API key authentication for the paperbox REST API.
+"""API key authentication for the paperbox REST API's **write** surface.
 
 The API is called by the Hermes main agent over HTTP using a bearer token:
 
@@ -8,10 +8,18 @@ Resolution lives in :mod:`app.services.api_key_service` (the same source the MCP
 middleware uses — one credential store, two surfaces). This module owns the HTTP
 wiring: extracting the credential from the request and enforcing role tiers.
 
-``AUTH_ENABLED=false`` (the deployed default) short-circuits everything: every
-caller gets the anonymous admin identity and the log prefix ``anonymous``. The
-switch is all-or-nothing by design (plan section 3 D2) — a half-enforced auth would be
-worse than none.
+**Who needs a credential (decision of 2026-10-12).** Reads are public: every
+endpoint that does not change stored data — retrieval, listing, detail, chunks,
+degradations, jobs, consistency, search logs, the signed download — carries no
+dependency, so a missing **or invalid** credential is simply not consulted and the
+answer is 200. Only the endpoints that write (ingestion, retry, reindex, metadata
+mutations) require ``write``, and deletion requires ``admin``. The route table in
+``docs/architecture/07-api.md`` marks which is which.
+
+``AUTH_ENABLED=false`` short-circuits the remaining checks: every caller gets the
+anonymous admin identity and the log prefix ``anonymous``. The switch is
+all-or-nothing for the gates that still exist (plan section 3 D2), and it is *not*
+what makes reads public — they are public in both states.
 """
 
 from __future__ import annotations
@@ -69,9 +77,11 @@ def _resolve_identity(request: Request) -> tuple[AuthIdentity | None, bool]:
 def require_role(minimum: str):
     """Build a FastAPI dependency enforcing ``minimum`` (tiers are monotonic).
 
-    401 for a missing credential, 403 for an unmatched one, 403 with a distinct
-    detail for a matched key whose tier is too low (plan section 3 D9) — a client can
-    tell "rotate your key" from "ask for a stronger key".
+    Only the endpoints that *declare* the dependency are gated — the read
+    endpoints declare none (module docstring). For a gated endpoint: 401 for a
+    missing credential, 403 for an unmatched one, 403 with a distinct detail for a
+    matched key whose tier is too low (plan section 3 D9) — a client can tell
+    "rotate your key" from "ask for a stronger key".
     """
     minimum_name = minimum
 
@@ -105,10 +115,6 @@ def require_role(minimum: str):
     return dependency
 
 
-#: Router-level default (everything that does not change state). Kept under the
-#: historical name so ``app.dependency_overrides[require_api_key]`` in the test
-#: suite keeps overriding the read tier.
-require_api_key = require_role(ROLE_READ)
 #: Ingestion, retry, reindex, metadata mutations.
 require_write = require_role(ROLE_WRITE)
 #: Deletion.
@@ -118,7 +124,6 @@ __all__ = [
     "API_KEY_HEADER",
     "extract_api_key",
     "require_admin",
-    "require_api_key",
     "require_role",
     "require_write",
     "ROLE_ADMIN",

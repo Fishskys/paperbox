@@ -299,7 +299,6 @@ def test_a_failed_queue_hand_off_marks_the_job_failed(
     from fastapi.testclient import TestClient
 
     from app.api import ingestion as ingestion_api
-    from app.core.security import require_api_key
     from app.db.session import get_db
     from app.main import AuthContextMiddleware
     from app.services.ingestion_service import mark_failed  # noqa: F401 (context)
@@ -323,7 +322,6 @@ def test_a_failed_queue_hand_off_marks_the_job_failed(
     app.include_router(ingestion_api.router)
     app.add_middleware(AuthContextMiddleware)
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[require_api_key] = lambda: "test"
 
     with TestClient(app, raise_server_exceptions=True) as test_client:
         with pytest.raises(RuntimeError):

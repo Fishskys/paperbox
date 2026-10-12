@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **读接口免鉴权，写接口仍要凭据**（2026-10-12）：13 个不改库的读端点不再挂载任何档位依赖 ——
+  检索（`POST /api/search`）、论文/作业/元数据查询、一致性对账、检索日志、原文流式下载，
+  以及 `GET /health` 与签名下载；请求里带不存在或过期的 key 也照答 200，凭证不参与判定。
+  写端点（5 个导入入口、重试、单篇/整库重建索引、元数据 PATCH/rollback/conflicts dismiss、
+  元数据导入三件套）从此要求 `write` 档，`DELETE /api/papers/{paper_id}` 要求 `admin` 档；
+  缺凭证 401、凭证不匹配 403、档位不足 403（`insufficient role`）的语义不变。
+- **`/mcp` 不再在传输层拒绝请求**（2026-10-12）：6 个读工具免凭证；写工具在工具层做档位检查，
+  匿名或缺档位时报 `ToolFailure(FORBIDDEN)`（HTTP 200，错误在 JSON-RPC 信封里），
+  凭证不匹配只记 WARNING 后按匿名处理。Host 白名单（421）现在对所有调用方生效。
+- 删除了 read 档的单例依赖 `app/core/security.py::require_api_key`：读端点不挂依赖，
+  留着这个名字只会让「以为还在鉴权」的回归隐身（`tests/test_public_reads.py` 钉住整张路由表）。
+
+### Added
+
+- `tests/test_public_reads.py`：逐条断言 30 个端点的档位归属（谁有门、谁没有），
+  以及「读档单例已删除」；`tests/test_auth_rest.py` 重写为「读免鉴权 / 写要档位」语义。
+
 ## [0.5.1] - 2026-10-10
 
 **这一版把"时间"这件事收干净**：全栈时区统一 `Asia/Shanghai`，以及一个被真机排查逼出来的

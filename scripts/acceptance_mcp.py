@@ -4,8 +4,10 @@ One run walks the whole surface and prints a PASS/FAIL table:
 
 * **transport** -- ``initialize``, ``tools/list``, and ``POST /mcp`` *without* the
   trailing slash answering in one hop (contract invariant: no 307 to ``/mcp/``).
-* **auth** -- 401 without a credential, 403 with a wrong one, 421 when the ``Host``
-  is outside ``MCP_ALLOWED_HOSTS``.
+* **auth** -- anonymous reads answer (no credential, and an invalid one is treated as
+  anonymous), a write tool refuses an anonymous call with ``FORBIDDEN``, and 421 when
+  the ``Host`` is outside ``MCP_ALLOWED_HOSTS`` (the policy now applies to every
+  caller, credential or not).
 * **read** -- all six read tools on the live corpus, including the signed download
   URL actually downloading a PDF.
 * **error paths** -- ``NOT_FOUND`` / ``INVALID_ARGUMENT`` / ``SSRF_BLOCKED``, plus
@@ -266,9 +268,17 @@ class Mcp:
         )
 
     # -- tool calls --------------------------------------------------------------
-    def call(self, tool: str, arguments: dict | None = None) -> dict[str, Any]:
-        """Call a tool, raising :class:`ToolError` when the server reports ``isError``."""
-        response = self.rpc("tools/call", {"name": tool, "arguments": arguments or {}})
+    def call(
+        self, tool: str, arguments: dict | None = None, *, token: str | None = None
+    ) -> dict[str, Any]:
+        """Call a tool, raising :class:`ToolError` when the server reports ``isError``.
+
+        ``token=""`` sends no credential at all -- that is how the anonymous read
+        path is probed (``token=None`` keeps using the run's own key).
+        """
+        response = self.rpc(
+            "tools/call", {"name": tool, "arguments": arguments or {}}, token=token
+        )
         response.raise_for_status()
         payload = response.json()["result"]
         if payload.get("isError"):
@@ -278,9 +288,11 @@ class Mcp:
             return payload["structuredContent"]
         return {"text": payload["content"][0]["text"] if payload.get("content") else ""}
 
-    def expect_error(self, tool: str, arguments: dict | None = None) -> str:
+    def expect_error(
+        self, tool: str, arguments: dict | None = None, *, token: str | None = None
+    ) -> str:
         try:
-            self.call(tool, arguments)
+            self.call(tool, arguments, token=token)
         except ToolError as failure:
             return failure.text
         raise AssertionError(f"{tool} unexpectedly succeeded")
@@ -340,13 +352,24 @@ def section_transport(mcp: Mcp, report: Report, *, expect_writes: bool) -> list[
     return listed
 
 
-def section_auth(mcp: Mcp, report: Report, host_outside_allowlist: str) -> None:
+def section_auth(
+    mcp: Mcp, report: Report, host_outside_allowlist: str, listed: list[str]
+) -> None:
+    """Auth as of 2026-10-12: reads are open, writes are gated, Host always checked."""
     print("\n== 2. auth and host ==")
     anonymous = mcp.rpc("tools/list", {}, token="")
-    report.add("no credential -> 401", anonymous.status_code == 401, f"HTTP {anonymous.status_code}")
+    report.add(
+        "no credential -> 200 (open read surface)",
+        anonymous.status_code == 200,
+        f"HTTP {anonymous.status_code}",
+    )
 
     wrong = mcp.rpc("tools/list", {}, token="definitely-not-the-key")
-    report.add("wrong credential -> 403", wrong.status_code == 403, f"HTTP {wrong.status_code}")
+    report.add(
+        "wrong credential -> 200 (treated as anonymous)",
+        wrong.status_code == 200,
+        f"HTTP {wrong.status_code}",
+    )
 
     bad_host = mcp.rpc("tools/list", {}, host=host_outside_allowlist)
     report.add(
@@ -354,6 +377,16 @@ def section_auth(mcp: Mcp, report: Report, host_outside_allowlist: str) -> None:
         bad_host.status_code == 421,
         f"HTTP {bad_host.status_code}",
     )
+
+    if "paper_reindex" in listed:
+        text = mcp.expect_error(
+            "paper_reindex", {"paper_id": str(uuid.uuid4())}, token=""
+        )
+        report.add(
+            "anonymous write tool -> FORBIDDEN",
+            error_code(text) == "FORBIDDEN",
+            (error_code(text) or text)[:70],
+        )
 
 
 def section_read(mcp: Mcp, report: Report) -> str | None:
@@ -730,8 +763,8 @@ def main(argv: list[str] | None = None) -> int:
         snapshot.take(mcp)
         print(f"corpus before the run: {snapshot.total} live paper(s)")
 
-        section_transport(mcp, report, expect_writes=args.with_writes)
-        section_auth(mcp, report, args.bad_host)
+        listed = section_transport(mcp, report, expect_writes=args.with_writes)
+        section_auth(mcp, report, args.bad_host, listed)
         paper_id = section_read(mcp, report)
         section_error_paths(mcp, report, paper_id)
         if args.with_writes:

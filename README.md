@@ -32,7 +32,7 @@ cp .env.example .env
 uv run alembic upgrade head
 uv run python scripts/create_index.py
 
-# 5) 启动 API（默认 0.0.0.0:8077，Bearer 鉴权）
+# 5) 启动 API（默认 0.0.0.0:8077；读接口免鉴权，写接口要 Bearer）
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 ```
 
@@ -132,7 +132,7 @@ paperbox/
 > （检索 + 读正文 + 导入/维护，默认关闭，需配 `MCP_ENABLED` 与白名单）。接入片段与排障见
 > `UserManual.md` [#1.7](UserManual.md#17-mcp-接入让-agent-直接查读论文) 与 `docs/architecture/11-mcp-agent-interface.md` [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入)。
 
-所有接口都在 `/api/**` 下。鉴权由 `AUTH_ENABLED` 全开全关：默认关闭（匿名 admin）；开启时 `/api/*` 与 `/mcp` 都要 `Authorization: Bearer <key>`，密钥按 `read < write < admin` 三档区分（`scripts/manage_keys.py` 分发），日志记密钥前缀。详见 `UserManual.md` [#1.3.7.1](UserManual.md#1371-密钥分发auth_enabledtrue-时) 与 [#2.1](UserManual.md#21-通用约定)。
+所有接口都在 `/api/**` 下。**读接口免鉴权**：检索、论文/作业/元数据查询、一致性对账、检索日志与原文下载都不需要凭证（缺 key 或 key 写错都照答 200）。`AUTH_ENABLED=true` 时只有**写接口**要 `Authorization: Bearer <key>`（导入、重试、重建索引、元数据改动需 `write` 档，删除需 `admin` 档；`scripts/manage_keys.py` 分发），日志记密钥前缀。`/mcp` 同理：读工具开放，写工具要 key + 档位。详见 `UserManual.md` [#1.3.7.1](UserManual.md#1371-密钥分发auth_enabledtrue-时) 与 [#2.1.1](UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)。
 
 | 分组 | 方法 | 端点 | 说明 |
 |---|---|---|---|

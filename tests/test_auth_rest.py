@@ -1,9 +1,14 @@
-"""REST auth end to end: the master switch, role tiers, and the log prefix.
+"""REST auth end to end: the master switch, the write tiers, the log prefix.
 
 The composition under test mirrors ``app.main``: ``AuthContextMiddleware``
 resolves the bearer key once and binds ``key_prefix`` into the logging context,
 then the router's role dependencies enforce the tier. Keys come from the
 in-memory SQLite ``api_keys`` table (the same store MCP reads — G4).
+
+Contract of 2026-10-12: **reads are public** (no dependency, so a missing or
+invalid credential is never consulted) and only the writing endpoints are gated —
+``write`` for mutations, ``admin`` for deletion. The write gates are exercised on
+``DELETE /api/papers/{paper_id}``, which needs the highest tier.
 """
 
 from __future__ import annotations
@@ -76,14 +81,29 @@ def _bearer(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-def test_a_missing_credential_is_a_401_with_a_challenge(client) -> None:
+def test_a_read_needs_no_credential(client) -> None:
     response = client.get("/api/papers")
+    assert response.status_code == 200
+    assert response.json() == {"total": 0, "limit": 20, "offset": 0, "papers": []}
+
+
+def test_an_invalid_credential_is_ignored_on_a_read(client) -> None:
+    """B2 (2026-10-12): a stale key must not turn a public read into a 403."""
+    response = client.get("/api/papers", headers=_bearer("not-a-key"))
+    assert response.status_code == 200
+    assert response.headers.get("www-authenticate") is None
+
+
+def test_a_write_without_a_credential_is_a_401_with_a_challenge(client) -> None:
+    response = client.delete(f"/api/papers/{uuid.uuid4()}")
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_an_unknown_credential_is_a_403(client) -> None:
-    response = client.get("/api/papers", headers=_bearer("not-a-key"))
+def test_an_unknown_credential_on_a_write_is_a_403(client) -> None:
+    response = client.delete(
+        f"/api/papers/{uuid.uuid4()}", headers=_bearer("not-a-key")
+    )
     assert response.status_code == 403
 
 
@@ -117,8 +137,12 @@ def test_an_admin_key_passes_the_delete_gate(client, key_material) -> None:
 
 
 def test_the_x_api_key_header_still_works(client, key_material) -> None:
-    response = client.get("/api/papers", headers={"X-API-Key": key_material["read"]})
-    assert response.status_code == 200
+    """The header fallback is a *write* path now; the admin key passes the gate."""
+    response = client.delete(
+        f"/api/papers/{uuid.uuid4()}",
+        headers={"X-API-Key": key_material["admin"]},
+    )
+    assert response.status_code == 404
 
 
 def test_auth_off_answers_anonymously(monkeypatch, session_factory) -> None:

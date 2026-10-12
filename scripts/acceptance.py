@@ -15,7 +15,7 @@ Criteria (plan section 38):
   5 every chunk has an embedding in OpenSearch
   6 OpenSearch answers both keyword and vector queries
   7 POST /api/search returns papers with evidence
-  8 Hermes can call it over HTTP with the bearer token (this script is that call)
+  8 reads need no credential, writes still need one (contract of 2026-10-12)
 """
 from __future__ import annotations
 
@@ -212,16 +212,24 @@ def main() -> int:
         f"evidence p{evidence.get('page')} {str(evidence.get('section'))[:24]!r}",
     )
 
-    # --- 8. bearer auth + Hermes-callable contract -------------------------
-    unauthorized = httpx.post(
+    # --- 8. reads are open, writes need a credential (2026-10-12) ----------
+    # The read probe repeats criterion 7 without a key; the write probe targets a
+    # job that does not exist, so a gate that accidentally opened could not mutate
+    # anything (it would answer 404 and this check would fail loudly).
+    anonymous_read = httpx.post(
         f"{base}/api/search", json={"query": "x", "mode": "keyword", "top_k": 1}, timeout=30
     )
-    ok = unauthorized.status_code == 401 and bool(results)
-    check.add(
-        "8 HTTP contract usable by Hermes (bearer auth enforced)",
-        PASS if ok else FAIL,
-        f"unauthenticated request -> HTTP {unauthorized.status_code}",
+    anonymous_write = httpx.post(
+        f"{base}/api/jobs/00000000-0000-0000-0000-000000000000/retry", timeout=30
     )
+    ok = anonymous_read.status_code == 200 and anonymous_write.status_code == 401
+    check.add(
+        "8 reads answer without a credential, writes still refuse one",
+        PASS if ok else FAIL,
+        f"anonymous POST /api/search -> HTTP {anonymous_read.status_code}; "
+        f"anonymous POST /api/jobs/<uuid>/retry -> HTTP {anonymous_write.status_code}",
+    )
+
 
     client.close()
     return check.summary()

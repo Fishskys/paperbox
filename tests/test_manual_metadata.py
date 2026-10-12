@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.security import require_api_key, require_write
+from app.core.security import require_write
 from app.db.models import Paper
 from app.db.session import get_db
 from app.main import app
@@ -60,7 +60,6 @@ def client(session_factory):
             session.close()
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[require_api_key] = lambda: "test-key"
     app.dependency_overrides[require_write] = lambda: "test-key"
     try:
         yield TestClient(app)

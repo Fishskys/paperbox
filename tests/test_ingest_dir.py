@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.api import ingestion as ingest_api
 from app.core.config import settings
-from app.core.security import require_api_key, require_write
+from app.core.security import require_write
 from app.db.models import IngestionJob
 from app.db.session import get_db
 from app.main import app
@@ -102,7 +102,6 @@ def client(factory, whitelist, queued, no_storage, monkeypatch):  # noqa: F811
             session.close()
 
     app.dependency_overrides[get_db] = _db
-    app.dependency_overrides[require_api_key] = lambda: "test-key"
     app.dependency_overrides[require_write] = lambda: "test-key"
     try:
         yield TestClient(app)

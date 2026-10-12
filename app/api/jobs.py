@@ -5,16 +5,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import require_api_key, require_write
+from app.core.security import require_write
 from app.db.session import get_db
 from app.schemas.job import JobListOut, JobOut, QueueOut
 from app.services import ingestion_service
 from app.workers import queue as job_queue
 
+# 公开读：本 router 的读端点不挂凭证；POST /{job_id}/retry 仍要 write 档。
 router = APIRouter(
     prefix="/api/jobs",
     tags=["jobs"],
-    dependencies=[Depends(require_api_key)],
 )
 
 

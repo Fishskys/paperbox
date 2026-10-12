@@ -12,15 +12,14 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.security import require_api_key
 from app.db.session import get_db
 from app.schemas.search_log import SearchLogListOut, SearchLogOut
 from app.services import search_log_service
 
+# 公开读：检索日志是只读视图，不挂凭证。
 router = APIRouter(
     prefix="/api/search-logs",
     tags=["search"],
-    dependencies=[Depends(require_api_key)],
 )
 
 
