@@ -4,8 +4,10 @@ One run walks the whole surface and prints a PASS/FAIL table:
 
 * **transport** -- ``initialize``, ``tools/list``, and ``POST /mcp`` *without* the
   trailing slash answering in one hop (contract invariant: no 307 to ``/mcp/``).
-* **auth** -- anonymous reads answer (no credential, and an invalid one is treated as
-  anonymous), a write tool refuses an anonymous call with ``FORBIDDEN``, and 421 when
+* **auth** -- the transport answers everyone (no credential, and an invalid one is
+  treated as anonymous); a read tool then follows the deployment's read door
+  (``AUTH_READ_ACCESS``: answers anonymously, or ``FORBIDDEN``), a write tool refuses
+  an anonymous call with ``FORBIDDEN`` either way, and 421 when
   the ``Host`` is outside ``MCP_ALLOWED_HOSTS`` (the policy now applies to every
   caller, credential or not).
 * **read** -- all six read tools on the live corpus, including the URL
@@ -313,6 +315,25 @@ def envelope_data(payload: dict[str, Any]) -> Any:
 # --------------------------------------------------------------------------------------
 
 
+def read_door_probe(mcp: Mcp) -> str:
+    """``""`` when a credential-free read tool answers; the failure text when it is gated.
+
+    The transport answers either way, so the door is only observable through a tool
+    call -- and through the *parsed* failure, not the raw JSON-RPC text (which wraps
+    every answer in ``result``).
+    """
+    try:
+        mcp.call("paper_search", {"query": SEARCH_QUERY, "top_k": 1}, token="")
+    except ToolError as failure:
+        return failure.text
+    return ""
+
+
+def read_door_open(mcp: Mcp) -> bool:
+    """Which way the read door points: a credential-free read tool answering means public."""
+    return read_door_probe(mcp) == ""
+
+
 def section_transport(mcp: Mcp, report: Report, *, expect_writes: bool) -> list[str]:
     print("\n== 1. transport ==")
     response = mcp.rpc(
@@ -355,11 +376,17 @@ def section_transport(mcp: Mcp, report: Report, *, expect_writes: bool) -> list[
 def section_auth(
     mcp: Mcp, report: Report, host_outside_allowlist: str, listed: list[str]
 ) -> None:
-    """Auth as of 2026-10-12: reads are open, writes are gated, Host always checked."""
+    """Auth as of the read-door plan (D2/D5): the read door is a policy, writes never are.
+
+    The transport always answers (it never refuses anyone); what a credential-free
+    caller may *do* is decided per tool. So this section first measures which way the
+    read door points -- a read tool answering anonymously means ``public``, a
+    ``FORBIDDEN`` means ``key`` -- and then asserts the matrix that belongs to it.
+    """
     print("\n== 2. auth and host ==")
     anonymous = mcp.rpc("tools/list", {}, token="")
     report.add(
-        "no credential -> 200 (open read surface)",
+        "no credential -> 200 (the transport never refuses)",
         anonymous.status_code == 200,
         f"HTTP {anonymous.status_code}",
     )
@@ -370,6 +397,30 @@ def section_auth(
         wrong.status_code == 200,
         f"HTTP {wrong.status_code}",
     )
+
+    gate_text = read_door_probe(mcp)
+    if not gate_text:
+        report.add(
+            "anonymous read tool answers (read door public)",
+            True,
+            "paper_search answered without a credential",
+        )
+    else:
+        report.add(
+            "anonymous read tool -> FORBIDDEN (read door key)",
+            error_code(gate_text) == "FORBIDDEN" and "reads are gated" in gate_text,
+            gate_text[:90],
+        )
+        if mcp.token:
+            keyed = mcp.rpc(
+                "tools/call",
+                {"name": "paper_search", "arguments": {"query": SEARCH_QUERY, "top_k": 1}},
+            )
+            report.add(
+                "the run's key passes the closed read door",
+                error_code(keyed.text) != "FORBIDDEN",
+                keyed.text[:70],
+            )
 
     bad_host = mcp.rpc("tools/list", {}, host=host_outside_allowlist)
     report.add(
@@ -461,13 +512,30 @@ def section_read(mcp: Mcp, report: Report) -> str | None:
     )
     if url:
         # Fetch it exactly as a caller with no credential would: it must not need a
-        # query string, a header or a signature (2026-10-12).
+        # query string, a header or a signature. Whether that caller gets the PDF
+        # depends on the read door (plan D2), so both answers are asserted.
         download = mcp.client.get(url, follow_redirects=True)
-        report.add(
-            "the returned URL downloads the PDF with no credential",
-            download.status_code == 200 and download.content[:4] == b"%PDF",
-            f"HTTP {download.status_code}, {len(download.content)} bytes",
-        )
+        if read_door_open(mcp):
+            report.add(
+                "the returned URL downloads the PDF with no credential",
+                download.status_code == 200 and download.content[:4] == b"%PDF",
+                f"HTTP {download.status_code}, {len(download.content)} bytes",
+            )
+        else:
+            report.add(
+                "the returned URL needs a credential while the read door is closed",
+                download.status_code == 401,
+                f"HTTP {download.status_code}",
+            )
+            if mcp.token:
+                keyed = mcp.client.get(
+                    url, headers={"Authorization": f"Bearer {mcp.token}"}
+                )
+                report.add(
+                    "the returned URL downloads the PDF with the run's key",
+                    keyed.status_code == 200 and keyed.content[:4] == b"%PDF",
+                    f"HTTP {keyed.status_code}, {len(keyed.content)} bytes",
+                )
 
     unknown_job = mcp.expect_error("paper_job_status", {"job_id": str(uuid.uuid4())})
     report.add(

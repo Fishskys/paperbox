@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
-"""Real-machine acceptance for the auth system (plan: 2026-10-05_145619-api-auth-keys-roles section 10).
+"""Real-machine acceptance for the auth system (plan 2026-10-05 section 10, read door 2026-10-12).
 
     uv run python scripts/acceptance_auth.py            # run against a live server
     uv run python scripts/acceptance_auth.py --cleanup  # only remove this script's keys
 
-It adapts to the running server's auth state (detected by hitting
-``GET /api/papers`` without a credential):
+The script detects **two independent switches** instead of one, because since the
+read door became a policy they no longer move together:
 
-* ``AUTH_ENABLED=false``: verifies anonymous admin access, /health and the public
-  file route, then explains that tier enforcement needs ``AUTH_ENABLED=true``;
-* ``AUTH_ENABLED=true``: verifies 401/403 semantics, the three role tiers over
-  REST, tier gates on the MCP write tools (when they are registered), MCP
-  handshake with a database key, and that revocation bites on the next request.
+* the **master switch** (``AUTH_ENABLED``) is read off the *write* surface — a bare
+  ``POST /api/jobs/<uuid>/retry`` answering 401 means it is on;
+* the **read door** (``AUTH_READ_ACCESS``) is read off the *read* surface —
+  ``GET /api/papers`` answering 200 with no credential means it is open (``public``,
+  the default), 401 means it is closed (``key``).
+
+With the master switch on it then verifies the four levels over REST (public reads /
+read / write / admin), the tier swap of plan D8 (deletion is a ``write`` operation,
+the bulk reindex is the only ``admin`` one), revocation, and the MCP half of the same
+contract. With the master switch off it verifies anonymous admin access and says so.
 
 Keys used for the run are created **directly in the ``api_keys`` table** with
-dedicated prefixes (``aaccread`` / ``aaccwrite`` / ``aaccadmin``) and removed
-again at the end — the run touches no paper data. The startup guards (refusing
-``change-me``, refusing zero keys) are covered by unit tests
-(``tests/test_mcp_auth.py``) plus the manual restart checklist in
-``docs/progress/project.md`` section 31; this script cannot restart your server.
+dedicated prefixes (``aaccread`` / ``aaccwrite`` / ``aaccadmin``) and removed again at
+the end — the run touches no paper data (the bulk-reindex probe is a ``dry_run``).
 
 Exit codes: 0 all checks passed, 1 at least one failed, 2 server unreachable.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -93,9 +96,7 @@ def mcp_rpc(
     body: dict = {"jsonrpc": "2.0", "id": 1, "method": method}
     if params is not None:
         body["params"] = params
-    return client.post(
-        f"{BASE}/mcp", content=__import__("json").dumps(body), headers=headers
-    )
+    return client.post(f"{BASE}/mcp", content=json.dumps(body), headers=headers)
 
 
 def tool_names(response: httpx.Response) -> set[str]:
@@ -119,88 +120,232 @@ def one_live_paper_id() -> str | None:
         session.close()
 
 
+def bearer(full_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {full_key}"}
+
+
+RETRY_PATH = "/api/jobs/{job_id}/retry"
+#: The single ``admin`` endpoint (plan D8): a dry run reads and queues nothing.
+BULK_REINDEX_PATH = "/api/papers/reindex"
+
+
+def detect(client: httpx.Client) -> tuple[bool, bool]:
+    """``(master switch on, read door open)`` — measured, not assumed."""
+    probe = client.post(f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}")
+    auth_on = probe.status_code == 401
+    check(
+        probe.status_code in (401, 404),
+        "master switch detected on the write surface",
+        f"anonymous POST {RETRY_PATH} -> {probe.status_code}",
+    )
+    read_probe = client.get(f"{BASE}/api/papers")
+    door_open = read_probe.status_code == 200
+    check(
+        read_probe.status_code in (200, 401),
+        "read door detected on the read surface",
+        f"anonymous GET /api/papers -> {read_probe.status_code}",
+    )
+    print(
+        f"  detected: AUTH_ENABLED={'true' if auth_on else 'false'}, "
+        f"AUTH_READ_ACCESS={'public' if door_open else 'key'}"
+    )
+    return auth_on, door_open
+
+
+def check_read_door(
+    client: httpx.Client, door_open: bool, material: dict[str, str]
+) -> None:
+    """The public reads of the plan's matrix (D2/D4)."""
+    anonymous = client.get(f"{BASE}/api/papers")
+    invalid = client.get(f"{BASE}/api/papers", headers=bearer("not-a-key"))
+    if door_open:
+        check(
+            anonymous.status_code == 200,
+            "an open read door answers without a credential",
+            f"status={anonymous.status_code}",
+        )
+        check(
+            invalid.status_code == 200 and "www-authenticate" not in invalid.headers,
+            "an invalid credential is ignored on an open read (B2)",
+            f"status={invalid.status_code}",
+        )
+    else:
+        check(
+            anonymous.status_code == 401 and "www-authenticate" in anonymous.headers,
+            "a closed read door is a 401 with a Bearer challenge",
+            f"status={anonymous.status_code}",
+        )
+        check(
+            invalid.status_code == 403,
+            "an unknown credential is a 403 on a closed read door",
+            f"status={invalid.status_code}",
+        )
+        read_ok = client.get(f"{BASE}/api/papers", headers=bearer(material["read"]))
+        check(
+            read_ok.status_code == 200,
+            "a read key passes the closed read door",
+            f"status={read_ok.status_code}",
+        )
+
+
+def check_write_tiers(client: httpx.Client, material: dict[str, str]) -> None:
+    """The write and admin tiers — identical whichever way the read door points."""
+    missing = client.post(f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}")
+    check(
+        missing.status_code == 401 and "www-authenticate" in missing.headers,
+        "a missing credential on a write is a 401 with a Bearer challenge",
+        f"status={missing.status_code}",
+    )
+    unknown = client.post(
+        f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}", headers=bearer("not-a-key")
+    )
+    check(unknown.status_code == 403, "an unknown credential on a write is a 403")
+
+    read_denied = client.post(
+        f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}", headers=bearer(material["read"])
+    )
+    check(
+        read_denied.status_code == 403
+        and "insufficient role" in read_denied.json().get("detail", ""),
+        "a read key cannot touch a write endpoint (403 insufficient role)",
+    )
+
+    random_id = str(uuid.uuid4())
+    read_delete = client.delete(
+        f"{BASE}/api/papers/{random_id}", headers=bearer(material["read"])
+    )
+    check(
+        read_delete.status_code == 403,
+        "a read key cannot delete (403 insufficient role)",
+    )
+    # Plan D8: deletion dropped to the write tier, so a write key reaches the gate and
+    # the answer is the business one (404 for a paper that does not exist).
+    write_delete = client.delete(
+        f"{BASE}/api/papers/{random_id}", headers=bearer(material["write"])
+    )
+    check(
+        write_delete.status_code == 404,
+        "a write key passes the delete gate (404 for a missing paper)",
+        f"status={write_delete.status_code}",
+    )
+    admin_delete = client.delete(
+        f"{BASE}/api/papers/{random_id}", headers=bearer(material["admin"])
+    )
+    check(
+        admin_delete.status_code == 404,
+        "an admin key passes the delete gate as well",
+        f"status={admin_delete.status_code}",
+    )
+
+    # Plan D8: the bulk/whole-library reindex is the one admin endpoint.
+    write_reindex = client.post(
+        f"{BASE}{BULK_REINDEX_PATH}", json={"dry_run": True}, headers=bearer(material["write"])
+    )
+    check(
+        write_reindex.status_code == 403
+        and "insufficient role" in write_reindex.json().get("detail", ""),
+        "a write key cannot start a bulk reindex (admin only)",
+        f"status={write_reindex.status_code}",
+    )
+    admin_reindex = client.post(
+        f"{BASE}{BULK_REINDEX_PATH}", json={"dry_run": True}, headers=bearer(material["admin"])
+    )
+    plan = admin_reindex.json() if admin_reindex.status_code == 200 else {}
+    check(
+        admin_reindex.status_code == 200
+        and plan.get("dry_run") is True
+        and plan.get("queued") in (0, None),
+        "an admin key gets a bulk-reindex dry run (nothing queued)",
+        f"status={admin_reindex.status_code} body={str(plan)[:80]}",
+    )
+
+
+def check_mcp(client: httpx.Client, door_open: bool, material: dict[str, str]) -> None:
+    """The MCP half: reads follow the door, writes never do."""
+    init_params = {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "acceptance", "version": "0"},
+    }
+    handshake = mcp_rpc(client, "initialize", init_params, material["admin"])
+    if handshake.status_code == 404:
+        print("[SKIP] /mcp not mounted (MCP_ENABLED=false)")
+        return
+    check(
+        handshake.status_code == 200,
+        "/mcp accepts a database key (G4)",
+        f"status={handshake.status_code}",
+    )
+    anonymous = mcp_rpc(client, "initialize", init_params, None)
+    check(
+        anonymous.status_code == 200,
+        "/mcp handshake answers without a credential (the transport never refuses)",
+        f"status={anonymous.status_code}",
+    )
+    names = tool_names(mcp_rpc(client, "tools/list", {}, None))
+    read_call = mcp_rpc(
+        client,
+        "tools/call",
+        {"name": "paper_search", "arguments": {"query": "attention", "top_k": 1}},
+        None,
+    )
+    if door_open:
+        check(
+            "result" in read_call.text and "FORBIDDEN" not in read_call.text,
+            "an open read door lets a read tool answer without a credential",
+            read_call.text[:120],
+        )
+    else:
+        check(
+            "FORBIDDEN" in read_call.text and "reads are gated" in read_call.text,
+            "a closed read door fails a read tool with FORBIDDEN",
+            read_call.text[:120],
+        )
+        read_key_call = mcp_rpc(
+            client,
+            "tools/call",
+            {"name": "paper_search", "arguments": {"query": "attention", "top_k": 1}},
+            material["read"],
+        )
+        check(
+            "FORBIDDEN" not in read_key_call.text,
+            "a read key passes the closed read door on the MCP surface",
+            read_key_call.text[:120],
+        )
+    if "paper_delete" in names:
+        refusal = mcp_rpc(
+            client,
+            "tools/call",
+            {"name": "paper_delete", "arguments": {"paper_id": str(uuid.uuid4())}},
+            material["read"],
+        )
+        check(
+            "FORBIDDEN" in refusal.text,
+            "a read key cannot reach a write tool (FORBIDDEN)",
+            refusal.text[:120],
+        )
+    else:
+        print("[SKIP] MCP write tools are not registered (MCP_WRITE_ENABLED/MCP_ALLOW_*)")
+
+
 def run() -> None:
-    with httpx.Client(timeout=30) as client:
-        # ---- always: health and the file route stay credential-free ---- #
+    with httpx.Client(timeout=180) as client:
+        # ---- always: health stays credential-free ---- #
         response = client.get(f"{BASE}/health")
         check(response.status_code == 200, "/health answers without a credential")
 
-        # ---- detect the server's auth state ---- #
-        # Probe a GATED endpoint: since 2026-10-12 reads answer 200 with or without
-        # AUTH_ENABLED, so ``GET /api/papers`` no longer reveals the state. This is a
-        # job that does not exist, so the second branch (auth off) is a harmless 404.
-        probe = client.post(f"{BASE}/api/jobs/{uuid.uuid4()}/retry")
-        auth_on = probe.status_code == 401
-        check(
-            probe.status_code in (401, 404),
-            "auth state detected",
-            f"POST /api/jobs/<uuid>/retry without key -> {probe.status_code} "
-            f"(AUTH_ENABLED={'true' if auth_on else 'false'})",
-        )
+        auth_on, door_open = detect(client)
 
         material: dict[str, str] = {}
         if auth_on:
-            # ---- 401 / 403 semantics (on a gated endpoint) ---- #
-            missing = client.post(f"{BASE}/api/jobs/{uuid.uuid4()}/retry")
-            check(
-                missing.status_code == 401
-                and "www-authenticate" in missing.headers,
-                "missing credential is a 401 with a Bearer challenge",
-            )
-            unknown = client.post(
-                f"{BASE}/api/jobs/{uuid.uuid4()}/retry",
-                headers={"Authorization": "Bearer not-a-key"},
-            )
-            check(unknown.status_code == 403, "unknown credential is a 403")
-
-            # ---- three tiers over REST ---- #
             material = {
                 "read": make_key("read", "aaccread", "acceptance-read"),
                 "write": make_key("write", "aaccwrite", "acceptance-write"),
                 "admin": make_key("admin", "aaccadmin", "acceptance-admin"),
             }
-            # The read tier gates nothing any more (reads are public): the only thing
-            # a read key still buys is "recognised as a caller, allowed to do nothing".
-            # Assert exactly that, rather than a read that would pass without any key.
-            read_listed = client.get(
-                f"{BASE}/api/papers",
-                headers={"Authorization": f"Bearer {material['read']}"},
-            )
-            read_gated = client.post(
-                f"{BASE}/api/jobs/{uuid.uuid4()}/retry",
-                headers={"Authorization": f"Bearer {material['read']}"},
-            )
-            check(
-                read_listed.status_code == 200 and read_gated.status_code == 403,
-                "read key reads (like everyone) but cannot touch a gated endpoint (403)",
-            )
-
-            random_id = str(uuid.uuid4())
-            forbidden = client.delete(
-                f"{BASE}/api/papers/{random_id}",
-                headers={"Authorization": f"Bearer {material['read']}"},
-            )
-            check(
-                forbidden.status_code == 403
-                and "insufficient role" in forbidden.json().get("detail", ""),
-                "read key cannot delete (403 insufficient role)",
-            )
-            write_forbidden = client.delete(
-                f"{BASE}/api/papers/{random_id}",
-                headers={"Authorization": f"Bearer {material['write']}"},
-            )
-            check(
-                write_forbidden.status_code == 403,
-                "write key cannot delete (403 insufficient role)",
-            )
-            admin_gate = client.delete(
-                f"{BASE}/api/papers/{random_id}",
-                headers={"Authorization": f"Bearer {material['admin']}"},
-            )
-            check(
-                admin_gate.status_code == 404,
-                "admin key passes the delete gate (404 for a missing paper)",
-            )
+            check_read_door(client, door_open, material)
+            check_write_tiers(client, material)
+            check_mcp(client, door_open, material)
 
             # ---- revocation bites immediately ---- #
             session = SessionLocal()
@@ -209,82 +354,54 @@ def run() -> None:
                 session.commit()
             finally:
                 session.close()
-            # A revoked key is an unknown credential: observable only where a
-            # credential is read at all (a gated endpoint), never on a public read.
+            # A revoked key is an unknown credential: observable where a credential is
+            # read at all — a gated endpoint, or a closed read door.
             revoked = client.post(
-                f"{BASE}/api/jobs/{uuid.uuid4()}/retry",
-                headers={"Authorization": f"Bearer {material['read']}"},
+                f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}",
+                headers=bearer(material["read"]),
             )
-            check(revoked.status_code == 403, "revoked key stops authenticating")
+            check(revoked.status_code == 403, "a revoked key stops authenticating")
+            if not door_open:
+                revoked_read = client.get(
+                    f"{BASE}/api/papers", headers=bearer(material["read"])
+                )
+                check(
+                    revoked_read.status_code == 403,
+                    "a revoked key stops reading on a closed read door",
+                    f"status={revoked_read.status_code}",
+                )
         else:
+            retry = client.post(f"{BASE}{RETRY_PATH.format(job_id=uuid.uuid4())}")
             check(
-                probe.status_code == 200,
+                retry.status_code == 404,
                 "anonymous admin access while AUTH_ENABLED=false",
+                f"status={retry.status_code}",
             )
             print(
                 "  note: tier enforcement needs AUTH_ENABLED=true — restart with it\n"
                 "        on and re-run; startup guards are unit-tested "
                 "(tests/test_mcp_auth.py)."
             )
+            check_mcp(client, door_open, {"admin": ""})
 
-        # ---- MCP surface (only when mounted) ---- #
-        # Probe WITH a credential first: /mcp is a mount, so a missing endpoint looks
-        # like a 404 either way and the anonymous probe alone cannot tell it apart.
-        init_params = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "acceptance", "version": "0"}}
-        if auth_on and material.get("admin"):
-            handshake = mcp_rpc(client, "initialize", init_params, material["admin"])
-            if handshake.status_code == 404:
-                print("[SKIP] /mcp not mounted (MCP_ENABLED=false)")
-            else:
-                check(handshake.status_code == 200, "/mcp accepts a database key (G4)",
-                      f"status={handshake.status_code}")
-                # Since 2026-10-12 the transport never refuses: reads are open, and
-                # what an anonymous caller may do is decided per tool. So the anonymous
-                # probe asserts the contract that actually holds -- handshake + read
-                # work, and a registered write tool refuses with FORBIDDEN.
-                anonymous = mcp_rpc(client, "initialize", init_params, None)
-                check(
-                    anonymous.status_code == 200,
-                    "/mcp handshake answers anonymously (reads are public)",
-                    f"status={anonymous.status_code}",
-                )
-                listing = mcp_rpc(client, "tools/list", {}, None)
-                names = tool_names(listing)
-                if "paper_reindex" in names:
-                    refusal = mcp_rpc(
-                        client,
-                        "tools/call",
-                        {"name": "paper_reindex", "arguments": {"paper_id": str(uuid.uuid4())}},
-                        None,
-                    )
-                    check(
-                        "FORBIDDEN" in refusal.text,
-                        "an anonymous write tool call is a FORBIDDEN",
-                        refusal.text[:80],
-                    )
-                else:
-                    print("[SKIP] anonymous write tool: write tools are not registered")
-        else:
-            anonymous = mcp_rpc(client, "initialize", init_params, None)
-            if anonymous.status_code == 404:
-                print("[SKIP] /mcp not mounted (MCP_ENABLED=false)")
-            else:
-                check(
-                    anonymous.status_code == 200,
-                    "/mcp answers anonymously while AUTH_ENABLED=false",
-                )
-
-        # ---- the file route needs no credential (2026-10-12: reads are public) ---- #
+        # ---- the file route follows the read door ---- #
         paper_id = one_live_paper_id()
         if paper_id is None:
             print("[SKIP] file download: no live paper in the database")
         else:
             download = client.get(f"{BASE}/api/papers/{paper_id}/file")
-            check(
-                download.status_code in (200, 206),
-                "file download works without a credential",
-                f"status={download.status_code}",
-            )
+            if door_open or not auth_on:
+                check(
+                    download.status_code in (200, 206),
+                    "the file route answers without a credential (open read door)",
+                    f"status={download.status_code}",
+                )
+            else:
+                check(
+                    download.status_code == 401,
+                    "the file route needs a credential (closed read door)",
+                    f"status={download.status_code}",
+                )
 
 
 def main() -> int:
