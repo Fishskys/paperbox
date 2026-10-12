@@ -53,14 +53,18 @@ SOURCE_KEYS = "PAPER_API_KEYS"
 SOURCE_DB = "db"
 SOURCE_ANONYMOUS = "anonymous"
 
-#: Agent name for the shared ``PAPER_API_KEY`` (same value the MCP contract uses).
+#: Prefix (hence the audit label) of the shared ``PAPER_API_KEY``.
 SHARED_AGENT = "default"
 
+#: Label for a caller nothing was resolved for — the agent name the contract reports.
 ANONYMOUS_NAME = "anonymous"
 ANONYMOUS_PREFIX = "anonymous"
 
-#: The user-chosen, log-visible half of a key. Lowercase keeps log lines greppable.
-PREFIX_PATTERN = re.compile(r"^[a-z0-9_-]{2,16}$")
+#: The user-chosen, log-visible half of a key — and, since the key has no second
+#: identifier, the only name a credential has. Lowercase keeps log lines greppable;
+#: the 32-character room is for ``owner-agent`` / ``env-owner-agent`` schemes that
+#: the old 16 refused.
+PREFIX_PATTERN = re.compile(r"^[a-z0-9_-]{2,32}$")
 
 #: Literal default that must never become a live credential (startup guard).
 DEFAULT_KEY = "change-me"
@@ -70,6 +74,12 @@ DEFAULT_KEY = "change-me"
 class AuthIdentity:
     """Who is calling, as far as the process can tell.
 
+    A credential has exactly one identifier, its ``prefix``: it is the log-visible
+    half of the key, the audit label (``Envelope.meta.agent``, the ``agent`` field
+    of an ``mcp_call`` line) and the primary key the key store is managed by. There
+    is no separate human-readable ``name`` — two identifiers meant two things to
+    fill in and two ways to refer to the same key.
+
     ``is_anonymous`` marks the *virtual* identities — the master switch is off, or
     the read door is open and no credential was presented. A gate reads it to
     answer 401 ("present a key") instead of 403 ("that key is too weak"), which is
@@ -77,7 +87,6 @@ class AuthIdentity:
     (plan D2/D4). Every credential resolved from the store carries ``False``.
     """
 
-    name: str
     prefix: str
     role: str
     source: str
@@ -98,7 +107,6 @@ def anonymous(role: str = ROLE_ADMIN) -> AuthIdentity:
     write or admin gate.
     """
     return AuthIdentity(
-        name=ANONYMOUS_NAME,
         prefix=ANONYMOUS_PREFIX,
         role=role,
         source=SOURCE_ANONYMOUS,
@@ -126,15 +134,16 @@ def generate_full_key(prefix: str) -> str:
     return f"pb_{prefix}_{secrets.token_hex(16)}"
 
 
-def derive_prefix(name: str) -> str:
-    """Deterministic prefix for an environment key name (plan section 6).
+def derive_prefix(label: str) -> str:
+    """Deterministic prefix from an environment key's left-hand side.
 
-    ``PAPER_API_KEYS`` names become ``prefix`` values; sanitize rather than
-    reject so a startup with an awkward name still yields its bootstrap admin.
+    ``PAPER_API_KEYS`` entries are ``prefix:key``; sanitize rather than reject so a
+    startup with an awkward label still yields its bootstrap admin (a key the
+    operator cannot use is worse than a prefix that lost a character).
     """
-    cleaned = re.sub(r"[^a-z0-9_-]", "-", name.strip().lower())
+    cleaned = re.sub(r"[^a-z0-9_-]", "-", label.strip().lower())
     cleaned = cleaned.strip("-") or "key"
-    return cleaned[:16] if len(cleaned) >= 2 else f"{cleaned}-key"[:16]
+    return cleaned[:32] if len(cleaned) >= 2 else f"{cleaned}-key"[:32]
 
 
 def _env_identities() -> dict[str, AuthIdentity]:
@@ -151,15 +160,13 @@ def _env_identities() -> dict[str, AuthIdentity]:
     # startup, with auth off every caller is anonymous anyway.
     if shared and shared != DEFAULT_KEY:
         index[hash_key(shared)] = AuthIdentity(
-            name=SHARED_AGENT,
             prefix=derive_prefix(SHARED_AGENT),
             role=ROLE_ADMIN,
             source=SOURCE_SHARED,
         )
-    for name, key in settings.agent_keys.items():
+    for label, key in settings.bootstrap_keys.items():
         index[hash_key(key)] = AuthIdentity(
-            name=name,
-            prefix=derive_prefix(name),
+            prefix=derive_prefix(label),
             role=ROLE_ADMIN,
             source=SOURCE_KEYS,
         )
@@ -197,9 +204,7 @@ def authenticate(session: Session, token: str | None) -> AuthIdentity | None:
     )
     if row is None or not hmac.compare_digest(row.key_hash, digest):
         return None
-    return AuthIdentity(
-        name=row.name, prefix=row.prefix, role=row.role, source=SOURCE_DB
-    )
+    return AuthIdentity(prefix=row.prefix, role=row.role, source=SOURCE_DB)
 
 
 # --------------------------------------------------------------------------- #
@@ -213,22 +218,20 @@ def sync_env_bootstrap(session: Session) -> list[str]:
     Returns the prefixes written (for the startup log).
     """
     touched: list[str] = []
-    desired = {
-        identity.name: (identity.prefix, digest)
-        for digest, identity in _env_identities().items()
+    desired: dict[str, str] = {
+        identity.prefix: digest for digest, identity in _env_identities().items()
     }
     existing = {
-        row.name: row
+        row.prefix: row
         for row in session.execute(select(ApiKey).where(ApiKey.source == "env"))
         .scalars()
         .all()
     }
-    for name, (prefix, digest) in desired.items():
-        row = existing.get(name)
+    for prefix, digest in desired.items():
+        row = existing.get(prefix)
         if row is None:
             row = ApiKey(
                 id=new_uuid(),
-                name=name,
                 prefix=_free_prefix(session, prefix),
                 key_hash=digest,
                 role=ROLE_ADMIN,
@@ -239,8 +242,8 @@ def sync_env_bootstrap(session: Session) -> list[str]:
         elif not hmac.compare_digest(row.key_hash, digest):
             row.key_hash = digest
         touched.append(row.prefix)
-    for name, row in existing.items():
-        if name not in desired:
+    for prefix, row in existing.items():
+        if prefix not in desired:
             session.delete(row)
     session.flush()
     return touched
@@ -260,7 +263,7 @@ def _free_prefix(session: Session, base: str) -> str:
         ).first()
         if clash is None:
             return candidate
-        candidate = f"{base}-{counter}"[:16]
+        candidate = f"{base}-{counter}"[:32]
         counter += 1
 
 
@@ -316,31 +319,27 @@ class KeyManagementError(ValueError):
 def create_key(
     session: Session,
     *,
-    name: str,
     prefix: str,
     role: str,
     note: str | None = None,
 ) -> tuple[ApiKey, str]:
     """Create one database key; returns ``(row, full_key)`` — print it once.
 
-    Raises :class:`KeyManagementError` for unusable input and lets
-    :class:`IntegrityError` surface for prefix/name clashes (the CLI turns them
-    into a friendly message).
+    Raises :class:`KeyManagementError` for unusable input and for a prefix that is
+    already taken (the CLI turns the latter into a confirmation prompt: replacing a
+    key keeps the same prefix, which is what makes log attribution stable across
+    rotations).
     """
-    name = (name or "").strip()
     prefix = (prefix or "").strip()
-    if not name or len(name) > 64:
-        raise KeyManagementError("name must be 1..64 characters")
     if not PREFIX_PATTERN.fullmatch(prefix):
         raise KeyManagementError(
-            "prefix must match [a-z0-9_-]{2,16} (it appears in every log line)"
+            "prefix must match [a-z0-9_-]{2,32} (it appears in every log line)"
         )
     if role not in ROLES:
         raise KeyManagementError(f"role must be one of {sorted(ROLES)}")
     full_key = generate_full_key(prefix)
     row = ApiKey(
         id=new_uuid(),
-        name=name,
         prefix=prefix,
         key_hash=hash_key(full_key),
         role=role,
@@ -358,9 +357,7 @@ def create_key(
             session.add(row)
             session.flush()
     except IntegrityError as exc:
-        raise KeyManagementError(
-            "a key with the same name or prefix already exists"
-        ) from exc
+        raise KeyManagementError("a key with this prefix already exists") from exc
     return row, full_key
 
 

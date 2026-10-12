@@ -525,12 +525,12 @@ class Settings(BaseSettings):
             raise ValueError("MCP_WAIT_SECONDS must be >= 0")
         if self.mcp_toolset not in MCP_TOOLSETS:
             raise ValueError(f"MCP_TOOLSET must be one of {sorted(MCP_TOOLSETS)}")
-        if self.mcp_enabled and self.auth_enabled and not self.agent_keys and not (
+        if self.mcp_enabled and self.auth_enabled and not self.bootstrap_keys and not (
             self.paper_api_key and self.paper_api_key != "change-me"
         ):
             raise ValueError(
                 "MCP_ENABLED=true with AUTH_ENABLED=true needs a credential: set "
-                "PAPER_API_KEYS (agent_name:key; ...) or a real PAPER_API_KEY, "
+                "PAPER_API_KEYS (prefix:key; ...) or a real PAPER_API_KEY, "
                 "otherwise every /mcp request is a 401"
             )
         if self.mcp_enabled and not self.mcp_allowed_host_list:
@@ -551,7 +551,7 @@ class Settings(BaseSettings):
         in the database (``scripts/manage_keys.py``) do not lift this: the env value
         keeps working as a bootstrap credential. Set a real env key.
         """
-        if self.auth_enabled and self.paper_api_key == "change-me" and not self.agent_keys:
+        if self.auth_enabled and self.paper_api_key == "change-me" and not self.bootstrap_keys:
             raise ValueError(
                 "AUTH_ENABLED=true refuses the default PAPER_API_KEY 'change-me': "
                 "set a real key (PAPER_API_KEY / PAPER_API_KEYS) before enabling auth"
@@ -573,15 +573,20 @@ class Settings(BaseSettings):
         return [item.strip() for item in self.mcp_allowed_hosts.split(",") if item.strip()]
 
     @property
-    def agent_keys(self) -> dict[str, str]:
-        """``agent name -> key`` from ``PAPER_API_KEYS`` (invalid entries dropped)."""
+    def bootstrap_keys(self) -> dict[str, str]:
+        """``prefix -> key`` from ``PAPER_API_KEYS`` (invalid entries dropped).
+
+        The left half of each ``prefix:key`` pair *is* the key's prefix — the same
+        identifier ``scripts/manage_keys.py`` takes, so a bootstrap key and a
+        database key are named the same way.
+        """
         pairs: dict[str, str] = {}
         for item in self.paper_api_keys.split(";"):
-            name, separator, key = item.partition(":")
-            name = name.strip()
+            label, separator, key = item.partition(":")
+            label = label.strip()
             key = key.strip()
-            if separator and name and key:
-                pairs[name] = key
+            if separator and label and key:
+                pairs[label] = key
         return pairs
 
     @property

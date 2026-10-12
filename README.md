@@ -48,7 +48,7 @@ REST 之外，同一个进程还对外提供 MCP 端点 `/mcp`（Streamable HTTP
 
 ```bash
 # 1) 发一把密钥（角色 read < write < admin；库内只存 sha256，明文只在创建时打印一次）
-uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role admin
+uv run python scripts/manage_keys.py create --prefix hermes --role admin
 
 # 2) 打开开关；Host 白名单必填，写客户端实际访问用的主机名（含端口通配）
 #    .env:  MCP_ENABLED=true

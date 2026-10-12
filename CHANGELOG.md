@@ -8,6 +8,14 @@
 
 ### Changed
 
+- **一把钥匙只有一个标识符：`prefix`**（2026-10-12）：去掉 `api_keys.name`（唯一约束 `uq_api_keys_name`
+  与列一起删，迁移 `9c1d4b7a2e01`）。原来创建一把钥匙要起两个名字（`--name` 与 `--prefix`），而 `name`
+  只在 MCP 侧的 `Envelope.meta.agent` 与 `mcp_call` 审计行出现，REST 侧完全不可见 —— 一个字段的存在
+  理由不足以支撑它的维护成本。现在 `prefix` 同时承担日志归因（`[key=<prefix>]`、`search_queries.key_prefix`）
+  与审计标签（`meta.agent`）两个角色，创建时只需填一个值。
+- `prefix` 上限由 16 位放宽到 **32 位**（同一次迁移）：16 位连 `alice-hermes-laptop` 都装不下，
+  多用户/多机命名被迫缩写，而日志归因最怕缩写歧义。既有钥匙的 `prefix` 值不变，客户端无需改动。
+  `PAPER_API_KEYS` 的条目相应从 `名字:key` 变成 `prefix:key`（左边那半本来就是该钥匙的标识）。
 - **读门策略化 + 四档档位**（2026-10-12）：新增 `AUTH_READ_ACCESS`（`public` | `key`，默认 `public`），
   把「读要不要凭证」从一个代码事实变成一个配置项 —— 默认值与今天逐项一致（唯一差异：匿名请求的
   日志/检索归因由空串变为 `anonymous`），设为 `key` 则读端点与写端点同一套规矩，`read` 档密钥

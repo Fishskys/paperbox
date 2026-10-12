@@ -186,7 +186,7 @@ uv run python scripts/healthcheck.py
 |---|---|---|---|
 | `AUTH_ENABLED` | 鉴权总开关 | `false` | `false` = 所有调用方都是匿名 admin（日志记 `key=anonymous`），读与写全放行；`true` = **写接口**（导入/重试/单篇重建/元数据改动/删除）要 Bearer key，读接口按 `AUTH_READ_ACCESS` 决定。为 `true` 时拒绝 `change-me` 默认密钥、且库/env 一把 key 都没有时拒绝启动 |
 | `AUTH_READ_ACCESS` | 读门策略 | `public` | `public` = 读接口**不读凭证**：缺 key 或 key 写错都照答 200，调用者按匿名 read 身份记日志；`key` = 读接口与写接口同一套规矩（缺凭证 401、凭证不匹配 403），`read` 档密钥因此重新有意义。**只在 `AUTH_ENABLED=true` 时有作用对象**：为 `false` 时本键无效，属合法组合、**启动不告警**；取值非法（不是这两个之一）则启动即报错。无论取哪个值，写接口与批量重建的表现完全一致（见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)） |
-| `PAPER_API_KEY` | 引导管理员密钥（Bearer，agent 名 `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
+| `PAPER_API_KEY` | 引导管理员密钥（Bearer，prefix `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
 | `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
@@ -210,10 +210,15 @@ MCP 写工具按同一套档位判定，四个写工具都要求 `write`（含 `
 读门为 `public` 时无凭证请求记 `anonymous`，读门为 `key` 时记 `-`。
 
 ```bash
-uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role write
+uv run python scripts/manage_keys.py create --prefix hermes --role write
 uv run python scripts/manage_keys.py list
 uv run python scripts/manage_keys.py revoke hermes --yes
 ```
+
+**一把钥匙只有一个名字：`prefix`**（2026-10-12 起）。它就是创建时填的那一个值，同时承担三个角色：日志归因
+（请求日志 `[key=<prefix>]`、`search_queries.key_prefix`）、MCP 审计标签（`Envelope.meta.agent` 与
+`mcp_call` 行的 `agent` 字段），以及你在管理层面上指的「哪把钥匙」。规则：`[a-z0-9_-]{2,32}`、
+全局唯一、不能改（要改就是重发一把）；32 位宽度足够 `owner-agent` 甚至 `env-owner-agent` 这类命名。
 
 注意：`source=env` 的引导行不可经脚本吊销（要从 `.env` 移除并重启）；吊销立即生效（下一次请求即 403）。
 
@@ -357,7 +362,7 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 |---|---|---|---|
 | `MCP_ENABLED` | 是否挂载 `/mcp` | `false` | 打开时**必须**同时给白名单，否则**启动报错** |
 | `MCP_ALLOWED_HOSTS` | 允许访问的 `Host` 白名单 | 空 | 逗号分隔；**每个 agent 访问用的 IP 与主机名都要写**，且各写 `host` 与 `host:*` 两种（客户端发的是 `Host: host:port`） |
-| `PAPER_API_KEYS` | 引导管理员多 key（`名字:key` 分号分隔） | 空 | 启动时 upsert 成 `api_keys` 表的 admin 行（agent 名 = 名字）；空则回落到 `PAPER_API_KEY`（agent 名 = `default`）。给 agent 分发**带档位**的 key 用 `scripts/manage_keys.py`（见 [#1.3.7.1](#1371-密钥分发auth_enabledtrue-时)） |
+| `PAPER_API_KEYS` | 引导管理员多 key（`prefix:key` 分号分隔） | 空 | 启动时 upsert 成 `api_keys` 表的 admin 行（左边那半就是该钥匙的 prefix，日志与审计都用它）；空则回落到 `PAPER_API_KEY`（prefix = `default`）。给 agent 分发**带档位**的 key 用 `scripts/manage_keys.py`（见 [#1.3.7.1](#1371-密钥分发auth_enabledtrue-时)） |
 | `MCP_WRITE_ENABLED` | 写工具总闸 | `false` | 关闭时 4 个写工具**不存在**（不出现在工具列表，按名字也调不到） |
 | `MCP_ALLOW_DELETE` / `MCP_ALLOW_REINDEX` / `MCP_ALLOW_METADATA_WRITE` | 三个写工具分开关 | `false` | 受总闸约束；导入工具只受总闸管 |
 | `MCP_MAX_CHARS` / `MCP_MAX_CHARS_CEILING` | 单次正文预算 / 上限 | `8000` / `32000` | 超上限**报错不裁剪** |

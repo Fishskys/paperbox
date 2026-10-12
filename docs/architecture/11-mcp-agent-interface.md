@@ -53,7 +53,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 - 三个细分开关**都受总闸 `MCP_WRITE_ENABLED` 约束**；总闸关 = 写工具全部不可见。
 - **关掉的工具不出现在 `tools/list`** —— agent 不该看到一个它不能用工具（不是"能看见但报错"）。
-- **key 不是权限系统**：`key → agent 名` 只用于身份与审计（[#4.3](#43-审计)），权限一律由上面的全局开关决定。
+- **key 不是权限系统**：`key → prefix`（审计里就是 agent 标签）只用于身份与归因（[#4.3](#43-审计)），权限一律由上面的全局开关决定。
 
 ---
 
@@ -153,7 +153,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 | query-string key | **不支持**（v1 明确不做：key 进 URL 会落进代理/网关日志与浏览器历史） |
 | 总开关 | `AUTH_ENABLED=false`（默认）→ `/mcp` 与 `/api/*` 都**不查凭证**，每个调用方是匿名 admin（agent=`anonymous`、前缀=`anonymous`）；`=true` → **写工具**要求 key。`MCP_ENABLED` 仍只决定 `/mcp` 是否挂载 |
 | 读门 | `AUTH_READ_ACCESS=public`（默认）→ 无凭证调用者解析为**匿名 read 身份**，6 个读工具照常作答；`=key` → 无凭证调用者没有身份，读工具以 `ToolFailure(FORBIDDEN)` 失败，失败文本含 `reads are gated`（**码集冻结**，不新增 `AUTH_REQUIRED`）。该键只在 `AUTH_ENABLED=true` 时有作用对象，`AUTH_ENABLED=false` 时为合法组合、**不告警** |
-| 凭证来源 | `api_keys` 表（`scripts/manage_keys.py` 创建，三档 `read < write < admin`，只存 sha256）→ **优先**环境引导 key（`PAPER_API_KEYS` 命名 + `PAPER_API_KEY` 共享，一律 admin；env 是恢复路径，同名同值时 env 赢）。`AUTH_ENABLED=true` 而 env 与库中一把 key 都没有 → **启动报错**；env 唯一可用密钥是 `change-me` → **启动报错** |
+| 凭证来源 | `api_keys` 表（`scripts/manage_keys.py` 创建，三档 `read < write < admin`，只存 sha256）→ **优先**环境引导 key（`PAPER_API_KEYS` 的 `prefix:key` 条目 + `PAPER_API_KEY` 共享，一律 admin；env 是恢复路径，同值时 env 赢）。`AUTH_ENABLED=true` 而 env 与库中一把 key 都没有 → **启动报错**；env 唯一可用密钥是 `change-me` → **启动报错** |
 | 档位 | **四个写工具全部要求 `write`**（`paper_import`/`paper_reindex`/`paper_update_metadata`/`paper_delete`），且与 `MCP_WRITE_ENABLED`/`MCP_ALLOW_*` 取 **AND**；档位不足**或无身份（匿名）** → `ToolFailure(FORBIDDEN, "insufficient role")`。`admin` 档在 MCP 面上暂时没有工具（唯一的 admin 端点是 REST 的批量重建，MCP 不提供）。读工具只检查读门、不检查档位。检查在工具层而不是传输层：传输层看不到工具名 |
 | 失败 | **传输层不再返回 401/403**（2026-10-12）：缺凭证与凭证不匹配都降级为匿名（读门 `public`）/无身份（读门 `key`）。读工具在 `key` 读门下、写工具在两种读门下都以 `ToolFailure(FORBIDDEN)` 失败（HTTP 仍是 200 —— MCP 的错误在 JSON-RPC 信封里），两者的区别只在失败文本：`insufficient role`（档位）vs `reads are gated`（策略门）。凭证不匹配时日志有 WARNING `unknown bearer token` |
 | 实现 | `app/mcp/auth.py` + `app/main.py` 的 `McpAuthMiddleware`（**纯 ASGI**，不是 BaseHTTPMiddleware —— 端点会流式返回，缓冲型中间件会破坏它）。**不用 SDK 自带的 `AuthSettings`/`TokenVerifier`**：那套是 OAuth 资源服务器形态（强制 `issuer_url`/`resource_server_url`、宣告 RFC 9728 发现端点），静态 key 部署下客户端会去走一个永远走不通的 OAuth 流程 |
@@ -162,10 +162,10 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 
 ### 4.2 多 key 格式
 
-**首选**（带档位、可吊销、日志可归因）：
+**首选**（带档位、可吊销、日志可归因；**一把钥匙只有一个标识：`prefix`**）：
 
 ```bash
-uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role write
+uv run python scripts/manage_keys.py create --prefix hermes --role write
 # 完整密钥 pb_<prefix>_<32hex> 只打印这一次；库里只存 sha256
 ```
 
@@ -175,9 +175,10 @@ uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role
 PAPER_API_KEYS=hermes:<key1>;codex:<key2>;claude-code:<key3>
 ```
 
-`;` 分隔；每项 `名字:key`；名字限 `[A-Za-z0-9_-]`；key 内不得含 `:` 或 `;`。
-同一 key 同时出现在 `PAPER_API_KEYS` 与 `PAPER_API_KEY` 时，以 `PAPER_API_KEYS` 的名字为准并记 WARNING。
-env 引导行每次启动与 `.env` 重新同步：env 里删掉的名字，其 `source=env` 行会被删除（不留陈旧 admin）。
+`;` 分隔；每项 `prefix:key`，左边那半就是该钥匙的 prefix（`[a-z0-9_-]{2,32}`，审计与日志都用它）；
+key 内不得含 `:` 或 `;`。
+同一 key 同时出现在 `PAPER_API_KEYS` 与 `PAPER_API_KEY` 时，以 `PAPER_API_KEYS` 的条目为准并记 WARNING。
+env 引导行每次启动与 `.env` 重新同步：env 里删掉的条目，其 `source=env` 行会被删除（不留陈旧 admin）。
 
 ### 4.3 审计
 

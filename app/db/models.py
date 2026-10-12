@@ -845,7 +845,6 @@ class ApiKey(TimestampMixin, Base):
 
     __tablename__ = "api_keys"
     __table_args__ = (
-        UniqueConstraint("name", name="uq_api_keys_name"),
         UniqueConstraint("prefix", name="uq_api_keys_prefix"),
         UniqueConstraint("key_hash", name="uq_api_keys_key_hash"),
         CheckConstraint(
@@ -857,8 +856,7 @@ class ApiKey(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=new_uuid
     )
-    name: Mapped[str] = mapped_column(String(64), nullable=False)
-    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     source: Mapped[str] = mapped_column(String(8), nullable=False)

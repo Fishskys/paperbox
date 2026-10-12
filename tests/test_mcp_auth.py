@@ -43,7 +43,7 @@ def keys(monkeypatch):
     )
     monkeypatch.setattr(settings, "mcp_allowed_hosts", "testserver,testserver:*")
     monkeypatch.setattr(settings, "auth_enabled", True)
-    assert settings.agent_keys == {"hermes": HERMES_KEY, "codex": CODEX_KEY}
+    assert settings.bootstrap_keys == {"hermes": HERMES_KEY, "codex": CODEX_KEY}
     return settings
 
 
@@ -60,13 +60,11 @@ def role_keys(monkeypatch, session_factory, keys) -> dict[str, str]:
     setup = session_factory()
     try:
         material: dict[str, str] = {}
-        for name, prefix, role in (
-            ("read-agent", "readagent", "read"),
-            ("write-agent", "writeagent", "write"),
+        for prefix, role in (
+            ("readagent", "read"),
+            ("writeagent", "write"),
         ):
-            _, full_key = api_key_service.create_key(
-                setup, name=name, prefix=prefix, role=role
-            )
+            _, full_key = api_key_service.create_key(setup, prefix=prefix, role=role)
             material[role] = full_key
         setup.commit()
     finally:
@@ -179,8 +177,8 @@ def test_enabling_mcp_with_auth_off_needs_no_credential() -> None:
 
 
 def test_keys_are_parsed_into_agent_names(keys) -> None:
-    assert keys.agent_keys["hermes"] == HERMES_KEY
-    assert keys.agent_keys["codex"] == CODEX_KEY
+    assert keys.bootstrap_keys["hermes"] == HERMES_KEY
+    assert keys.bootstrap_keys["codex"] == CODEX_KEY
 
 
 def test_a_key_shared_with_paper_api_key_names_the_agent(monkeypatch, caplog) -> None:
@@ -190,7 +188,7 @@ def test_a_key_shared_with_paper_api_key_names_the_agent(monkeypatch, caplog) ->
     clashes = auth.warn_about_shared_keys()
     assert clashes == ["hermes"]
     identity = auth.resolve_agent(SHARED_KEY)
-    assert identity is not None and identity.name == "hermes"
+    assert identity is not None and identity.prefix == "hermes"
     assert identity.source == auth.SOURCE_KEYS
 
 
@@ -208,9 +206,9 @@ def test_parse_bearer_rejects_other_schemes(keys) -> None:
 
 def test_resolve_agent_covers_named_shared_and_unknown(keys) -> None:
     named = auth.resolve_agent(HERMES_KEY)
-    assert named is not None and named.name == "hermes" and not named.is_shared
+    assert named is not None and named.prefix == "hermes" and not named.is_shared
     shared = auth.resolve_agent(SHARED_KEY)
-    assert shared is not None and shared.name == auth.SHARED_AGENT and shared.is_shared
+    assert shared is not None and shared.prefix == auth.SHARED_AGENT and shared.is_shared
     assert auth.resolve_agent("nope") is None
     assert auth.resolve_agent("") is None
 
@@ -424,17 +422,16 @@ def test_a_database_key_authenticates_through_the_shared_service(
     session = session_factory()
     try:
         _, full_key = api_key_service.create_key(
-            session, name="ci-agent", prefix="ciagent", role="read"
+            session, prefix="ciagent", role="read"
         )
         session.commit()
         identity = api_key_service.authenticate(session, full_key)
         assert identity is not None
-        assert identity.name == "ci-agent"
         assert identity.prefix == "ciagent"
         assert identity.role == "read"
         assert identity.source == api_key_service.SOURCE_DB
         # and through the MCP wrapper, with the session the middleware would pass
-        assert auth.resolve_agent(full_key, session).name == "ci-agent"
+        assert auth.resolve_agent(full_key, session).prefix == "ciagent"
     finally:
         session.close()
 
@@ -447,7 +444,7 @@ def test_a_revoked_database_key_stops_authenticating(monkeypatch, session_factor
     session = session_factory()
     try:
         _, full_key = api_key_service.create_key(
-            session, name="temp", prefix="temp", role="write"
+            session, prefix="temp", role="write"
         )
         session.commit()
         assert api_key_service.authenticate(session, full_key) is not None
@@ -484,7 +481,7 @@ def test_a_gated_read_door_lets_a_read_key_through(
         mcp_http, "paper_job_status", {"job_id": "job-1"}, token=role_keys["read"]
     )
     envelope = Envelope[object].model_validate(payload["structuredContent"])
-    assert envelope.meta.agent == "read-agent"
+    assert envelope.meta.agent == "readagent"
 
 
 def test_the_read_door_does_not_move_the_write_tier(monkeypatch, keys, mcp_http) -> None:

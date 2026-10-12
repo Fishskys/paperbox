@@ -76,7 +76,6 @@ def test_the_master_switch_identity_is_the_anonymous_admin() -> None:
     """``AUTH_ENABLED=false`` keeps resolving every caller to a full-access identity."""
     identity = api_key_service.anonymous()
     assert identity == api_key_service.AuthIdentity(
-        name=api_key_service.ANONYMOUS_NAME,
         prefix=api_key_service.ANONYMOUS_PREFIX,
         role=api_key_service.ROLE_ADMIN,
         source=api_key_service.SOURCE_ANONYMOUS,
@@ -89,11 +88,7 @@ def test_the_open_read_identity_differs_only_by_tier() -> None:
     """One shape, two tiers: the attribution stays ``anonymous`` either way."""
     admin = api_key_service.anonymous()
     reader = api_key_service.anonymous_reader()
-    assert (reader.name, reader.prefix, reader.source) == (
-        admin.name,
-        admin.prefix,
-        admin.source,
-    )
+    assert (reader.prefix, reader.source) == (admin.prefix, admin.source)
     assert reader.role == api_key_service.ROLE_READ
     assert reader.is_anonymous is True
 
@@ -111,7 +106,7 @@ def test_a_resolved_key_is_never_anonymous(session_factory) -> None:
     session = session_factory()
     try:
         _, full_key = api_key_service.create_key(
-            session, name="reader", prefix="reader", role=api_key_service.ROLE_READ
+            session, prefix="reader", role=api_key_service.ROLE_READ
         )
         session.commit()
         identity = api_key_service.authenticate(session, full_key)

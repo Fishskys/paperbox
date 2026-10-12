@@ -73,11 +73,11 @@ def cleanup_keys() -> int:
         session.close()
 
 
-def make_key(role: str, prefix: str, name: str) -> str:
+def make_key(role: str, prefix: str) -> str:
     """Create one acceptance key directly in the table; return the full key."""
     session = SessionLocal()
     try:
-        _, full_key = keys.create_key(session, name=name, prefix=prefix, role=role)
+        _, full_key = keys.create_key(session, prefix=prefix, role=role)
         session.commit()
         return full_key
     finally:
@@ -339,9 +339,9 @@ def run() -> None:
         material: dict[str, str] = {}
         if auth_on:
             material = {
-                "read": make_key("read", "aaccread", "acceptance-read"),
-                "write": make_key("write", "aaccwrite", "acceptance-write"),
-                "admin": make_key("admin", "aaccadmin", "acceptance-admin"),
+                "read": make_key("read", "aaccread"),
+                "write": make_key("write", "aaccwrite"),
+                "admin": make_key("admin", "aaccadmin"),
             }
             check_read_door(client, door_open, material)
             check_write_tiers(client, material)

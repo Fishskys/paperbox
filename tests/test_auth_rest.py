@@ -66,14 +66,12 @@ def key_material(monkeypatch, session_factory) -> dict[str, str]:
     setup = session_factory()
     try:
         material: dict[str, str] = {}
-        for name, prefix, role in (
-            ("reader", "readkey", "read"),
-            ("writer", "writekey", "write"),
-            ("admin", "adminkey", "admin"),
+        for prefix, role in (
+            ("readkey", "read"),
+            ("writekey", "write"),
+            ("adminkey", "admin"),
         ):
-            _, full_key = api_key_service.create_key(
-                setup, name=name, prefix=prefix, role=role
-            )
+            _, full_key = api_key_service.create_key(setup, prefix=prefix, role=role)
             material[role] = full_key
         setup.commit()
     finally:

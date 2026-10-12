@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Create, list, or revoke API keys (plan: 2026-10-05_145619-api-auth-keys-roles).
 
-    uv run python scripts/manage_keys.py create --name hermes --prefix hermes --role admin
+    uv run python scripts/manage_keys.py create --prefix hermes --role admin
     uv run python scripts/manage_keys.py list
     uv run python scripts/manage_keys.py revoke hermes --yes
 
-A created key is printed **once** and stored only as a sha256 hash: losing the
-printed secret means revoking and re-issuing, there is no recovery. Keys come
-in three monotonic tiers — ``read`` < ``write`` < ``admin`` — enforced on both
-the REST and the MCP surface (``AUTH_ENABLED=true``). Rows derived from the
-environment (``PAPER_API_KEY`` / ``PAPER_API_KEYS`` bootstrap admins) show up in
-``list`` with ``source=env`` and refuse ``revoke``: remove them from the env
-file and restart instead.
+A key has **one** identifier, its ``prefix``: it is what you type here, what every
+log line carries for attribution, and what the MCP surface reports as the agent
+name. A created key is printed **once** and stored only as a sha256 hash: losing
+the printed secret means re-issuing, there is no recovery. Keys come in three
+monotonic tiers — ``read`` < ``write`` < ``admin`` — enforced on both the REST and
+the MCP surface (``AUTH_ENABLED=true``). Rows derived from the environment
+(``PAPER_API_KEY`` / ``PAPER_API_KEYS`` bootstrap admins) show up in ``list`` with
+``source=env`` and refuse ``revoke``/replacement: remove them from the env file and
+restart instead.
 
 Exit codes: 0 success, 1 refused (bad input, clash, unknown prefix),
 2 the database is unreachable.
@@ -37,7 +39,6 @@ def cmd_create(args: argparse.Namespace) -> int:
     try:
         row, full_key = keys.create_key(
             session,
-            name=args.name,
             prefix=args.prefix,
             role=args.role,
             note=args.note,
@@ -49,7 +50,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     finally:
         session.close()
     print("=" * 64)
-    print(f"key created: {row.name} (role={row.role}, source={row.source})")
+    print(f"key created: {row.prefix} (role={row.role}, source={row.source})")
     print()
     print(f"    {full_key}")
     print()
@@ -69,14 +70,11 @@ def cmd_list(_args: argparse.Namespace) -> int:
     if not rows:
         print("no keys (the environment bootstrap may add some at startup)")
         return 0
-    print(f"{'prefix':<18} {'role':<8} {'source':<6} {'status':<9} name / note")
+    print(f"{'prefix':<24} {'role':<8} {'source':<6} {'status':<9} note")
     for row in rows:
         status = "revoked" if row.revoked_at is not None else "active"
         note = f" — {row.note}" if row.note else ""
-        print(
-            f"{row.prefix:<18} {row.role:<8} {row.source:<6} {status:<9} "
-            f"{row.name}{note}"
-        )
+        print(f"{row.prefix:<24} {row.role:<8} {row.source:<6} {status:<9}{note}")
     print("\n(hash-only storage: the full keys are not recoverable, by design)")
     return 0
 
@@ -98,7 +96,7 @@ def cmd_revoke(args: argparse.Namespace) -> int:
         return 1
     finally:
         session.close()
-    print(f"revoked: {row.prefix} ({row.name}) — it stops authenticating immediately")
+    print(f"revoked: {row.prefix} — it stops authenticating immediately")
     return 0
 
 
@@ -107,11 +105,13 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     create = sub.add_parser("create", help="create a key; the full key is printed once")
-    create.add_argument("--name", required=True, help="agent/tool name (unique, audit identity)")
     create.add_argument(
         "--prefix",
         required=True,
-        help="readable prefix for log attribution, [a-z0-9_-]{2,16} (unique)",
+        help=(
+            "the key's only identifier: log attribution, audit label and the handle "
+            "you manage it by, [a-z0-9_-]{2,32} (unique)"
+        ),
     )
     create.add_argument(
         "--role",

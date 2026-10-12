@@ -82,13 +82,16 @@ current_agent: ContextVar[AgentIdentity | None] = ContextVar("mcp_agent", defaul
 
 
 def agent_name() -> str:
-    """The caller's agent name (``anonymous`` when no identity was resolved).
+    """The caller's agent label — the key's **prefix** (``anonymous`` otherwise).
 
+    A credential has exactly one identifier, its prefix: it is what the operator
+    chooses at ``manage_keys.py create``, what every log line carries, and what
+    ``Envelope.meta.agent`` / the ``agent`` field of an ``mcp_call`` line report.
     With the read tools open, "no identity" is a normal state, and the audit line
     has to say so instead of implying a named agent called.
     """
     identity = current_agent.get()
-    return identity.name if identity else ANONYMOUS_NAME
+    return identity.prefix if identity else ANONYMOUS_NAME
 
 
 def current_identity() -> AgentIdentity | None:
@@ -129,13 +132,13 @@ def warn_about_shared_keys() -> list[str]:
     """
     shared = settings.paper_api_key or ""
     clashes = [
-        name for name, key in settings.agent_keys.items() if shared and key == shared
+        label for label, key in settings.bootstrap_keys.items() if shared and key == shared
     ]
-    for name in clashes:
+    for label in clashes:
         logger.warning(
-            "agent %r uses the same key as PAPER_API_KEY: the named agent wins, the "
-            "shared identity is unreachable with that key",
-            name,
+            "bootstrap entry %r uses the same key as PAPER_API_KEY: the named entry "
+            "wins, the shared identity is unreachable with that key",
+            label,
         )
     return clashes
 
