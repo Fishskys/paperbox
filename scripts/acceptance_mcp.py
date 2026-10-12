@@ -8,8 +8,8 @@ One run walks the whole surface and prints a PASS/FAIL table:
   anonymous), a write tool refuses an anonymous call with ``FORBIDDEN``, and 421 when
   the ``Host`` is outside ``MCP_ALLOWED_HOSTS`` (the policy now applies to every
   caller, credential or not).
-* **read** -- all six read tools on the live corpus, including the signed download
-  URL actually downloading a PDF.
+* **read** -- all six read tools on the live corpus, including the URL
+  ``paper_get_file`` hands out actually downloading a PDF with no credential.
 * **error paths** -- ``NOT_FOUND`` / ``INVALID_ARGUMENT`` / ``SSRF_BLOCKED``, plus
   the write tools being *absent* (not merely refused) when they are switched off.
 * **write** (``--with-writes``) -- all four write tools, when the server has the
@@ -455,14 +455,16 @@ def section_read(mcp: Mcp, report: Report) -> str | None:
     file_data = envelope_data(mcp.call("paper_get_file", {"paper_id": paper_id}))
     url = file_data.get("download_url") or ""
     report.add(
-        "paper_get_file returns a signed URL",
-        "sig=" in url and "exp=" in url,
-        url.split("?")[-1][:48],
+        "paper_get_file returns the public file route",
+        url.endswith(f"/api/papers/{paper_id}/file") and "sig=" not in url,
+        url[:72],
     )
     if url:
+        # Fetch it exactly as a caller with no credential would: it must not need a
+        # query string, a header or a signature (2026-10-12).
         download = mcp.client.get(url, follow_redirects=True)
         report.add(
-            "the signed URL actually downloads the PDF",
+            "the returned URL downloads the PDF with no credential",
             download.status_code == 200 and download.content[:4] == b"%PDF",
             f"HTTP {download.status_code}, {len(download.content)} bytes",
         )

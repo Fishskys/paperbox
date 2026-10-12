@@ -136,8 +136,11 @@ async def request_id_middleware(
     return response
 
 
-# MCP auth runs outermost: an unauthenticated caller is refused before anything else
-# (and before the transport reveals which Host names this server accepts).
+# Order matters, and it is the reverse of how these lines read: the *last* middleware
+# added is the outermost, so the stack runs AuthContextMiddleware (REST identity) ->
+# BodyLimitMiddleware -> McpMountPathMiddleware -> McpAuthMiddleware (MCP identity) ->
+# the request-id middleware -> routers and the /mcp mount. The two identity
+# middlewares never overlap: the first only touches /api paths, the second only /mcp.
 app.add_middleware(McpAuthMiddleware)
 # Serving /mcp without a trailing slash is in-process, not a 307 (see the class).
 app.add_middleware(McpMountPathMiddleware)

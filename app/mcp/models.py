@@ -183,13 +183,13 @@ class PaperDetailData(BaseModel):
 
 
 class FileData(BaseModel):
-    """``paper_get_file``: a short-lived link to the stored original."""
+    """``paper_get_file``: a link to the stored original."""
 
     model_config = ConfigDict(extra="forbid")
 
-    #: Signed URL, valid until ``expires_at``; carries no long-lived credential.
+    #: The REST file route (``GET /api/papers/{paper_id}/file``): no signature, no
+    #: credential, no expiry -- a read endpoint, same as every other read here.
     download_url: str
-    expires_at: datetime
     filename: str
     bytes: int | None = None
     content_type: str | None = None

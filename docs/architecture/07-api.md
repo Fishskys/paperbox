@@ -44,7 +44,7 @@
 | GET | `/api/papers` | 论文列表 | 免 | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag` | `app/api/papers.py` |
 | GET | `/api/papers/{paper_id}` | 单篇元数据 | 免 | — | `app/api/papers.py` 的 `list_papers()` |
 | GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | 免 | — | `app/api/papers.py` 的 `get_paper()` |
-| GET | `/api/downloads/{paper_id}` | **签名**短链下载（MCP `paper_get_file` 用；**免 Bearer**，签名即凭据，`exp`/`sig` 过期或被改 → 403） | 免 | `exp`、`sig` | `app/api/downloads.py` |
+| GET | `/api/downloads/{paper_id}` | **签名**短链下载（独立入口，免 Bearer：签名即凭据，`exp`/`sig` 过期或被改 → 403；`paper_get_file` 现在发的是 `/api/papers/{id}/file`，不是这条） | 免 | `exp`、`sig` | `app/api/downloads.py` |
 | GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | 免 | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
 | GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | 免 | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
 | GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | 免 | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |

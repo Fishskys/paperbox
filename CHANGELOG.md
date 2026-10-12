@@ -19,6 +19,13 @@
   凭证不匹配只记 WARNING 后按匿名处理。Host 白名单（421）现在对所有调用方生效。
 - 删除了 read 档的单例依赖 `app/core/security.py::require_api_key`：读端点不挂依赖，
   留着这个名字只会让「以为还在鉴权」的回归隐身（`tests/test_public_reads.py` 钉住整张路由表）。
+- **MCP 的 `paper_get_file` 不再发签名短链**：改成返回 `GET /api/papers/{paper_id}/file` 的绝对
+  地址 —— 与 REST 读面同一个路由、同一套机制（无凭据、无签名、不过期）。`FileData` 去掉
+  `expires_at`，`paper_get_file` 不再依赖 `download_signing`（签名密钥缺失这条失败路径一并消失），
+  信封 `warnings` 明说链接不含凭据也不过期。`GET /api/downloads/{paper_id}` 这条签名路由保留不动，
+  但它现在没有仓库内的生产者了。
+- 修正 `app/main.py` 里那句说反的中间件注释（原文写「MCP auth runs outermost」，实际最外层是
+  `AuthContextMiddleware`；顺带说明两个身份中间件作用面不重叠）。
 
 ### Added
 

@@ -12,13 +12,13 @@ Claude Code 与自研 harness 片段**未验证**（见 [#12](#12-未做与未�
 > **工具集**：10 个 —— 读 6 个（`paper_search` / `paper_get` /
 > `paper_get_chunks` / `paper_get_context` / `paper_get_file` / `paper_job_status`）+ 写 4 个
 > （`paper_import` / `paper_reindex` / `paper_delete` / `paper_update_metadata`，默认不可见）。
-> 传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、> 宿主机 lifespan 托管 session manager、静态 Bearer 鉴权、SSRF 闸、签名下载、结构化审计。
+> 传输层、显式 `TransportSecuritySettings`（无默认、空白名单即失败）、stateless HTTP、> 宿主机 lifespan 托管 session manager、静态 Bearer 鉴权（**读工具免凭证**）、SSRF 闸、公开原件下载、结构化审计。
 > **验收脚本**：`scripts/acceptance_mcp.py` —— 只读面 **37/37**、带写面 **50/50**（退出码即结论，自带清理）。
 > **在 30 篇语料上**：`paper_search` 真实排序（int8 交叉编码器在位，3.2s）→ 9 条 citation
 > **全部带页码与章节**；`paper_get` 报 15 块 + 7 个字段的来源账本；分页游标不重叠；`paper_get_context`
-> 窗口 5 块且恰好 1 块 `primary`；**签名下载 200 / 2.2 MB 真 PDF / 篡改签名 403**；
+> 窗口 5 块且恰好 1 块 `primary`；**`paper_get_file` 给的公开链接 200 / 2.2 MB 真 PDF**；
 > REST 与 MCP 同查询 **total 与排序逐位相同**（不变式 2）。
-> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、> `app/services/download_signing.py` + `app/api/downloads.py`（签名链接与流式下载）、`app/mcp/citations.py`。
+> 落地位置：`app/services/chunk_service.py`（块读取唯一来源，REST `/chunks` 也用）、> `app/services/search_pipeline.py`（`POST /api/search` 全流程，MCP 复用）、> `app/api/papers.py` 的 file 路由 + `app/api/downloads.py`（`paper_get_file` 发的就是前者，`stream_original()` 两者共用）、`app/mcp/citations.py`。
 > 未做项见 **[#12](#12-未做与未验证事项当前口径)**（四个细化项 + 速率限制；均非缺口）。
 
 ---
@@ -44,7 +44,7 @@ paperbox 对 agent 暴露的是一个**论文知识服务**：用自然语言查
 | 读元数据 | `paper_get` | ✅ 开 | — | 只读 |
 | 读正文（按块分页） | `paper_get_chunks` | ✅ 开 | — | 只读 |
 | 读正文（围绕命中块扩展） | `paper_get_context` | ✅ 开 | — | 只读 |
-| 取原件（短期签名链接） | `paper_get_file` | ✅ 开 | — | 只读 |
+| 取原件（公开 file 路由） | `paper_get_file` | ✅ 开 | — | 只读 |
 | 查作业进度 | `paper_job_status` | ✅ 开 | — | 只读 |
 | 导入（URL / 服务端目录） | `paper_import` | ⛔ 关 | `MCP_WRITE_ENABLED` | 可逆（可删） |
 | 重建切块与向量 | `paper_reindex` | ⛔ 关 | `MCP_ALLOW_REINDEX` | 计算昂贵，数据可重建 |
@@ -248,8 +248,8 @@ env 引导行每次启动与 `.env` 重新同步：env 里删掉的名字，其 
 #### `paper_get_file`
 
 参数：`paper_id`（必填）。
-返回 `data`：`download_url`（**短期签名**，默认 300 s）、`expires_at`、`filename`、`bytes`、（可选）`page_count`。
-**契约**：URL 不含长期凭据；**原件经应用代理**（不暴露对象存储）；过期或签名被改 → 拒绝。
+返回 `data`：`download_url`（**`GET /api/papers/{paper_id}/file` 的绝对地址**）、`filename`、`bytes`、（可选）`page_count`。
+**契约**：URL **既不含凭据也不含签名、不会过期**（2026-10-12 起与 REST 读面一致，机制就是同一个路由）；**原件经应用代理**（不暴露对象存储）；取不存在的论文 → `NOT_FOUND`，软删论文按不存在处理。
 
 #### `paper_job_status`
 
@@ -295,7 +295,7 @@ paper_search(query="低功耗 SRAM 漏电", mode="hybrid")          # rerank 默
      agent 可直接写："该结论见第 7 页 III-B 节"
   → 想读上下文：paper_get_context(chunk_id=...)
   → 想通读：paper_get_chunks(paper_id=..., offset=0, limit=10)（翻页）
-  → 想核原文：paper_get_file(paper_id=...) 拿短期下载链接
+  → 想核原文：paper_get_file(paper_id=...) 拿下载链接（公开路由，无签名、不过期）
 ```
 
 ---

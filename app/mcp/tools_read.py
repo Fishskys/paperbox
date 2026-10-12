@@ -51,7 +51,6 @@ from app.schemas.search import (
 from app.services import (
     chunk_service,
     degradation_service,
-    download_signing,
     paper_service,
     provenance_service,
     search_pipeline,
@@ -131,6 +130,12 @@ def _fit_chunks(
         views.append(_view(row, text[:remaining], truncated=True))
         return views, True, start_offset + position + 1
     return views, False, None
+
+
+#: The REST route ``paper_get_file`` hands out. It needs no signature any more: the
+#: read surface is public (2026-10-12), so a plain URL to the file route is the same
+#: mechanism REST callers use. Keep it in sync with ``app/api/papers.py``.
+FILE_ROUTE = "/api/papers/{paper_id}/file"
 
 
 def _meta(tool: str, took_ms: int) -> ToolMeta:
@@ -537,11 +542,12 @@ def register(server: MCPServer) -> None:
         name="paper_get_file",
         title="Get a short-lived link to the original PDF",
         description=(
-            "Hand back a time-limited download URL for the stored original PDF. Use it "
-            "only when the raw file itself matters (figures, unusual layout, checking a "
-            "number); for reading text use paper_get_chunks or paper_get_context, which "
-            "already give you page and section references. The link expires in a few "
-            "minutes and needs no credentials: fetch it exactly as returned. "
+            "Hand back the download URL of the stored original PDF. Use it only when the "
+            "raw file itself matters (figures, unusual layout, checking a number); for "
+            "reading text use paper_get_chunks or paper_get_context, which already give "
+            "you page and section references. The URL carries no credential and does not "
+            "expire (it is the public file route, same one REST serves); fetch it exactly "
+            "as returned. "
             'Example: paper_get_file(paper_id="...")'
         ),
         meta={"toolset": settings.mcp_toolset},
@@ -558,17 +564,9 @@ def register(server: MCPServer) -> None:
                     message=f"paper {paper_id!r} has no stored original file",
                     hint="the paper may be a metadata-only shell: see paper_get",
                 )
-            try:
-                url, expires_at = download_signing.build_url(paper_id, base_url)
-            except RuntimeError as exc:
-                raise errors.ToolFailure(
-                    code=errors.INTERNAL,
-                    message=str(exc),
-                    hint="ask the operator to set MCP_DOWNLOAD_SECRET",
-                ) from exc
             data = FileData(
-                download_url=url,
-                expires_at=expires_at,
+                download_url=f"{base_url.rstrip('/')}"
+                f"{FILE_ROUTE.format(paper_id=paper_id)}",
                 filename=record.filename or "original.pdf",
                 bytes=record.size_bytes,
                 content_type=record.content_type,
@@ -581,13 +579,15 @@ def register(server: MCPServer) -> None:
             agent=auth.agent_name(),
             arguments={"paper_id": paper_id},
             outcome="ok",
-            affected={"bytes": data.bytes, "ttl_s": download_signing.ttl_seconds()},
+            affected={"bytes": data.bytes},
             took_ms=took_ms,
         )
         return Envelope[FileData](
             data=data,
             meta=_meta("paper_get_file", took_ms),
-            warnings=[f"the link expires at {data.expires_at.isoformat()}"],
+            warnings=[
+                "the download URL carries no credential and does not expire"
+            ],
             citations=[],
         )
 

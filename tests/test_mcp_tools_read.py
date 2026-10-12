@@ -457,11 +457,12 @@ def test_context_with_a_tiny_budget_still_answers_about_the_target(
 
 
 # --------------------------------------------------------------------------- #
-# paper_get_file (signed link)
+# paper_get_file (the public file route)
 # --------------------------------------------------------------------------- #
-def test_get_file_returns_a_signed_link_without_credentials(
+def test_get_file_returns_the_public_file_url(
     mcp_client, session_factory, monkeypatch
 ) -> None:
+    """2026-10-12: no signature at all -- the same route (and mechanism) REST uses."""
     paper_id = make_paper(session_factory, chunks=2)
     record = _record(paper_id=paper_id)
     monkeypatch.setattr(
@@ -470,24 +471,67 @@ def test_get_file_returns_a_signed_link_without_credentials(
     monkeypatch.setattr(settings, "mcp_public_base_url", "http://paperbox.lan:8077")
 
     envelope = call(mcp_client, "paper_get_file", {"paper_id": paper_id})
-    url = envelope["data"]["download_url"]
+    data = envelope["data"]
     # The host comes from the request the agent actually made (testserver here),
     # never from a hard-coded public URL: the same server answers on several
     # addresses on a LAN.
-    assert url.startswith(f"http://testserver/api/downloads/{paper_id}?")
-    assert "sig=" in url and "exp=" in url
-    # No long-lived credential ever appears in a URL an agent will paste around.
-    assert settings.paper_api_key not in url
-    assert envelope["data"]["bytes"] == 1234
-    assert envelope["data"]["page_count"] == 2
-    assert any("expires at" in item for item in envelope["warnings"])
+    assert data["download_url"] == f"http://testserver/api/papers/{paper_id}/file"
+    # Neither a credential nor a signature: it is the plain read route.
+    assert "sig=" not in data["download_url"] and "exp=" not in data["download_url"]
+    assert settings.paper_api_key not in data["download_url"]
+    assert "expires_at" not in data
+    assert data["bytes"] == 1234
+    assert data["page_count"] == 2
+    assert any("no credential" in item for item in envelope["warnings"])
 
-    query = dict(part.split("=") for part in url.split("?", 1)[1].split("&"))
-    assert download_signing.verify(paper_id, int(query["exp"]), query["sig"])
-    # Flip one character for real: patching a hex digit with itself (an earlier
-    # version of this test wrote "0" over a "0") would assert nothing.
-    tampered = query["sig"][:-1] + ("f" if query["sig"][-1] != "f" else "0")
-    assert download_signing.verify(paper_id, int(query["exp"]), tampered) is False
+
+def test_the_public_file_route_streams_the_original(
+    paper_client, session_factory, monkeypatch
+) -> None:
+    """Fetch ``paper_get_file``'s URL as a plain client: no key, no query string."""
+    paper_id = make_paper(session_factory, chunks=1)
+    _store_original(session_factory, paper_id)
+
+    class _Body(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+
+    monkeypatch.setattr(
+        "app.api.downloads.object_storage.open_stream",
+        lambda key, bucket=None: _Body(b"%PDF-"),
+    )
+
+    response = paper_client.get(f"/api/papers/{paper_id}/file")
+    assert response.status_code == 200
+    assert response.content == b"%PDF-"
+    assert response.headers["content-disposition"].startswith("attachment")
+
+
+def _store_original(session_factory, paper_id: str, size: int = 5) -> None:
+    """Give a paper a primary ``original`` file row (the route needs one)."""
+    from app.db.models import Paper, PaperFile
+
+    session = session_factory()
+    try:
+        paper = session.get(Paper, paper_id)
+        session.add(
+            PaperFile(
+                paper_id=paper.id,
+                kind="original",
+                object_key=f"papers/{paper_id}/original.pdf",
+                bucket="paperbox",
+                filename="original.pdf",
+                content_type="application/pdf",
+                size_bytes=size,
+                is_primary=True,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
 
 
 def test_download_host_falls_back_to_configuration_without_a_request(monkeypatch) -> None:
@@ -545,27 +589,7 @@ def paper_client(session_factory):
 
 def test_signed_route_streams_the_file(paper_client, session_factory, monkeypatch) -> None:
     paper_id = make_paper(session_factory, chunks=1)
-    session = session_factory()
-    try:
-        paper = session.get(Paper, paper_id)
-        from app.db.models import PaperFile
-        from app.services.paper_service import primary_priority  # noqa: F401
-
-        session.add(
-            PaperFile(
-                paper_id=paper.id,
-                kind="original",
-                object_key=f"papers/{paper_id}/original.pdf",
-                bucket="paperbox",
-                filename="original.pdf",
-                content_type="application/pdf",
-                size_bytes=5,
-                is_primary=True,
-            )
-        )
-        session.commit()
-    finally:
-        session.close()
+    _store_original(session_factory, paper_id)
 
     monkeypatch.setattr(settings, "mcp_download_secret", "test-secret")
 

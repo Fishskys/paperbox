@@ -357,7 +357,7 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 | `MCP_WAIT_SECONDS` | 写工具等待作业完成的秒数 | `120` | 客户端 per-tool timeout 要 ≥ 它 |
 | `MCP_DOWNLOAD_TTL_SECONDS` 之外的下载密钥 `MCP_DOWNLOAD_SECRET` | 签名下载链接的 HMAC 密钥 | 空 | 空则回落 `PAPER_API_KEY`；轮换任一会使未过期链接全部失效（设计如此） |
 | `MCP_PUBLIC_BASE_URL` | 下载链接的对外基地址 | 空 | 仅 stdio 兜底用：正常情况下链接按 agent 实际访问的 host 拼 |
-| `MCP_DOWNLOAD_TTL_SECONDS` | `paper_get_file` 签名链接有效期 | `300` | 链接不含长期凭据，过期/篡改一律 403 |
+| `MCP_DOWNLOAD_TTL_SECONDS` | `/api/downloads/{paper_id}` 签名链接有效期 | `300` | 只作用于这条签名路由；MCP 的 `paper_get_file` 发的是公开 file 路由，与它无关 |
 
 起服务（示例，把 `<IP>` 换成 agent 会访问的地址）：
 
@@ -378,7 +378,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 读 | `paper_get` | 单篇元数据 + 字段来源（provenance）+ 解析降级记录 |
 | 读 | `paper_get_chunks` | 按阅读顺序读正文，带字符预算与续读游标 |
 | 读 | `paper_get_context` | 取某个证据块的前后文（把结论放回上下文） |
-| 读 | `paper_get_file` | 取短期签名链接下载 PDF 原件 |
+| 读 | `paper_get_file` | 给 PDF 原件的下载链接（`/api/papers/{id}/file`，公开、无签名、不过期） |
 | 读 | `paper_job_status` | 跟踪导入/重建作业 |
 | 写 | `paper_import` | 导入一篇（URL 或服务器上的 PDF 路径） |
 | 写 | `paper_reindex` | 重建某篇的切块与向量（默认 `dry_run=true` 只报影响面） |
@@ -457,7 +457,7 @@ curl -X POST http://127.0.0.1:8077/api/papers/ingest/files \
 | DELETE | `/api/papers/{paper_id}` | 删除论文（软删，返回 204） | `paper_id`（路径，**必填**） |
 | GET | `/api/papers/{paper_id}/chunks` | 该论文的切块列表 | `paper_id`（**必填**）、`limit`（默认 50）、`offset`（默认 0） |
 | GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件（需 API key） | `paper_id`（**必填**） |
-| GET | `/api/downloads/{paper_id}` | 下载 PDF 原件（**短期签名链接，无需 API key**；由 MCP 的 `paper_get_file` 发放） | `paper_id`（**必填**）、`exp`（Unix 过期时间）、`sig`（HMAC 签名） |
+| GET | `/api/downloads/{paper_id}` | 下载 PDF 原件（**短期签名链接，无需 API key**） | `paper_id`（**必填**）、`exp`（Unix 过期时间）、`sig`（HMAC 签名）；`paper_get_file` 不发这条链接 |
 | GET | `/api/papers/{paper_id}/degradations` | 该论文的解析降级记录 | `paper_id`（**必填**）、`include_resolved`（默认 `false`） |
 | POST | `/api/papers/{paper_id}/reindex` | 重建该论文的切块与向量（返回 202） | `paper_id`（**必填**） |
 
