@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **读门策略化 + 四档档位**（2026-10-12）：新增 `AUTH_READ_ACCESS`（`public` | `key`，默认 `public`），
+  把「读要不要凭证」从一个代码事实变成一个配置项 —— 默认值与今天逐项一致（唯一差异：匿名请求的
+  日志/检索归因由空串变为 `anonymous`），设为 `key` 则读端点与写端点同一套规矩，`read` 档密钥
+  重新有意义。`AUTH_ENABLED` 只管凭据面、`AUTH_READ_ACCESS` 只切读门：**写与 `admin` 端点的表现在
+  两种取值下完全一致**（门先判 `is_anonymous`，匿名碰写门恒为 401）。
+- **档位重排**：权限定为 4 级（`public` + `read < write < admin`），删除从 `admin` 并入 `write`，
+  `admin` 只留给**批量/整库重建**（`POST /api/papers/reindex`）。MCP 侧四个写工具统一 `write`
+  （`paper_delete` 不再要 `admin`），MCP 面上因此暂时没有 `admin` 专属工具。
+- `AUTH_ENABLED=false` 与 `AUTH_READ_ACCESS=key` 的组合不再打启动 WARNING（该键此时没有作用对象，
+  属合法组合）；取值非法仍启动即报错。`scripts/probe_public_reads.py` 改为**策略自适应**
+  （先探测两个开关，再断言对应矩阵，两态真机均全绿）。
+
 ### Fixed
 
 - `scripts/acceptance_auth.py` 读放开之后**误判服务端鉴权状态**：它拿 `GET /api/papers` 当探针，
