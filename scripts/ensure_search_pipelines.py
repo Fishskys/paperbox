@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Search pipelines: the deployment-state objects the native backend needs (plan §7 T-E4).
+"""Search pipelines: the deployment-state objects the native backend needs (plan section 7 T-E4).
 
     uv run python scripts/ensure_search_pipelines.py           # create / refresh
     uv run python scripts/ensure_search_pipelines.py --check    # read-only drift check

@@ -57,7 +57,7 @@ def log_call(
 
     ``key_prefix`` comes from the request's identity (``app.mcp.auth``), not from
     the arguments: it answers "which credential did this" without ever carrying
-    key material (plan: 2026-10-05_145619-api-auth-keys-roles §7.6).
+    key material (plan: 2026-10-05_145619-api-auth-keys-roles section 7.6).
     """
     from app.mcp import auth
 

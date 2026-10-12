@@ -1,4 +1,4 @@
-"""Unit tests for the API key store (plan: 2026-10-05_145619-api-auth-keys-roles §5-§6).
+"""Unit tests for the API key store (plan: 2026-10-05_145619-api-auth-keys-roles section 5-6).
 
 Pure service layer over the in-memory SQLite schema — no HTTP, no real database.
 The store is the single authentication source for REST and MCP, so these tests

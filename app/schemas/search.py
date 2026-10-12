@@ -411,7 +411,7 @@ class SearchResponse(BaseModel):
     rewritten_query: str | None = None
     mode: str
     #: Retrieval backend that produced this page (``python`` | ``native``,
-    #: plan §7 M5). Always ``python`` for the single-leg modes.
+    #: plan section 7 M5). Always ``python`` for the single-leg modes.
     backend: str = DEFAULT_BACKEND
     #: 本次查询 + 过滤条件下命中的**论文**数（引擎 ``cardinality(paper_id)``
     #: 真值，见 ``app.search.hybrid.count_papers``）。

@@ -460,7 +460,7 @@ def test_dismiss_keeps_the_current_value_and_closes_the_dispute(db_session) -> N
 
 
 def test_a_dismissed_claim_can_still_be_rolled_back(db_session) -> None:
-    """驳回不删历史：真觉得被拒值对，照样能回滚（设计 §8 规则 5）。"""
+    """驳回不删历史：真觉得被拒值对，照样能回滚（设计 第 8 节 规则 5）。"""
     paper = make_paper(db_session)
     provenance_service.set_field(db_session, paper, "authors", ["Zhuocheng Zhang"])
     losing = provenance_service.record_claim(

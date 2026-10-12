@@ -1,4 +1,4 @@
-"""Unit tests for semantic chunking (plan 2026-09-28_160551 §2 T7.2).
+"""Unit tests for semantic chunking (plan 2026-09-28_160551 section 2 T7.2).
 
 The embedding callable is always a local fake: ``embed_fn=None`` keeps the
 length policy, so nothing here needs (or touches) the embedding server. The

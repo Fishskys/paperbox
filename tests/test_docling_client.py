@@ -1,4 +1,4 @@
-"""Tests for the docling-serve client (plan §2 T4).
+"""Tests for the docling-serve client (plan section 2 T4).
 
 No network and no services: every request goes through ``httpx.MockTransport``,
 and the multipart body is parsed back so the *wire contract* (form field names,

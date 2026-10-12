@@ -10,7 +10,7 @@ wiring: extracting the credential from the request and enforcing role tiers.
 
 ``AUTH_ENABLED=false`` (the deployed default) short-circuits everything: every
 caller gets the anonymous admin identity and the log prefix ``anonymous``. The
-switch is all-or-nothing by design (plan §3 D2) — a half-enforced auth would be
+switch is all-or-nothing by design (plan section 3 D2) — a half-enforced auth would be
 worse than none.
 """
 
@@ -70,7 +70,7 @@ def require_role(minimum: str):
     """Build a FastAPI dependency enforcing ``minimum`` (tiers are monotonic).
 
     401 for a missing credential, 403 for an unmatched one, 403 with a distinct
-    detail for a matched key whose tier is too low (plan §3 D9) — a client can
+    detail for a matched key whose tier is too low (plan section 3 D9) — a client can
     tell "rotate your key" from "ask for a stronger key".
     """
     minimum_name = minimum

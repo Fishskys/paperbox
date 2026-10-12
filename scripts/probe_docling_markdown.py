@@ -61,7 +61,7 @@ DEFAULT_HEADING_OPTIONS = json.dumps(
     separators=(",", ":"),
 )
 
-#: Multipart fields matching the parameter mapping table in the plan (§1.3).
+#: Multipart fields matching the parameter mapping table in the plan (section 1.3).
 #: Values are strings because they all travel as form fields; pydantic coerces.
 COMMON_FIELDS: list[tuple[str, str]] = [
     # The server default is True: OCR has to be switched off explicitly.

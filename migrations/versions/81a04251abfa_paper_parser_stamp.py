@@ -2,7 +2,7 @@
 
 Records which parser produced the chunks that are indexed for a paper, so a
 library that mixes docling-parsed and pypdf-parsed papers stays visible instead
-of silent (plan §6.1 step 2).
+of silent (plan section 6.1 step 2).
 
 ``NULL`` means "unknown": rows indexed before the stamp existed, which is not the
 same as "parsed by the wrong backend". Backend counts and per-paper mismatches

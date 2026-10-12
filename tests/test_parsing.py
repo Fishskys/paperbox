@@ -1,4 +1,4 @@
-"""Unit tests for PDF parsing, section detection and chunking (MVP-SPEC §6)."""
+"""Unit tests for PDF parsing, section detection and chunking (MVP-SPEC section 6)."""
 
 from __future__ import annotations
 

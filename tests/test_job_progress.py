@@ -180,7 +180,7 @@ def stubbed_pipeline(monkeypatch):
 
         Everything after it is real: this bundle goes through the actual
         ``chunk_markdown``, so the assertions below still describe the production
-        chunking path (plan §6.1).
+        chunking path (plan section 6.1).
         """
         markdown = "# body\n\nsome chunk text\n"
         page_count, spans = page_spans_from_markdown(markdown)

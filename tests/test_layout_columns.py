@@ -1,4 +1,4 @@
-"""Tests for the pypdf reading-order repair (plan §2 T5, decision 14).
+"""Tests for the pypdf reading-order repair (plan section 2 T5, decision 14).
 
 Two layers:
 

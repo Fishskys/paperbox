@@ -1,4 +1,4 @@
-"""Pick the parser backend and degrade with a reason (plan §2 T6).
+"""Pick the parser backend and degrade with a reason (plan section 2 T6).
 
 One entry point for the ingestion pipeline: ``parse_pdf()`` prefers docling and
 falls back to pypdf when the docling call fails, always recording *why* in

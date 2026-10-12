@@ -14,7 +14,7 @@ Three modes are supported:
     a weight of 0 disables that leg). This is the default mode of
     ``POST /api/search``.
 
-``SEARCH_BACKEND=native`` (plan §7, M5) swaps *that* fusion for the engine's own
+``SEARCH_BACKEND=native`` (plan section 7, M5) swaps *that* fusion for the engine's own
     one: a single ``hybrid`` request whose legs are fused by the
     ``paperbox-rrf60`` search pipeline and whose hits are collapsed to papers by
     ``collapse(paper_id)`` -- see ``app/search/native.py``. Only ``mode=hybrid``

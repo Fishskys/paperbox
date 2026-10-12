@@ -1,4 +1,4 @@
-"""The shared markdown dialect of both parser backends (plan §1.1 / §1.2, T5).
+"""The shared markdown dialect of both parser backends (plan section 1.1/1.2, T5).
 
 docling produces markdown natively; the pypdf fallback has to produce *the same
 shape* so that chunking (the next phase) only ever sees one dialect. This module
@@ -14,7 +14,7 @@ holds that dialect in one place:
   a stray 7th level (decision 12) and promote the paper title to ``#`` (decision
   8, see the note below).
 
-Known, accepted differences (plan §1.2, decision 15) -- never pretend these are
+Known, accepted differences (plan section 1.2, decision 15) -- never pretend these are
 equal: the fallback renders tables as text rows, has no LaTeX for formulas and
 cannot see images, while docling emits GFM tables, ``$$…$$`` and placeholders.
 """
@@ -112,7 +112,7 @@ class ParseBundle:
 
 
 def normalize_markdown(text: str) -> str:
-    """Apply the dialect's normalization (plan §1.2, last row).
+    """Apply the dialect's normalization (plan section 1.2, last row).
 
     LF line endings, no trailing whitespace, runs of blank lines collapsed to
     one, runs of spaces collapsed to one, ``&gt;``-style escapes decoded, exotic
@@ -221,7 +221,7 @@ def promote_paper_title(
     """Promote the paper title from ``##`` to ``#`` on the docling side.
 
     docling-serve 1.35.0's markdown export never emits ``#`` (measured, plan
-    §0.6①): the paper title and a first-level section both come out as ``##``.
+    section 0.6①): the paper title and a first-level section both come out as ``##``.
     The agreed rule (decision 8, approved 2026-09-29) is that **the first ``##``
     located before ``Abstract``/``I.`` is the paper title** -- so scanning stops
     at the first line of real content, and a document whose first heading is
@@ -319,7 +319,7 @@ def pages_and_sections_from_markdown(
     The dialect carries everything section detection needs -- ``#`` levels for
     the hierarchy, the page marker for the page grid -- so **both** backends
     feed the same chunker: switching backends changes the text, not the chunking
-    policy (plan §6.1 step 1). ``pages`` are the markdown's own page slices, so a
+    policy (plan section 6.1 step 1). ``pages`` are the markdown's own page slices, so a
     chunk's ``page_start``/``page_end`` still come from a page span.
 
     The result mirrors ``structure.detect_sections`` on the fallback's pages:

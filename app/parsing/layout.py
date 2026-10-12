@@ -1,4 +1,4 @@
-"""Reading-order repair for the pypdf backend (plan §2 T5, decision 14).
+"""Reading-order repair for the pypdf backend (plan section 2 T5, decision 14).
 
 docling gets the reading order from its layout model; ``pypdf`` returns text in
 **content-stream order**, which is wrong for the common two-column IEEE/ACM page

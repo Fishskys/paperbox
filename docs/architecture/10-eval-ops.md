@@ -13,7 +13,7 @@
 - 检索质量的**量化闭环**：纯函数指标 → 定标集 → 对**运行中的服务**跑评测 → JSON/报告落盘（`app/eval/metrics.py`、`scripts/eval.py`）。
 - 定标集的**可复现构建**：人工 spec → 解析到真实 `paper_id`（`scripts/build_eval_set.py`）；语料清单生成（`scripts/build_arxiv_ids.py`）。
 - **真机运维脚本**：健康检查、端到端验收、批量导入、重建索引、清理已删论文残留、索引迁移（`scripts/*.py`，见 [#2](#2-关键文件与函数文件--函数类--作用) 与 [#5](#5-不变量与踩过的坑) 总表）。
-- **部署两形态**的配置与陷阱：本机（WSL Docker + 宿主 app）与 Linux 服务器（宿主直跑或容器化），见 [UserManual.md 部署章](../UserManual.md#1-详细部署教程)。
+- **部署两形态**的配置与陷阱：本机（WSL Docker + 宿主 app）与 Linux 服务器（宿主直跑或容器化），见 [UserManual.md 部署章](../../UserManual.md#1-详细部署教程)。
 - **目录纪律**：运行日志一律进 `logs/{codex,app,eval}/`，仓库根不写 `*.log`（`.gitignore:23-24`）。
 
 **不做**
@@ -365,7 +365,7 @@ uv run python scripts/compare_backends.py --report evals/report-m5-backend-ab.js
 **结果（60 查询 × 2 后端 = 120 请求，0 失败）**：`hybrid|off` 两条路径**逐位相同**（同深度 Δ 恰好 `+0.0000`、CI 宽度 0）；`hybrid|on` 的 `ndcg@1/3/5`、`mrr`、`hit_rate@1`、同深度 `ndcg@K*` 全部 CI 跨 0，`ndcg@10 +0.0231`（CI `[+0.0042, +0.0431]`）与
 `recall@10 +0.0944`、`recall@5 +0.0444` 为 native 胜出，`p50` 6640 → 5458 ms（`−17.8%`）。
 **结论：门槛级无回退，`SEARCH_BACKEND` 定档 `native`**（`python` 保留为基线与降级路径）。
-数字与修前/修后对照见 `docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)，契约见本文件 [10. 后端 A/B](#10-后端-a/bnative-vs-python)。
+数字与修前/修后对照见 `docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)，契约见本文件 [10. 后端 A/B](#10-后端-abnative-vs-python)。
 
 **工具自身的坑（改它之前先看）**：
 

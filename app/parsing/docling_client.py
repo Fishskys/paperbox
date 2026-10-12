@@ -1,4 +1,4 @@
-"""Thin HTTP client for docling-serve (plan 2026-09-28_160551 §1.3 / §2 T4).
+"""Thin HTTP client for docling-serve (plan 2026-09-28_160551 section 1.3/2 T4).
 
 docling runs as a **separate service** (a container, since 2026-09-29 on the fnOS
 NAS) rather than an in-process library, because one conversion saturates the CPU
@@ -48,10 +48,10 @@ VERSION_PATH = "/version"
 #: cost, not a deployment knob.
 DOCLING_CONNECT_TIMEOUT = 10.0
 
-#: ``pdf_heading_hierarchy_options`` as frozen in the contract (plan §1.3).
+#: ``pdf_heading_hierarchy_options`` as frozen in the contract (plan section 1.3).
 #: Measured caveat: in docling-serve 1.35.0 this is a **no-op for the markdown
 #: export** -- the relative levels actually come from ``do_pdf_heading_hierarchy``,
-#: and the paper title's ``#`` is added by our own post-processing (plan §0.6).
+#: and the paper title's ``#`` is added by our own post-processing (plan section 0.6).
 #: It is still sent so the wire contract matches what was agreed, and
 #: ``max_level=6`` clamps a stray level-7 (plan decision 12).
 HEADING_HIERARCHY_OPTIONS: dict[str, Any] = {
@@ -62,7 +62,7 @@ HEADING_HIERARCHY_OPTIONS: dict[str, Any] = {
     "max_level": 6,
 }
 
-#: Fields from the plan's §1.3 mapping table that never change per request.
+#: Fields from the plan's section 1.3 mapping table that never change per request.
 #: Values are strings because everything travels as a form field.
 STATIC_FIELDS: dict[str, str] = {
     "md_compact_tables": "true",

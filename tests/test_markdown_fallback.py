@@ -1,4 +1,4 @@
-"""Tests for the shared markdown dialect (plan §1.1/§1.2, task T5).
+"""Tests for the shared markdown dialect (plan section 1.1/1.2, task T5).
 
 The pypdf side has to produce the same *shape* docling produces, so these tests
 pin the shape: one heading per section with the fallback's own level rules,

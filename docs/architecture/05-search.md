@@ -185,7 +185,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 
 **定档依据（`SEARCH_BACKEND` 默认 `native`）**：`hybrid|off` 组两条路径**逐位相同**（同深度 `ndcg@K*`/`recall@K*`/`hit_rate@1` 的 Δ 恰好 `+0.0000`、CI 宽度 0）；`hybrid|on` 组
 `ndcg@1`/`ndcg@3`/`ndcg@5`/`mrr`/`hit_rate@1`/同深度 `ndcg@K*` **全部 CI 跨 0（无法区分）**，而 `ndcg@10` **+0.0231（CI [+0.0042, +0.0431]）**、`recall@10` +0.0944、`recall@5` +0.0444 均为 native 胜出，`p50` 6640 → 5458 ms（**−17.8%**）。`python` 路径因此**保留**作 A/B 基线与降级路径。数字与修前/修后对照见
-`docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)，判据与跑法见 [10-eval-ops.md](10-eval-ops.md#10-后端-a/bnative-vs-python)。
+`docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)，判据与跑法见 [10-eval-ops.md](10-eval-ops.md#10-后端-abnative-vs-python)。
 
 ## 5. 不变量与踩过的坑
 

@@ -133,7 +133,7 @@ services:
       RERANK_MODEL: ${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
       # 不在 fastembed 内置清单里的精排模型要指出仓库内的 ONNX 文件：多数导出是
       # onnx/model.onnx，动态 int8 量化导出常在仓库根（model.onnx）—— 见
-      # docs/architecture/06-rerank-rewrite.md §6
+      # docs/architecture/06-rerank-rewrite.md section 6
       RERANK_MODEL_FILE: ${RERANK_MODEL_FILE:-onnx/model.onnx}
       HF_ENDPOINT: "https://hf-mirror.com"
       HF_HUB_DISABLE_XET: "1"
@@ -176,7 +176,7 @@ services:
   # 镜像: CPU 版 4.4GB，模型烤在镜像里（不需要联网下载）。**tag 必须写死**（解析结果要可追溯，
   #       也避免 latest 漂移后同一份 PDF 解析出不同结果）。本机无 NVIDIA 卡（Ryzen 5 5600U/15.4GB），
   #       所以只能 CPU 版；有卡时换 quay.io/docling-project/docling-serve-cu128:<tag>（注意 CUDA 镜像没有 latest 标签）。
-  # 端口: 宿主 8091 → 容器 5001。**新增容器后必须在 WSL 里放行**: ufw allow 8091/tcp（AGENTS.md §3.2）。
+  # 端口: 宿主 8091 → 容器 5001。**新增容器后必须在 WSL 里放行**: ufw allow 8091/tcp（AGENTS.md 第 3.2 节）。
   # 内存: WSL 上限 9GB，实测 embedding 容器已占 4.3GB + OpenSearch 1.3GB，只剩 ~1.7GB 余量。
   #       这里**故意设上限**：宁可 docling 被 OOM-kill（app 侧会降级回 pypdf），也不要连累
   #       embedding/精排容器（它们没有降级路径，历史上被 OOM-killer 杀过）。

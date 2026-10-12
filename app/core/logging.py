@@ -23,7 +23,7 @@ REQUEST_ID_HEADER = "X-Request-ID"
 
 _request_id_var: ContextVar[str | None] = ContextVar("paperbox_request_id", default=None)
 #: Readable prefix of the credential serving the current request (plan:
-#: 2026-10-05_145619-api-auth-keys-roles §7.6). Never the full key — the prefix
+#: 2026-10-05_145619-api-auth-keys-roles section 7.6). Never the full key — the prefix
 #: is the attribution key: ``anonymous`` when auth is off, ``-`` outside a request.
 _key_prefix_var: ContextVar[str | None] = ContextVar("paperbox_key_prefix", default=None)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired A/B of the retrieval backends, with a noise floor (plan §7 T-E5).
+"""Paired A/B of the retrieval backends, with a noise floor (plan section 7 T-E5).
 
     uv run python scripts/compare_backends.py --report evals/report-m5-backend-ab.json
 
@@ -453,7 +453,7 @@ def decide(
 ) -> dict[str, Any]:
     """Is the **candidate** worse than the baseline? (Every group, not one.)
 
-    The gate (plan §7 T-E5) is "no regression on the headline metrics", so a
+    The gate (plan section 7 T-E5) is "no regression on the headline metrics", so a
     single group cannot decide it: the production path reranks, so ``hybrid|on``
     matters as much as the fusion-only ``hybrid|off``. Metrics outside
     :data:`PRIMARY_METRICS` are not judged but reported as caveats -- ``ndcg@1``

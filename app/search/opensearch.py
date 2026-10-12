@@ -289,7 +289,7 @@ def build_chunk_document(row: dict[str, Any]) -> dict[str, Any]:
         "embedding_dimension": row.get("embedding_dimension")
         or settings.embedding_dimension,
     }
-    # Provenance of the *text*: which parser produced it (plan §6.1 step 2).
+    # Provenance of the *text*: which parser produced it (plan section 6.1 step 2).
     # Not a filter exposed by ``POST /api/search`` (hence not in KEYWORD_FIELDS),
     # but a keyword field in the index, so ``parser_backend: pypdf`` finds what a
     # backend switch did not reach. NULL means the paper predates the stamp --

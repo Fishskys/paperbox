@@ -1,4 +1,4 @@
-"""Native hybrid retrieval: engine-side fusion + paper collapse (plan §7, M5).
+"""Native hybrid retrieval: engine-side fusion + paper collapse (plan section 7, M5).
 
 The default hybrid path (``app.search.hybrid``) runs **two** queries, fuses the
 ranked id lists in Python (``app.search.ranking.rrf_fuse``) and aggregates chunks
@@ -236,7 +236,7 @@ def parse_native_response(response: Mapping[str, Any]) -> list[ChunkHit]:
       would make the evidence scores incomparable with the ranked list; the
       sibling's own score is therefore dropped.
     * **``keyword_score`` / ``semantic_score`` stay ``None``**: one fused score is
-      all the engine reports (plan §7 T-E2).
+      all the engine reports (plan section 7 T-E2).
     """
     hits: list[ChunkHit] = []
     for hit in (response.get("hits") or {}).get("hits") or []:

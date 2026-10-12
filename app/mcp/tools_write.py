@@ -97,7 +97,7 @@ def require(variable: str, tool: str) -> None:
 
 
 def require_role(tool: str, minimum: str) -> None:
-    """Call-time tier check (plan §4.3): the key's role must reach ``minimum``.
+    """Call-time tier check (plan section 4.3): the key's role must reach ``minimum``.
 
     Registration cannot do this -- which tools a key may call depends on the
     key, not the build. With ``AUTH_ENABLED=false`` every caller is the

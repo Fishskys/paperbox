@@ -546,7 +546,7 @@ def _run_pipeline(
 
     # Parsing happens *here* rather than with the metadata steps above: a
     # duplicate fingerprint or a non-primary version ends the job before this
-    # point, and docling costs 30-370 s per paper (plan §6.1 step 2). Reindexing
+    # point, and docling costs 30-370 s per paper (plan section 6.1 step 2). Reindexing
     # replays the stored artifacts instead of paying that again.
     bundle = parser_service.parse_paper_file(
         paper.id,
@@ -554,7 +554,7 @@ def _run_pipeline(
         filename=object_key.rsplit("/", 1)[-1],
         on_degrade=degradations,
     )
-    # The stamp makes a mixed library visible (plan §6.1 step 2): a degraded
+    # The stamp makes a mixed library visible (plan section 6.1 step 2): a degraded
     # parse stamps ``pypdf``, so "docling is unreachable" is queryable later.
     paper.parser_backend = bundle.backend
     # NULL means "the parser did not report a version", which is not the same as
@@ -1291,7 +1291,7 @@ def _index_rows(
             "embedding_model": settings.embedding_model,
             "embedding_dimension": settings.embedding_dimension,
             # Provenance of the *text*: written from the stamp the parse just
-            # put on the paper row (plan §6.1 step 2). ``refresh_index_metadata``
+            # put on the paper row (plan section 6.1 step 2). ``refresh_index_metadata``
             # deliberately does not touch these -- a metadata refresh must not
             # make a stale parse look fresh.
             "parser_backend": paper.parser_backend,

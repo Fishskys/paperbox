@@ -229,7 +229,7 @@ def dismiss_paper_conflict(
     """人类裁决：保留现值，这条分歧不再进复核清单。
 
     与 ``rollback`` 配对 —— 那条是"被拒值其实是对的"。两者都不删任何声明，只改"哪条生效"
-    或"分歧是否还开着"，所以此后仍可回滚（设计 §8 规则 5）。
+    或"分歧是否还开着"，所以此后仍可回滚（设计 第 8 节 规则 5）。
     """
     paper = _load_paper(session, paper_id)
     try:
@@ -303,7 +303,7 @@ def reindex_library_endpoint(
     body: ReindexIn,
     session: Session = Depends(get_db),
 ) -> ReindexOut:
-    """整库/批量重建索引：先**检测**为什么要重建，再按论文入队（plan §24）。
+    """整库/批量重建索引：先**检测**为什么要重建，再按论文入队（plan 第 24 节）。
 
     两种真实场景驱动它：**换了 embedding 模型**（旧向量与新查询不可比，必须整库重嵌）与
     **从 pypdf 换成 docling**（要重新解析才能吃到新产物）。检测不止这两种，见

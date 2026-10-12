@@ -112,7 +112,7 @@ POST /mcp（Streamable HTTP，Bearer）
 
 ## 6. 配置项
 
-所有配置键以 `app/core/config.py`（pydantic-settings）为源，仓库根 `.env` 提供值；容器侧变量在 `infra/.env`（见 [UserManual.md 应用配置](../UserManual.md#13-应用配置根-env)）。键名/默认值/作用见各模块文档 [#6](#6-配置项)，或 `.env.example`。
+所有配置键以 `app/core/config.py`（pydantic-settings）为源，仓库根 `.env` 提供值；容器侧变量在 `infra/.env`（见 [UserManual.md 应用配置](../../UserManual.md#13-应用配置根-env)）。键名/默认值/作用见各模块文档 [#6](#6-配置项)，或 `.env.example`。
 
 ## 7. 测试
 

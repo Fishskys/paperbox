@@ -62,7 +62,7 @@ ISSUE_DELETED_RESIDUE = "deleted_paper_residue"
 #: The parser stamp on ``papers`` and the ``parser_backend`` carried by that
 #: paper's documents disagree, or the documents are split across backends: the
 #: library mixes parsers in a state that was never committed as a whole (plan
-#: §6.1 step 2). A missing stamp on either side counts as ``unknown``, so papers
+#: section 6.1 step 2). A missing stamp on either side counts as ``unknown``, so papers
 #: indexed before the stamp existed are *not* reported.
 ISSUE_PARSER_STAMP_MISMATCH = "parser_stamp_mismatch"
 #: One paper's vectors were embedded by more than one model (its PostgreSQL

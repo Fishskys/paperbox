@@ -130,7 +130,7 @@ class Paper(TimestampMixin, Base):
     embedding_dimension: Mapped[int | None] = mapped_column(Integer)
 
     #: Which parser produced the chunks that are indexed for this paper, and the
-    #: version string that parser reported (plan §6.1 step 2). ``NULL`` means the
+    #: version string that parser reported (plan section 6.1 step 2). ``NULL`` means the
     #: paper was indexed before the stamp existed -- unknown, not "wrong".
     #: Reindexing refreshes both; ``GET /api/consistency`` compares them against
     #: the index documents so a mixed library is visible instead of silent.
@@ -817,7 +817,7 @@ class SearchQuery(Base):
     took_ms: Mapped[int | None] = mapped_column(Integer)
     results: Mapped[list | None] = mapped_column(JSONB)
     #: Which credential asked for this search — the key's readable prefix, never
-    #: the full key (plan: api-auth-keys-roles §7.6). ``NULL`` on pre-2026-10 rows.
+    #: the full key (plan: api-auth-keys-roles section 7.6). ``NULL`` on pre-2026-10 rows.
     key_prefix: Mapped[str | None] = mapped_column(String(16))
 
     created_at: Mapped[datetime] = mapped_column(

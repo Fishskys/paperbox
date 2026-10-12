@@ -38,7 +38,7 @@ evals/archive/papers.json
 evals/archive/paper_files.json
 evals/archive/paper_sources.json
 codex_*.log
-# 运行日志统一放 logs/（codex/app/eval），根目录不要再出现 *.log —— 见 progress.md §6
+# 运行日志统一放 logs/（codex/app/eval），根目录不要再出现 *.log —— 见 progress.md 第 6 节
 logs/
 # 本地 pg_dump 备份（scripts 里 pg_dump 的产物，含真实数据，绝不入库）
 backups/

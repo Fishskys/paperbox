@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-machine acceptance for the auth system (plan: 2026-10-05_145619-api-auth-keys-roles §10).
+"""Real-machine acceptance for the auth system (plan: 2026-10-05_145619-api-auth-keys-roles section 10).
 
     uv run python scripts/acceptance_auth.py            # run against a live server
     uv run python scripts/acceptance_auth.py --cleanup  # only remove this script's keys
@@ -18,7 +18,7 @@ dedicated prefixes (``aaccread`` / ``aaccwrite`` / ``aaccadmin``) and removed
 again at the end — the run touches no paper data. The startup guards (refusing
 ``change-me``, refusing zero keys) are covered by unit tests
 (``tests/test_mcp_auth.py``) plus the manual restart checklist in
-``docs/progress/project.md`` §31; this script cannot restart your server.
+``docs/progress/project.md`` section 31; this script cannot restart your server.
 
 Exit codes: 0 all checks passed, 1 at least one failed, 2 server unreachable.
 """

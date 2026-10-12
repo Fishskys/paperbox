@@ -10,7 +10,7 @@ writes a JSON report plus a Markdown report:
     uv run python scripts/eval.py --out evals/report-baseline.json
     uv run python scripts/eval.py --modes hybrid --rerank both --backend python,native
 
-``--backend`` (plan §7 M5) selects the hybrid fusion backend **per request**: the
+``--backend`` (plan section 7 M5) selects the hybrid fusion backend **per request**: the
 default is to send nothing and let the server use ``SEARCH_BACKEND``, while
 ``python,native`` asks for both paths in one run -- paired per query, so the A/B
 in ``scripts/compare_backends.py`` compares like with like. With more than one

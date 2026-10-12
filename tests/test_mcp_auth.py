@@ -259,7 +259,7 @@ def test_rest_routes_keep_their_own_auth(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# the master switch, all-on/all-off (plan §3 D1)
+# the master switch, all-on/all-off (plan section 3 D1)
 # --------------------------------------------------------------------------- #
 def test_auth_off_the_endpoint_answers_anonymously(monkeypatch, keys) -> None:
     """AUTH_ENABLED=false: no credential, and the identity is anonymous admin."""

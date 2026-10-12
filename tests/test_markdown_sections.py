@@ -1,4 +1,4 @@
-"""Rebuilding sections from the markdown dialect (plan §6.1 step 1, 2026-09-29).
+"""Rebuilding sections from the markdown dialect (plan section 6.1 step 1, 2026-09-29).
 
 The pipeline no longer detects sections on pypdf's raw pages: both backends hand
 the chunker the *same* markdown, so the section and page grid has to be

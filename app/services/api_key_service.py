@@ -7,7 +7,7 @@ REST dependency (:mod:`app.core.security`) and the MCP middleware
 (:mod:`app.mcp.auth`) call. That is what makes requirement 4 ("MCP and HTTP
 share keys") true by construction instead of by convention.
 
-Storage rules (contract, plan §5–§6):
+Storage rules (contract, plan section 5–6):
 
 * the database stores **only** ``sha256(full_key)`` — the full key exists once,
   printed by ``scripts/manage_keys.py create``;
@@ -38,7 +38,7 @@ from app.db.models import ApiKey, new_uuid
 
 logger = get_logger(__name__)
 
-#: Monotonic permission tiers (plan §4.1): ``read`` can call everything that
+#: Monotonic permission tiers (plan section 4.1): ``read`` can call everything that
 #: does not change state, ``write`` adds ingestion/metadata/reindex, ``admin``
 #: adds deletion (and, later, key management over HTTP).
 ROLE_READ = "read"
@@ -104,7 +104,7 @@ def generate_full_key(prefix: str) -> str:
 
 
 def derive_prefix(name: str) -> str:
-    """Deterministic prefix for an environment key name (plan §6).
+    """Deterministic prefix for an environment key name (plan section 6).
 
     ``PAPER_API_KEYS`` names become ``prefix`` values; sanitize rather than
     reject so a startup with an awkward name still yields its bootstrap admin.
@@ -180,7 +180,7 @@ def authenticate(session: Session, token: str | None) -> AuthIdentity | None:
 
 
 # --------------------------------------------------------------------------- #
-# startup bootstrap (plan §7.2)
+# startup bootstrap (plan section 7.2)
 # --------------------------------------------------------------------------- #
 def sync_env_bootstrap(session: Session) -> list[str]:
     """Upsert environment keys as admin rows; prune env rows the env dropped.

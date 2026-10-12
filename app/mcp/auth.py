@@ -7,7 +7,7 @@ on purpose: one credential path -- ``Authorization: Bearer <key>`` -- resolved b
 credential that matches nothing is 403, and a key in the query string is **not**
 supported at all (it would land in proxy logs and shell history).
 
-``AUTH_ENABLED`` is the all-on/all-off master switch (plan §3 D1): off, this
+``AUTH_ENABLED`` is the all-on/all-off master switch (plan section 3 D1): off, this
 middleware never checks a credential and serves everyone as the anonymous admin
 identity; on, every call must present a key. ``MCP_ENABLED`` only decides
 whether ``/mcp`` exists.
@@ -128,7 +128,7 @@ def authorize(request: Request) -> JSONResponse | None:
     section 2), and both cases are covered by tests.
 
     ``AUTH_ENABLED=false`` never reaches here: the middleware assigns the
-    anonymous identity directly (plan §3 D1 -- the switch is all-on/all-off).
+    anonymous identity directly (plan section 3 D1 -- the switch is all-on/all-off).
     """
     token = parse_bearer(request.headers.get("authorization"))
     if token is None:

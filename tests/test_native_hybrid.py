@@ -1,4 +1,4 @@
-"""Native hybrid retrieval: engine-side fusion + collapse (plan §7, M5).
+"""Native hybrid retrieval: engine-side fusion + collapse (plan section 7, M5).
 
 Everything here runs without a cluster: the body/response builders are pure
 functions, and ``native_search``/``search_chunks`` are driven through a fake
@@ -215,7 +215,7 @@ def test_siblings_inherit_the_fused_score_not_their_raw_score() -> None:
 
 
 def test_native_hits_leave_the_per_leg_scores_empty() -> None:
-    """Plan §7 T-E2: one fused score is all the engine reports."""
+    """Plan section 7 T-E2: one fused score is all the engine reports."""
     hits = native.parse_native_response(
         make_response(("c1", "p1", 0.03, [("c2", 9.9)]))
     )

@@ -119,7 +119,7 @@ def forbidden_role(tool: str, minimum: str) -> ToolFailure:
 
     Distinct from a 403 at the transport (unknown key): the credential is fine,
     it just may not touch this tool (plan: 2026-10-05_145619-api-auth-keys-roles
-    §4.3).
+    section 4.3).
     """
     return ToolFailure(
         code=FORBIDDEN,

@@ -5,7 +5,7 @@
 本机（WSL2，上限 9GB）里 docling 只能给 3000m。公式密集的论文（`2404.05260`，7 页）
 **每次都在 ~151s 断连**：容器 `memory.peak == memory.max == 3000MiB`、cgroup `memory.events`
 的 `max` 计数 7179、`oom_kill 0`（不是被杀，是在上限处反复回收/分配失败），断连后 worker
-还继续烧 ~5 分钟 CPU。详见 `.hermes/plans/2026-09-28_160551-docling-parser-backend.md` §0.7（T2c）。
+还继续烧 ~5 分钟 CPU。详见 `.hermes/plans/2026-09-28_160551-docling-parser-backend.md` [#0.7](.hermes/plans/2026-09-28_160551-docling-parser-backend.md#07-t2c公式实测2026-09-29自建镜像成功但公式在密集论文上翻车)（T2c）。
 
 fnOS：`<user>@<nas-ip>:65422`，8 核 / 15.6GB 内存，`/vol1` 剩 ~39GB。给 docling 8GB 硬盘内存，
 就不会顶到上限。

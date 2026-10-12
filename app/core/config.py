@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: ``pypdf`` the degradation backend (and the default until the acceptance run).
 PARSER_BACKENDS = frozenset({"pypdf", "docling"})
 
-#: Accepted values of ``SEARCH_BACKEND`` (plan §7, M5). ``native`` = one ``hybrid``
+#: Accepted values of ``SEARCH_BACKEND`` (plan section 7, M5). ``native`` = one ``hybrid``
 #: request fused by the ``paperbox-rrf60`` search pipeline and collapsed to papers
 #: (**deployed default**, ``app/search/native.py``); ``python`` = the two-leg
 #: retriever whose legs are fused in-process. Both passed the M5 gate and the
@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     paper_api_host: str = Field(default="0.0.0.0", alias="PAPER_API_HOST")
     paper_api_port: int = Field(default=8077, alias="PAPER_API_PORT")
     #: Master auth switch, all-on/all-off (plan: 2026-10-05_145619-api-auth-keys-roles
-    #: §3 D1): governs REST ``/api/*`` and ``/mcp`` alike. Off (default) = every caller
+    #: section 3 D1): governs REST ``/api/*`` and ``/mcp`` alike. Off (default) = every caller
     #: is an anonymous admin; on = both surfaces require a bearer key from
     #: ``api_keys`` (or the environment bootstrap keys). ``MCP_ENABLED`` still decides
     #: whether ``/mcp`` exists at all.
@@ -138,7 +138,7 @@ class Settings(BaseSettings):
     #: Weight of the semantic (kNN) leg in RRF fusion.
     rrf_semantic_weight: float = Field(default=1.0, alias="RRF_SEMANTIC_WEIGHT")
 
-    # --- retrieval backend (plan §7, M5) ---
+    # --- retrieval backend (plan section 7, M5) ---
     #: Effective hybrid backend; a request may override it for one call
     #: (``SearchRequest.backend``), which is how the A/B drives both paths
     #: against the same process. An unknown value fails at startup, not at
@@ -269,11 +269,11 @@ class Settings(BaseSettings):
     #: Interval of the staging/extraction GC; it also runs once at startup.
     ingest_gc_interval_s: int = Field(default=300, alias="INGEST_GC_INTERVAL_S")
 
-    # --- parsing backend (plan 2026-09-28_160551-docling-parser-backend §2 T4) ---
+    # --- parsing backend (plan 2026-09-28_160551-docling-parser-backend section 2 T4) ---
     #: ``docling`` (default) or ``pypdf``. docling is the primary backend for
     #: two-column/tabled papers; pypdf stays the degradation backend and is used
     #: automatically whenever docling is unreachable, with the reason recorded in
-    #: the degradation ledger. One key flips the whole pipeline back (plan §6.1).
+    #: the degradation ledger. One key flips the whole pipeline back (plan section 6.1).
     parser_backend: str = Field(default="docling", alias="PARSER_BACKEND")
     #: Parses allowed to run at once. Keep at 1: docling is CPU-bound and its
     #: container is deliberately capped, so a second concurrent parse only makes
@@ -285,7 +285,7 @@ class Settings(BaseSettings):
     #: ``page_range`` and is recorded as a degradation).
     parser_max_pages: int = Field(default=0, alias="PARSER_MAX_PAGES")
 
-    # --- chunking (plan 2026-09-28_160551-docling-parser-backend §2 T7.2) ---
+    # --- chunking (plan 2026-09-28_160551-docling-parser-backend section 2 T7.2) ---
     #: Boundary policy of ``chunk_document``. ``length`` (default) grows a chunk
     #: until the next paragraph would push it past the target token count;
     #: ``semantic`` embeds the section's sentences with the retrieval model and
@@ -306,8 +306,8 @@ class Settings(BaseSettings):
         default=200, alias="CHUNK_SEMANTIC_MIN_TOKENS"
     )
 
-    # --- docling-serve (plan §1.3 mapping table; every value below is measured,
-    #     not guessed -- see the plan's §0.5/§0.6/§0.7/§0.8 notes) ---
+    # --- docling-serve (plan section 1.3 mapping table; every value below is measured,
+    #     not guessed -- see the plan's section 0.5/0.6/0.7/0.8 notes) ---
     #: Base URL of docling-serve. Since 2026-09-29 it runs on the fnOS NAS
     #: (``http://<nas-ip>:8091``); the local WSL container is the rollback.
     #: **Empty disables the backend**: the client raises ``DoclingUnavailable``
