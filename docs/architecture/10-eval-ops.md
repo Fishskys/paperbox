@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 依据 commit `54048a3` 的工作树实测（2026-09-22） |
 | 关键文件 | `app/eval/metrics.py`、`scripts/eval.py`、`scripts/compare_backends.py`、`scripts/ensure_search_pipelines.py`、`scripts/build_eval_set.py`、`scripts/build_arxiv_ids.py`、`scripts/healthcheck.py`、`scripts/acceptance.py`、`scripts/reindex.py`、`scripts/purge_deleted.py`、`scripts/bulk_ingest.py`、`scripts/bulk_ingest_dir.py`、`scripts/create_index.py`、`evals/`、`infra/docker-compose.yml`、`docker-compose.yml`、`Dockerfile`、`.env.example`、`logs/` |
-| 相关文档 | `AGENTS.md`（协作规范）、`README.md` [#3.1](#3-数据结构表字段索引或内存结构)/[#6](#6-配置项键--默认值--作用--出处文件行)/[#7](#7-测试位置与覆盖testsxxxpy--覆盖什么)、`docs/progress/project.md` [#10](#10-后端-abnative-vs-python)–[#14](../progress/project.md#14-可移植化改造数据目录--敏感信息--清理2026-09-14)、`evals/README.md`、`docs/architecture/00-overview.md` |
+| 相关文档 | `AGENTS.md`（协作规范）、`README.md` 第 3.1 节/[#6](../../README.md#6-声明)/第 7 节、`docs/progress/project.md` [#10](../progress/project.md#10-p1-评测基线2026-09-12语料-66-篇--2883-chunks)–[#14](../progress/project.md#14-可移植化改造数据目录--敏感信息--清理2026-09-14)、`evals/README.md`、`docs/architecture/00-overview.md` |
 
 ## 1. 职责边界（做什么 / 不做什么）
 
@@ -249,7 +249,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 
 ## 8. 未做 / 已知缺口
 
-- **报告缺语言维度**：`format_markdown` / `group_summary` 只按 `mode|rerank` 分组，`docs/progress/project.md` [#10](#10-后端-abnative-vs-python)/[#11](../progress/project.md#11-中文检索修复做了什么量到了什么2026-09-12spec-p1-h-节) 里按 EN/ZH 拆的数字是在报告之外另行聚合的，脚本本身不产出。
+- **报告缺语言维度**：`format_markdown` / `group_summary` 只按 `mode|rerank` 分组，`docs/progress/project.md` [#10](../progress/project.md#10-p1-评测基线2026-09-12语料-66-篇--2883-chunks)/[#11](../progress/project.md#11-中文检索修复做了什么量到了什么2026-09-12spec-p1-h-节) 里按 EN/ZH 拆的数字是在报告之外另行聚合的，脚本本身不产出。
 - **无指标阈值门禁**：评测退出码只反映“有没有 HTTP 失败”，不反映指标是否达标（`scripts/eval.py` 的 `main()`），回归需要人读报告。
 - **评测串行执行**：查询 × mode × rerank 逐次调用（`scripts/eval.py` 的 `main()`），基线 300 次调用、开启精排时单次可达 ≈20–31s（[project.md](../progress/project.md), 488`）。
 - **`report-placeholder.*` 仅留档**：那是 6 篇语料时的占位跑，不可与基线直接比较（[README.md](../../evals/README.md)）。
@@ -320,7 +320,7 @@ en 的权重曲线（`l2 + arithmetic_mean`，`[词法, 语义]`）：
 
 1. **推理队列要够深**：`INFERENCE_QUEUE_DEPTH` 现为 512（按单次交互检索定得太浅时，参数扫描一次几百个并发神经检索
  瞬间打满 → `/info` 的 `rejected` 累计到 10141、SRW 变体 90% 报 `inference queue full (depth=32, workers=1)`；
- **放远端连接池完全没用，瓶颈在这条队列**；实测扫描期峰值 `waiting=38`，`rejected` 归零，三集合 660/3300/3960 变体零 ERROR）。定值规矩见 `04-embedding.md` [#4](#4-调用链从入口到落地逐跳带函数名)b。
+ **放远端连接池完全没用，瓶颈在这条队列**；实测扫描期峰值 `waiting=38`，`rejected` 归零，三集合 660/3300/3960 变体零 ERROR）。定值规矩见 `04-embedding.md` [#4](04-embedding.md#4-调用链从入口到落地逐跳带函数名)b。
 2. **ml-commons 两个设置**：`trusted_connector_endpoints_regex` 追加本机域（**整列表替换语义**，脚本先读当前生效值再追加，别手写列表）、`connector.private_ip_enabled=true`。
 3. **connector 要有 `client_config`**：默认 `max_connection=30 / read_timeout=30 / max_retry_times=0`；改它必须**先退服模型**（否则 400 `models are still using this connector`）。`description` 只能 ASCII、`credential` 不能为空。
 4. **创建调用是 PUT**（`query_sets` 的采样变体才是 POST，缺 `ubi_queries` 会 409；其余 POST → 405）；**被实验引用的对象删不掉**，所以 setup 是"同名复用"，重建要先 `cleanup`（先删实验再删对象）。
@@ -332,7 +332,7 @@ en 的权重曲线（`l2 + arithmetic_mean`，`[词法, 语义]`）：
 - **LLM-as-a-Judge 未做**：需要一条 LLM connector，而根 `.env` 里目前没有可用的 LLM 凭据（`QUERY_REWRITE_*` 键不存在，只有 `PAPER_API_KEY`）。
 - **`paper_repr` 是合成物**：它比真实 chunk 索引好检索，任何来自 SRW 的绝对数字都不进 progress/验收。
 - **换 embedding 模型后 `paper_repr` 整体作废**：它的向量与 connector 的 `model` 参数都是旧模型的 ——
- 重跑 `uv run python scripts/srw_setup.py build` 幂等刷新（runbook：`docs/architecture/04-embedding.md` [#9](#9-srw-评测旁路)）。
+ 重跑 `uv run python scripts/srw_setup.py build` 幂等刷新（runbook：`docs/architecture/04-embedding.md` [#9](04-embedding.md#9-换-embedding-模型-runbook)）。
 - **不支持 `size` 查询参数**（要放 body）、**等待时间不可观测**（只有计数）。
 
 ---
@@ -365,7 +365,7 @@ uv run python scripts/compare_backends.py --report evals/report-m5-backend-ab.js
 **结果（60 查询 × 2 后端 = 120 请求，0 失败）**：`hybrid|off` 两条路径**逐位相同**（同深度 Δ 恰好 `+0.0000`、CI 宽度 0）；`hybrid|on` 的 `ndcg@1/3/5`、`mrr`、`hit_rate@1`、同深度 `ndcg@K*` 全部 CI 跨 0，`ndcg@10 +0.0231`（CI `[+0.0042, +0.0431]`）与
 `recall@10 +0.0944`、`recall@5 +0.0444` 为 native 胜出，`p50` 6640 → 5458 ms（`−17.8%`）。
 **结论：门槛级无回退，`SEARCH_BACKEND` 定档 `native`**（`python` 保留为基线与降级路径）。
-数字与修前/修后对照见 `docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)，契约见本文件 [10. 后端 A/B](#10-后端-abnative-vs-python)。
+数字与修前/修后对照见 `docs/progress/search-native.md` [#8.9](../progress/search-native.md#89-m5原生-hybrid--collapse-的-ab2026-10-01)–[#8.11](../progress/search-native.md#811-定档search_backendnative2026-10-01主人拍板)，契约见本文件 [10. 后端 A/B](#10-后端-abnative-vs-python)。
 
 **工具自身的坑（改它之前先看）**：
 

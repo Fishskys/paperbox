@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 依据 commit `54048a3` 的工作树实测（2026-09-22） |
 | 关键文件 | `app/search/hybrid.py`、`app/search/ranking.py`、`app/search/opensearch.py`、`app/search/mappings.py`、`app/services/search_service.py`、`app/services/search_log_service.py`、`app/api/search.py`、`app/api/search_logs.py`、`app/schemas/search.py`、`app/schemas/search_log.py` |
-| 相关文档 | `docs/old/SPEC-P1-20260912.md`（H1/H2/B/D2/I1）、`docs/progress/project.md` [#10](../progress/project.md#10-p1-评测基线2026-09-12语料-66-篇--2883-chunks)–[#13](../progress/project.md#13-精排换多语言模型--wsl-扩容2026-09-13)/[#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21)、`docs/architecture/MVP-SPEC.md` [#8](#8-未做--已知缺口)、本目录 `06-rerank-rewrite.md`（精排/改写细节）、`01-storage.md`（索引与迁移） |
+| 相关文档 | `docs/old/SPEC-P1-20260912.md`（H1/H2/B/D2/I1）、`docs/progress/project.md` [#10](../progress/project.md#10-p1-评测基线2026-09-12语料-66-篇--2883-chunks)–[#13](../progress/project.md#13-精排换多语言模型--wsl-扩容2026-09-13)/[#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21)、`docs/architecture/MVP-SPEC.md` [#8](MVP-SPEC.md#8-检索)、本目录 `06-rerank-rewrite.md`（精排/改写细节）、`01-storage.md`（索引与迁移） |
 
 ## 1. 职责边界（做什么 / 不做什么）
 
@@ -185,7 +185,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 
 **定档依据（`SEARCH_BACKEND` 默认 `native`）**：`hybrid|off` 组两条路径**逐位相同**（同深度 `ndcg@K*`/`recall@K*`/`hit_rate@1` 的 Δ 恰好 `+0.0000`、CI 宽度 0）；`hybrid|on` 组
 `ndcg@1`/`ndcg@3`/`ndcg@5`/`mrr`/`hit_rate@1`/同深度 `ndcg@K*` **全部 CI 跨 0（无法区分）**，而 `ndcg@10` **+0.0231（CI [+0.0042, +0.0431]）**、`recall@10` +0.0944、`recall@5` +0.0444 均为 native 胜出，`p50` 6640 → 5458 ms（**−17.8%**）。`python` 路径因此**保留**作 A/B 基线与降级路径。数字与修前/修后对照见
-`docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)，判据与跑法见 [10-eval-ops.md](10-eval-ops.md#10-后端-abnative-vs-python)。
+`docs/progress/search-native.md` [#8.9](../progress/search-native.md#89-m5原生-hybrid--collapse-的-ab2026-10-01)–[#8.11](../progress/search-native.md#811-定档search_backendnative2026-10-01主人拍板)，判据与跑法见 [10-eval-ops.md](10-eval-ops.md#10-后端-abnative-vs-python)。
 
 ## 5. 不变量与踩过的坑
 
@@ -273,9 +273,9 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 8. **过滤不暴露 `section` / `paper_id` / `chunk_id`**：这些在映射里是 keyword 字段（`mappings.py`），但 `build_filters` 未生成对应子句，`KEYWORD_FIELDS` 是映射层清单、不是 API 能力清单。
 9. **`tag` 过滤**：`papers_tags` 由元数据层写入，`_index_rows` 把四个 kind 快照进索引（`snapshot.py`），过滤能命中真实数据；但**改元数据后要刷新快照**（`scripts/refresh_index_metadata.py`）才可见。
 10. **查询侧 e5 前缀（`query:`）未做**：`embed_text(query)` 直接送原文（`hybrid.py`），`docs/progress/project.md:[#11](../progress/project.md#11-中文检索修复做了什么量到了什么2026-09-12spec-p1-h-节)` 把前缀列为未实施的备选方向。
-11. **native 后端定档**：`SEARCH_BACKEND` 默认 `native`；`python` 路径保留为 A/B 基线与降级路径（`backend=python` 逐次覆盖即可切回）。定档依据见 [#4](#4-调用链从入口到落地逐跳)b 与 `docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)。
+11. **native 后端定档**：`SEARCH_BACKEND` 默认 `native`；`python` 路径保留为 A/B 基线与降级路径（`backend=python` 逐次覆盖即可切回）。定档依据见 [#4](#4-调用链从入口到落地逐跳)b 与 `docs/progress/search-native.md` [#8.9](../progress/search-native.md#89-m5原生-hybrid--collapse-的-ab2026-10-01)–[#8.11](../progress/search-native.md#811-定档search_backendnative2026-10-01主人拍板)。
 **定档后仍保留这两百多行胶水**：`python` 路径**故意保留**（A/B 基线 + 降级路径，`backend=python` 逐次覆盖即可切回），所以 `app/search/ranking.py`（`rrf_fuse`，93 行）、`hybrid.py` 的融合分支、`aggregate_papers` + `_select_evidence` + `_best_score`
 与 `tests/test_rrf.py`**仍在服役**——它们同时是 native 路径的公共服务（聚合、evidence、归一）。
 **收益记在「融合与折叠不再由我们维护」这条上，不是行数变少**；代价是新增 `app/search/native.py`。
-实测质量/延迟/CI 见 `docs/progress/search-native.md` [#8.9](#8-未做--已知缺口)–[#8.11](#8-未做--已知缺口)。
+实测质量/延迟/CI 见 `docs/progress/search-native.md` [#8.9](../progress/search-native.md#89-m5原生-hybrid--collapse-的-ab2026-10-01)–[#8.11](../progress/search-native.md#811-定档search_backendnative2026-10-01主人拍板)。
 12. **未知项（未确认）**：本会话未连真机，`knn` 参数在 Lucene engine 下的实际候选行为（是否隐式使用 `num_candidates`）、以及真机索引文档数与别名指向，均未实测；正文只断言代码里写了什么。

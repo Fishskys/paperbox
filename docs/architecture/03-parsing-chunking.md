@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 依据 commit `54048a3`（2026-09-22，chunking / pdf / structure 地基）与 `2c3d514`（docling 侧）的工作树核对；[#1](#1-职责边界做什么--不做什么)–[#8](#8-未做--已知缺口) 每一节都含 docling / pypdf **两侧**条目。本文只写**结构与不变量** —— 逐段实现说明、实测数字与人工判读仍在 `docs/progress/parser.md`（[#4.3](#4-调用链从入口到落地逐跳) 数字 / [#5.1](#5-不变量与踩过的坑)–[#5.9](#5-不变量与踩过的坑) 实现与验收）与 `docs/examine/解析双后端验收-20260929.md` |
+| 状态 | 依据 commit `54048a3`（2026-09-22，chunking / pdf / structure 地基）与 `2c3d514`（docling 侧）的工作树核对；[#1](#1-职责边界做什么--不做什么)–[#8](#8-未做--已知缺口) 每一节都含 docling / pypdf **两侧**条目。本文只写**结构与不变量** —— 逐段实现说明、实测数字与人工判读仍在 `docs/progress/parser.md`（[#4.3](../progress/parser.md#43-t8-双后端验收2026-09-295-份输入--2-后端) 数字 / 第 5.1 节–第 5.9 节 实现与验收）与 `docs/examine/解析双后端验收-20260929.md` |
 | 关键文件 | `app/parsing/pdf.py`、`app/parsing/structure.py`、`app/parsing/chunking.py`、`app/parsing/layout.py`（降级侧几何）、`app/parsing/markdown.py`（共用方言）、`app/parsing/docling_client.py`（docling 客户端）、`app/services/parser_service.py`（编排）、`app/services/degradation_service.py`（账本 sink）、`app/services/metadata_service.py`、`app/core/errors.py`、`app/workers/tasks.py`（流水线与落库索引） |
 | 相关文档 | [04-embedding.md](04-embedding.md)（向量侧）、[05-search.md](05-search.md)（索引快照与过滤）、[metadata-architecture.md](metadata-architecture.md)（发现分层）、`docs/progress/parser.md`（解析线的实现记录）、`docs/examine/解析双后端验收-20260929.md`（双后端人工判读） |
 
@@ -21,7 +21,7 @@
 | 两后端**共用**的 markdown 方言（页标记 / 标题层级 / 归一化） | `app/parsing/markdown.py` 的 `page_spans_from_markdown()`、`prepare_docling_markdown()`、`render_markdown()` |
 | 降级账本 sink（`parsing`/`chunking`/… 阶段词表） | `app/services/degradation_service.py`|
 | 段落感知切块 + token 估算 + 重叠窗口 | `app/parsing/chunking.py` 的 `chunk_document()` |
-| 解析结果**反推**成 `PageText`+`Section`，把两后端收进同一条切块路（**[#6.1](#6-配置项键--默认值--作用--出处文件行)**） | `app/parsing/markdown.py`，`app/parsing/chunking.py` |
+| 解析结果**反推**成 `PageText`+`Section`，把两后端收进同一条切块路（**第 6.1 节**） | `app/parsing/markdown.py`，`app/parsing/chunking.py` |
 | 读 PDF 内嵌元数据（Info 字典 + XMP，含 PRISM） | `app/parsing/pdf.py` 的 `extract_embedded_metadata()` |
 | 首页启发式元数据（标题/作者/摘要/年份/DOI/arXiv） | `app/services/metadata_service.py` |
 | 失败归因到稳定 `error_code` | `app/core/errors.py` |
@@ -96,7 +96,7 @@
 | `_overlap_suffix` | 取尾部 `overlap*4` 字符，再从首个 `\n`/`. `/` ` 之后取起 |
 | `_finalize` | 生成 `Chunk`；页码取 span 页面的 min/max |
 | `_chunk_section` | 单节装配主循环；超 `target_chars` **或** 命中 `break_before` 且已 ≥ `semantic_min_tokens` 即 flush 并带 overlap 前缀重开；接受 `on_degrade`并透传给 `_semantic_pieces` |
-| `chunk_markdown` | **流水线入口（[#6.1](#6-配置项键--默认值--作用--出处文件行)）**：`ParseBundle` → `pages_and_sections_from_markdown` → `merge_short_sections` → `chunk_document`（`embed_fn`/`on_degrade` 原样透传） |
+| `chunk_markdown` | **流水线入口（第 6.1 节）**：`ParseBundle` → `pages_and_sections_from_markdown` → `merge_short_sections` → `chunk_document`（`embed_fn`/`on_degrade` 原样透传） |
 | `chunk_document` | 入口：参数校验（含 `semantic_threshold`/`semantic_min_tokens`）→ 无有效节时造 `Body` 节 → 逐节切、全局递增 `chunk_index`；`embed_fn=None` 即长度模式；接受 `on_degrade`并透传 |
 
 元数据与调度
@@ -140,7 +140,7 @@
 | `TextFragment` | `(text, x, y, size, page)`；`right` 是估算右边界（`_ADVANCE_RATIO`） |
 | `PageLayout` | 一页的坐标 + **layout 模式文本**（重排的真来源） |
 | `ColumnLayout` / `LayoutReport` / `RunningLinesResult` | 单页判定 / 页级报告 / 页眉页脚剔除结果 |
-| `extract_page_layouts` | **两次 pypdf 提取**：layout 模式文本 + `visitor_operand_after` 实时坐标（见 [#5.22](#5-不变量与踩过的坑)） |
+| `extract_page_layouts` | **两次 pypdf 提取**：layout 模式文本 + `visitor_operand_after` 实时坐标（见 第 5.22 节） |
 | `_shared_baselines` / `_detect_split` | 栏缝判定（宽度 25%–75%、两侧 ≥2 fragment、共享基线 ≥2 行） |
 | `reorder_fragments` | 几何层重排 + 输出 `breaks`（段边界） |
 | `_column_split` / `_split_layout_line` | 文本层按**最宽的中间空格串**切栏 |
@@ -151,7 +151,7 @@
 | `strip_running_lines` | 页眉页脚剔除（首/尾 2 行、≥60% 页重复、<120 字符） |
 | `prepare_pages` | 重排 + 剔除的组合入口（`render_markdown` 调它） |
 
-`app/parsing/markdown.py`（[#6.1](#6-配置项键--默认值--作用--出处文件行) 适配器，497 行 —— 两后端共用的方言 + 反向适配）
+`app/parsing/markdown.py`（第 6.1 节 适配器，497 行 —— 两后端共用的方言 + 反向适配）
 
 | 项 | 作用 |
 |---|---|
@@ -168,7 +168,7 @@
 | `_render_block` / `render_markdown` | pypdf 侧：`PageBlock` → markdown（表格退级为占位、按 `Section` 映射层级） |
 | `_HEADING_LINE` / `_NUMERIC_HEADING` / `_LETTER_HEADING` / `_COMMENT_LINE` | 识别标题行、`III.`/`A.` 编号与注释行（页标记与占位符不当标题） |
 | `split_heading_number` | `III. METHOD` → `("III", "METHOD")`；无编号时返回 `(None, title)` |
-| `pages_and_sections_from_markdown` | **[#6.1](#6-配置项键--默认值--作用--出处文件行) 适配器**：按页标记切 `PageText`、按 `#` 层级切 `Section`、丢注释行 → 喂 `chunk_document` |
+| `pages_and_sections_from_markdown` | **第 6.1 节 适配器**：按页标记切 `PageText`、按 `#` 层级切 `Section`、丢注释行 → 喂 `chunk_document` |
 
 `app/services/parser_service.py`
 
@@ -182,12 +182,12 @@
 | `ArtifactStore` | 缓存只需要的两个方法（`download_bytes` / `upload_bytes`）：生产用 MinIO、单测注内存实现 |
 | `parse_pdf` | **纯函数入口**：后端选择 → docling / pypdf → 降级 → 报账（无 DB / MinIO / 任务状态） |
 | `_max_pages_range` / `_partial_parse` | 截断区间、部分解析判据（既不读也不写缓存） |
-| `parse_options` | **解析选项指纹**（[#5.27](#5-不变量与踩过的坑) 判据 3）：`{page_break, max_pages, ocr, table_mode, formula, formula_preset}` —— 请求发什么它就记什么，写进 `parse-meta.json` 的 `options`；两个后端共用一个 dict（故意从严） |
+| `parse_options` | **解析选项指纹**（第 5.27 节 判据 3）：`{page_break, max_pages, ocr, table_mode, formula, formula_preset}` —— 请求发什么它就记什么，写进 `parse-meta.json` 的 `options`；两个后端共用一个 dict（故意从严） |
 | `_resolve_backend` | 后端名解析（显式参数 > `PARSER_BACKEND`） |
 | `_parse_with_docling` / `_docling_convert` / `_parse_with_pypdf` | 两侧实现；docling 转换受 `Semaphore(PARSER_CONCURRENCY)` 保护 |
 | `_merge_reasons` | 降级理由拼接（docling 原因**在前**） |
 | `parse_paper_file` | 带 MinIO 产物缓存的外层入口：先查缓存，未命中才解析并写产物 |
-| `_default_store` | **生产回落点**：不传 `store` 就用真 MinIO（单测必须注入，见 [#5.29](#5-不变量与踩过的坑)） |
+| `_default_store` | **生产回落点**：不传 `store` 就用真 MinIO（单测必须注入，见 第 5.29 节） |
 | `_artifact_key` / `_key_belongs_to` | 产物键位 + 防串到别的论文 |
 | `_docling_version_probe` | 缓存命中判据第 5 条的 `GET /version` 探针 |
 | `_load_cached_bundle` | **六条**判据 + 重放（`cache_hit=True`、`cache_load_s`） |
@@ -248,7 +248,7 @@ run_ingestion_job(`tasks.py` 的 `run_ingestion_job()`) / run_reindex_job(`run_r
  ├─ object_storage.download_bytes(object_key) `tasks.py`
  ├─ extract_pages(data) `tasks.py` → `pdf.py` 的 `extract_pages()`
  │ └─ PdfReader → 逐页 _page_text(`pdf.py`) → normalize_page_text(`pdf.py` 的 `normalize_page_text()`)
- │ ← **只喂元数据启发式**（[#6.1](#6-配置项键--默认值--作用--出处文件行) 决策②）：文档文本的真实来源是下面的解析后端
+ │ ← **只喂元数据启发式**（第 6.1 节 决策②）：文档文本的真实来源是下面的解析后端
  ├─ (可选) _resolve_target_paper(...) `tasks.py`（非主版本就地结束）
  ├─ _reset_placeholder_title(...) `tasks.py` → 
  ├─ _backfill_metadata(session, paper, pages, data) `tasks.py` → 
@@ -260,7 +260,7 @@ run_ingestion_job(`tasks.py` 的 `run_ingestion_job()`) / run_reindex_job(`run_r
  │ └─ heuristic_claim_values(...) `metadata_service.py` 的 `detect_abstract()` → merge_values(`tasks.py`, confidence 0.5)
  ├─ _restore_placeholder_title(...) `tasks.py` → 
  ├─ _upgrade_fingerprint(..., discard_on_conflict=dedupe) `tasks.py` → 
- │ ← 解析**挪到这一步之后**：判成重复/非主版本的论文不再白付一次 docling（[#6.1](#6-配置项键--默认值--作用--出处文件行)）
+ │ ← 解析**挪到这一步之后**：判成重复/非主版本的论文不再白付一次 docling（第 6.1 节）
  ├─ degradation_service.Recorder(...) `tasks.py`（降级 sink）
  ├─ _advance_stage(STAGE_CHUNKING, 60.0) `tasks.py`
  ├─ parser_service.parse_paper_file(paper.id, data, …) `tasks.py` → `parser_service.py` 的 `parse_paper_file()`
@@ -382,21 +382,21 @@ run_ingestion_job(`tasks.py` 的 `run_ingestion_job()`) / run_reindex_job(`run_r
 | `CHUNK_SEMANTIC_MIN_TOKENS` | 200 | 语义模式：低谷处允许 flush 的最小块长 | `config.py`；`chunking.py` |
 | `PARSER_BACKEND` | **`docling`** | `docling`（主后端）/ `pypdf`（降级侧）；非法值启动即报错（`config.py` 的 `PARSER_BACKENDS`） | `config.py`；`parser_service.py` |
 | `PARSER_CONCURRENCY` | 1 | docling 转换的在途上限（模块级 `Semaphore`；**别调大** —— docling 是 CPU-bound 且容器有上限，并发只会一起变慢并撞内存天花板） | `config.py`；`parser_service.py` |
-| `PARSER_CACHE` | true | 解析产物是否缓存到 MinIO；**部分解析既不读也不写**（[#5.28](#5-不变量与踩过的坑)） | `config.py`；`parser_service.py` |
+| `PARSER_CACHE` | true | 解析产物是否缓存到 MinIO；**部分解析既不读也不写**（第 5.28 节） | `config.py`；`parser_service.py` |
 | `PARSER_MAX_PAGES` | 0（不限） | >0 时 **docling 分支**只解析前 N 页（`page_range="1-N"` + `pages=1-N` + 账本 `pagination_truncated`）；pypdf 分支不截断 | `config.py`；`parser_service.py` |
 
-docling 侧（语义与部署值见 `.env.example` 的 docling 块与 `README.md` [#3.6](#3-数据结构表字段索引或内存结构)）：
+docling 侧（语义与部署值见 `.env.example` 的 docling 块与 `README.md` 第 3.6 节）：
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
 | `DOCLING_URL` | `http://127.0.0.1:8091` | docling-serve 地址（本机部署在 **fnOS NAS**，`.env` 写 `http://<nas-ip>:8091`；缺这个键会回落到死端口 → 100% 降级） | `config.py` |
 | `DOCLING_TIMEOUT` | 660.0 | 客户端读超时，**必须大于** `DOCLING_DOCUMENT_TIMEOUT`（否则会把快要跑完的解析扔掉） | `config.py` |
 | `DOCLING_DOCUMENT_TIMEOUT` | 600.0 | 服务端 `document_timeout`（默认无期限会把 5 页论文烧 17 分钟；600 s 覆盖实测最差 252 s / 最慢 371 s） | `config.py` |
-| `DOCLING_MAX_RETRIES` | 1 | 只作用于「去公式」那次：最坏请求数 `1+(1+retries)`（[#5.26](#5-不变量与踩过的坑)） | `config.py` |
+| `DOCLING_MAX_RETRIES` | 1 | 只作用于「去公式」那次：最坏请求数 `1+(1+retries)`（第 5.26 节） | `config.py` |
 | `DOCLING_OCR` | false | **OCR 默认关**（语料是原生数字版；服务端默认开，所以显式关掉 —— 实测 OCR 掉一半以上吞吐） | `config.py` |
 | `DOCLING_TABLE_MODE` | `accurate` | `accurate` / `fast` | `config.py` |
-| `DOCLING_FORMULA_ENRICHMENT` | **false** | 公式 → LaTeX。**默认关**：最贵的一项（5 页 5.9s→39.2s、最坏 252s、5.9MB 论文整篇 ~310s vs pypdf ~52s）；关时请求发 `do_formula_enrichment=false` 且不发 preset。属于**缓存身份**（[#5.27](#5-不变量与踩过的坑)） | `config.py` |
-| `DOCLING_FORMULA_PRESET` | `codeformulav2` | **公式开时必须同时给**：单独给会 404（服务端报 `Preset 'default' not found`）；公式关时不下发。同样属于**缓存身份**（[#5.27](#5-不变量与踩过的坑)） | `config.py` |
+| `DOCLING_FORMULA_ENRICHMENT` | **false** | 公式 → LaTeX。**默认关**：最贵的一项（5 页 5.9s→39.2s、最坏 252s、5.9MB 论文整篇 ~310s vs pypdf ~52s）；关时请求发 `do_formula_enrichment=false` 且不发 preset。属于**缓存身份**（第 5.27 节） | `config.py` |
+| `DOCLING_FORMULA_PRESET` | `codeformulav2` | **公式开时必须同时给**：单独给会 404（服务端报 `Preset 'default' not found`）；公式关时不下发。同样属于**缓存身份**（第 5.27 节） | `config.py` |
 | `DOCLING_PAGE_BREAK` | `<!-- page-break -->` | 页标记字面量（两侧同一份方言；数量恒为 页数−1） | `config.py` |
 | `DOCLING_IMAGE_TAG` | 空 | 组件镜像 tag；也是 `GET /version` 不可达时的 parser 版本回落值 | `config.py` |
 
@@ -426,7 +426,7 @@ docling 侧（语义与部署值见 `.env.example` 的 docling 块与 `README.md
 - `tests/test_failure_classification.py`：空白 PDF → 全 `is_blank` → `chunk_document == []` → `NO_TEXT_LAYER`（含 "OCR" 字样）；`tests/test_job_progress.py`：monkeypatch `chunk_document` 验证 `PARSING`/`CHUNKING` 阶段与进度顺序。
 - `tests/test_degradations.py`：账本读写（幂等 upsert / 计数 / resolve / 复发重开 / stage 词表校验 / 级联删除）、`Recorder` 的 sink 语义与「记账失败不影响作业」、`chunk_document` 的 `on_degrade` 契约（长度模式不报、失败才报、无 sink 照常切块）、`parser_service.degradation_codes` 映射、`GET /api/papers/{id}/degradations`、`scripts/reindex.py` 的三种筛选（`--degraded`、`--parser-backend` 按戳、两者 AND）与 `--dry-run` 只列不写（`ensure_index`/`reindex_paper` 断言未被调用）。
 - `tests/test_job_progress.py`：真跑一次 `_run_pipeline`（打桩外部依赖）→ 降级行带 `job_id` 落库，再跑一次干净的 → 该行 `resolved_at` 被盖上。
-- `tests/test_consistency.py`（**[#6.1](#6-配置项键--默认值--作用--出处文件行) 加 8 例**）：`parser_stamp_mismatch` 双向普查（papers 列 vs 索引文档）、`unknown` 桶（未打戳的存量）、按后端分列计数、`by_backend` 子聚合。
+- `tests/test_consistency.py`（**第 6.1 节 加 8 例**）：`parser_stamp_mismatch` 双向普查（papers 列 vs 索引文档）、`unknown` 桶（未打戳的存量）、按后端分列计数、`by_backend` 子聚合。
 
 解析后端的测试 —— **全部不碰真机**，真机对照一律走 `scripts/`（下表用例数以 `uv run pytest` 输出为准）：
 
@@ -438,13 +438,13 @@ docling 侧（语义与部署值见 `.env.example` 的 docling 块与 `README.md
 | `tests/test_parser_service.py` | 18 | 后端选择顺序（显式参数 > `PARSER_BACKEND`）、docling 失败降级并**前置**原因、`PdfParseError` 不捕获、`PARSER_MAX_PAGES` 截断 |
 | `tests/test_parser_artifacts.py` | 25 | 假 store + 计数 converter：六条命中判据逐条否定（含**解析选项身份**：公式开关来回翻、页标记/表格模式/OCR/preset 各翻一次都必须重解析）、降级产物不重放、meta 坏掉/指向别的论文只 WARNING、写失败不影响返回 —— **不碰 MinIO** |
 | `tests/test_acceptance_parser.py` | 15 | 验收脚本的纯函数（markdown 统计 / diff 摘要），不碰真机 |
-| `tests/test_markdown_sections.py` | 16 | **markdown → 结构反推**（[#6.1](#6-配置项键--默认值--作用--出处文件行)）：页标记切页、`#` 层级 → `Section`（含 `number`/`title`）、编号识别（`III.` / `A.`）、注释行不当标题、跨页段落归属、空/无标记输入 |
+| `tests/test_markdown_sections.py` | 16 | **markdown → 结构反推**（第 6.1 节）：页标记切页、`#` 层级 → `Section`（含 `number`/`title`）、编号识别（`III.` / `A.`）、注释行不当标题、跨页段落归属、空/无标记输入 |
 
 ## 8. 未做 / 已知缺口
 
 | 缺口 | 依据 |
 |---|---|
-| **降级后端**（pypdf）无 OCR / 无版面分析（分栏靠 `layout.py` 几何重排、表格只留占位） | `errors.py` 仅提示；`pdf.py` 只走 `extract_text()` 默认顺序。docling 后端有版面顺序/表格/公式（`docs/progress/parser.md` [#5.9](#5-不变量与踩过的坑)：5 份输入真机对照，真表 1/3/4 张、公式 LaTeX 1/13/6 处、标题层级 11 vs pypdf 53） |
+| **降级后端**（pypdf）无 OCR / 无版面分析（分栏靠 `layout.py` 几何重排、表格只留占位） | `errors.py` 仅提示；`pdf.py` 只走 `extract_text()` 默认顺序。docling 后端有版面顺序/表格/公式（`docs/progress/parser.md` [#5.9](../progress/parser.md#59-t8-双后端验收2026-09-29)：5 份输入真机对照，真表 1/3/4 张、公式 LaTeX 1/13/6 处、标题层级 11 vs pypdf 53） |
 | 全大写短行规则会误报章节 | `structure.py`（`TABLE I` 等） |
 | 死代码：`_ROMAN_TAIL`、`Chunk.is_overlap`（恒 `False`、无消费方） | `structure.py`；`chunking.py`，全仓无其它引用 |
 | `_spans` 不进 `paper_chunks`/OpenSearch | 仅 `_finalize` 用来算页码 |
@@ -454,16 +454,16 @@ docling 侧（语义与部署值见 `.env.example` 的 docling 块与 `README.md
 | DOI/arXiv 规范化不在本模块 | `pdf.py` 的 `extract_embedded_metadata()`、`metadata_service.py` 原样返回，规范化在标识符层 |
 | XMP 只认 `dc`/`prism`/`xmp` 三命名空间 | `pdf.py`，其余 ns 元素被跳过 |
 | **按阶段重跑未提供** —— 只能整篇 reindex（PARSING→INDEXING 全跑）；想要的「只补 embedding / 只补索引」需要复用 `_write_embeddings`/`_index_rows`/`_mark_indexed` 写一个 `--stage` 入口。数据模型已经支持断点：`paper_chunks.embedded_at`/`indexed_at` 可空，`GET /api/consistency` 能报出 `missing_index` | 留档见 `docs/progress/project.md` [#21.7](../progress/project.md#217-t73-降级留痕--服务端推理队列2026-09-30)「后续优化方向」；`scripts/reindex.py` 的选谁参数已有 `--missing` / `--degraded[-stage/-code]` / `--parser-backend` |
-| 语义模式把同一段文字嵌两遍（句子一遍、chunk 一遍，无复用） | `tasks.py` 与 打同一个 `EMBEDDING_URL`；留档见 `docs/architecture/04-embedding.md` [#8](#8-未做--已知缺口) 缺口 11 |
+| 语义模式把同一段文字嵌两遍（句子一遍、chunk 一遍，无复用） | `tasks.py` 与 打同一个 `EMBEDDING_URL`；留档见 `docs/architecture/04-embedding.md` [#8](04-embedding.md#8-未做--已知缺口) 缺口 11 |
 | **两个解析码只在禁止降级时出现** | `PARSE_BACKEND_UNAVAILABLE` / `PARSE_FAILED` 已登记（`errors.py`）并有单测（`tests/test_failure_classification.py`）。正常流水线**不产生**它们 —— docling 不可达是**降级到 pypdf** + `degraded_reason` + `paper_degradations` 一行；要用这两个码得先加「strict parse」调用方（当前只有只读探针会撞上） |
-| **降级侧 layout 模式会丢字符**：`2404.05260` p1 丢 28 字符、`1807.11311` p3 丢 394 字符（非常规字形/部分标题）→ 该页 `same_content` 不过，**拒绝重排、保持原序 + 告警**（宁可不动不可丢字）；实测 25 个真机双栏页只有 13 页成功重排 |；`docs/progress/parser.md` [#6.1](#6-配置项键--默认值--作用--出处文件行) |
-| 降级侧 **3 列版面**只在最宽的中间空格串处切分，前两列可能同处一块（保证不乱序、不丢内容，但不保证理想顺序） | `layout.py`；`docs/progress/parser.md` [#6.3](#6-配置项键--默认值--作用--出处文件行) |
-| 页眉页脚剔除是**启发式**（≥60% 页重复 + <120 字符），非常规版式可能漏剔或误剔位置固定的正文行 | `layout.py` 的 `strip_running_lines()`；`docs/progress/parser.md` [#6.4](#6-配置项键--默认值--作用--出处文件行) |
-| **docling 侧公式降级没有真机样本**（要人为调小 `DOCLING_DOCUMENT_TIMEOUT` 才能造）；扫描版 PDF（`DOCLING_OCR` 默认关）、>15 页大论文、`PARSER_CONCURRENCY>1` 的行为也都没覆盖 | `docs/progress/parser.md` [#5.9](#5-不变量与踩过的坑)「本期没覆盖」 |
-| **存量论文要 reindex 才会换后端**：改 `PARSER_BACKEND` 只影响新导入与 reindex（缓存按 `(paper_id, backend)` 分目录，换后端必然未命中）；混库状态看 `GET /api/consistency` 的 `parser_backends`，批量换后端用 `scripts/reindex.py --parser-backend pypdf\|unknown`（先 `--dry-run`）。**已提供入口，仍缺的是「全量重索引 + 检索侧 A/B」的实测数字** | [#5.34](#5-不变量与踩过的坑)/[#5.35](#5-不变量与踩过的坑) |
-| **标题层级规范化 + pypdf 假标题过滤未做**：pypdf 侧的"标题"大量是假阳性（`# IEEE`、页码、全大写短行），反推适配器照单全收；两侧层级语义一致化留后续 | `structure.py`；`docs/progress/parser.md` [#6](#6-配置项键--默认值--作用--出处文件行) |
+| **降级侧 layout 模式会丢字符**：`2404.05260` p1 丢 28 字符、`1807.11311` p3 丢 394 字符（非常规字形/部分标题）→ 该页 `same_content` 不过，**拒绝重排、保持原序 + 告警**（宁可不动不可丢字）；实测 25 个真机双栏页只有 13 页成功重排 |；`docs/progress/parser.md` 第 6.1 节 |
+| 降级侧 **3 列版面**只在最宽的中间空格串处切分，前两列可能同处一块（保证不乱序、不丢内容，但不保证理想顺序） | `layout.py`；`docs/progress/parser.md` 第 6.3 节 |
+| 页眉页脚剔除是**启发式**（≥60% 页重复 + <120 字符），非常规版式可能漏剔或误剔位置固定的正文行 | `layout.py` 的 `strip_running_lines()`；`docs/progress/parser.md` 第 6.4 节 |
+| **docling 侧公式降级没有真机样本**（要人为调小 `DOCLING_DOCUMENT_TIMEOUT` 才能造）；扫描版 PDF（`DOCLING_OCR` 默认关）、>15 页大论文、`PARSER_CONCURRENCY>1` 的行为也都没覆盖 | `docs/progress/parser.md` [#5.9](../progress/parser.md#59-t8-双后端验收2026-09-29)「本期没覆盖」 |
+| **存量论文要 reindex 才会换后端**：改 `PARSER_BACKEND` 只影响新导入与 reindex（缓存按 `(paper_id, backend)` 分目录，换后端必然未命中）；混库状态看 `GET /api/consistency` 的 `parser_backends`，批量换后端用 `scripts/reindex.py --parser-backend pypdf\|unknown`（先 `--dry-run`）。**已提供入口，仍缺的是「全量重索引 + 检索侧 A/B」的实测数字** | 第 5.34 节/第 5.35 节 |
+| **标题层级规范化 + pypdf 假标题过滤未做**：pypdf 侧的"标题"大量是假阳性（`# IEEE`、页码、全大写短行），反推适配器照单全收；两侧层级语义一致化留后续 | `structure.py`；`docs/progress/parser.md` [#6](../progress/parser.md#6-已知限制如实记录) |
 | **反推适配器只认自己写出的方言**：`#` 之外的层级记号（docling 将来若新增标签）不会翻译，遇到即退化成段落 | `markdown.py` 的 `pages_and_sections_from_markdown()` |
 | **标题层级规范化 / pypdf 假标题过滤未做**：docling 11 个真层级 vs pypdf 53 个（含 `# IEEE`、`# 2900 Boulevard…`、`# DFF` 等地址/图注假阳性）；切块按标题切边界，假标题 = 假边界 | `docs/examine/解析双后端验收-20260929.md` |
-| 最慢一篇（`2606.09129` 371 s）已占 `DOCLING_DOCUMENT_TIMEOUT=600` 的 **62%**，更大更密的论文会先撞上限（撞了降级到 pypdf，不是硬失败） | `docs/progress/parser.md` [#4.3](#4-调用链从入口到落地逐跳) |
+| 最慢一篇（`2606.09129` 371 s）已占 `DOCLING_DOCUMENT_TIMEOUT=600` 的 **62%**，更大更密的论文会先撞上限（撞了降级到 pypdf，不是硬失败） | `docs/progress/parser.md` [#4.3](../progress/parser.md#43-t8-双后端验收2026-09-295-份输入--2-后端) |
 | docling 自带 chunker **不采用** | docling-core 2.99.0 依赖实测 + NAS `json_content` 实测 |
-| 未确认项 | 空 payload 的 `error_code` 归类（[#5.13](#5-不变量与踩过的坑)）、CJK 长度上限（[#5.15](#5-不变量与踩过的坑)） |
+| 未确认项 | 空 payload 的 `error_code` 归类（第 5.13 节）、CJK 长度上限（第 5.15 节） |

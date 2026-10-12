@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 依据 commit 54048a3 的工作树实测（2026-09-22） |
 | 关键文件 | `app/api/ingestion.py`、`app/services/upload_admission.py`（173）、`app/services/local_scan.py`（357）、`app/services/archive_service.py`（462）、`app/services/object_storage.py`（498）、`app/workers/housekeeping.py`（341）、`app/schemas/ingestion.py`（194）、`app/core/config.py` 的 ingestion 配置段 |
-| 相关文档 | `docs/architecture/02-ingestion-pipeline.md`（流水线状态机与队列调度）、`README.md` [#3.3](#3-数据结构表字段索引或内存结构)、`docs/progress/project.md` [#16](../progress/project.md#16-批量上传三个入口--优先级--准入--清理2026-09-19) |
+| 相关文档 | `docs/architecture/02-ingestion-pipeline.md`（流水线状态机与队列调度）、`README.md` 第 3.3 节、`docs/progress/project.md` [#16](../progress/project.md#16-批量上传三个入口--优先级--准入--清理2026-09-19) |
 
 ## 1. 职责边界（做什么 / 不做什么）
 

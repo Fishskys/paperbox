@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 依据 commit 54048a3 的工作树实测（2026-09-22） |
 | 关键文件 | `app/main.py`、`app/api/{health,ingestion,jobs,metadata,papers,search,search_logs}.py`、`app/core/{security,errors,config,logging}.py`、`app/schemas/*.py`、`app/workers/{queue,housekeeping}.py`、`app/db/session.py` |
-| 相关文档 | `docs/architecture/MVP-SPEC.md` [#0](MVP-SPEC.md#0-全局约定)/[#2](#2-关键文件与函数文件--函数类--作用)/[#3](#3-数据结构)、`README.md` [#3.4](#3-数据结构)/[#4](#4-调用链逐跳)/[#7](#7-测试位置与覆盖testsxxxpy--覆盖什么)（各篇冲突处以代码为准，见 [#5](#5-不变量与踩过的坑)、[#8](#8-未做--已知缺口)） |
+| 相关文档 | `docs/architecture/MVP-SPEC.md` [#0](MVP-SPEC.md#0-全局约定)/[#2](MVP-SPEC.md#2-api-一览实测-openapijson)/[#3](MVP-SPEC.md#3-响应错误约定)、`README.md` 第 3.4 节/[#4](../../README.md#4-目录结构)/第 7 节（各篇冲突处以代码为准，见 [#5](#5-不变量与踩过的坑)、[#8](#8-未做--已知缺口)） |
 
 ## 1. 职责边界（做什么 / 不做什么）
 
@@ -23,7 +23,7 @@
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用）
 
-### 2.1 路由总表（29 条，包含不在 schema 的 `GET /`；另有 `/mcp` 挂载，见 [#2.5](#25-mcp-端点挂载不在-openapi-里)）
+### 2.1 路由总表（29 条，包含不在 schema 的 `GET /`；另有 `/mcp` 挂载，见 第 2.5 节）
 
 `Bearer` 列：`是` = 该 router 构造时带 `dependencies=[Depends(require_api_key)]`。
 
@@ -67,7 +67,7 @@
 
 **总开关 `AUTH_ENABLED`（默认 `false`，全开全关）**：关 = 每个 `/api/*` 调用方拿到匿名 admin 身份
 （日志记 `key=anonymous`），不查库；开 = 下表的档位强制生效。`/mcp` 同受该开关（见
-`11-mcp-agent-interface.md` [#4](#4-调用链逐跳)）。
+`11-mcp-agent-interface.md` [#4](11-mcp-agent-interface.md#4-鉴权身份与审计)）。
 
 | 环节 | 实现 | 出处 |
 |---|---|---|
@@ -81,7 +81,7 @@
 | 豁免 | `health.py` 无 dependencies；`GET /`、`/docs` 等框架端点无保护；`GET /api/downloads/{paper_id}` 只认 HMAC 签名 | 同上、`app/api/downloads.py` |
 
 测试用 `app.dependency_overrides[require_api_key]`/`[require_write]` 绕过对应档位（如 `tests/test_ingest_files.py` 的 `client()`）。
-端点→档位全表见 `UserManual.md` [#2.1.1](#2-关键文件与函数文件--函数类--作用)；启动护栏（拒 `change-me`、拒零密钥、auth-off + 非回环 WARNING）见 `app/main.py::lifespan` 与 `app/core/config.py` 的 `_check_auth`。
+端点→档位全表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)；启动护栏（拒 `change-me`、拒零密钥、auth-off + 非回环 WARNING）见 `app/main.py::lifespan` 与 `app/core/config.py` 的 `_check_auth`。
 
 ### 2.3 错误处理
 
@@ -174,7 +174,7 @@
 | `search_log.py` | `SearchLogOut`()、`SearchLogListOut`() | 检索日志读接口 |
 | `__init__.py` | — | 仍是占位（1 行 docstring），无重导出；导入一律走子模块 |
 
-### 3.2 响应风格与 `docs/architecture/MVP-SPEC.md` [#0](MVP-SPEC.md#0-全局约定) 约定的对照
+### 3.2 响应风格与 `docs/architecture/MVP-SPEC.md` 第 0 节 约定的对照
 
 | 约定 | 代码是否遵守 | 证据 |
 |---|---|---|
@@ -218,7 +218,7 @@
 8. **`GET /health` 恒 200**（`health.py`）：任一依赖挂掉只是该字段变 `"error"`，`status` 永远是 `"ok"`；用 200 判依赖健康会误判，必须看 `services.*`。`services` 是**五项**：`postgres` / `opensearch` / `minio` / `embedding` / `docling`；最后一项在 `DOCLING_URL` 为空时报 `"disabled"`（部署只用 pypdf 解析，不是故障）。
 9. **分页参数不一致**：`chunks` 夹取 1..200（`papers.py`）、`review` 有 `ge=1, le=200`（`metadata.py`）、`search-logs` 依赖服务常量（`search_logs.py`），但 `GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无任何上下界（`jobs.py`, `papers.py`）。
 10. **DELETE 的补偿语义**：先清 OpenSearch、再清 MinIO、最后才标记软删（`papers.py` 的 `dismiss_paper_conflict()`），任一步 503 时论文仍可见且可原样重试——不要把顺序调换。
-11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py`）；`source_type` 只来自 query（`metadata.py`）。README [#3.4](#3-数据结构) 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
+11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py`）；`source_type` 只来自 query（`metadata.py`）。README 第 3.4 节 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
 12. **无 CORS 中间件**：全仓 grep `CORS` 0 命中，浏览器跨源调用会失败；Hermes/脚本这类非浏览器客户端不受影响。
 13. **`/mcp` 不能有重定向**：客户端（如 Hermes）在 307 后**不会重放 `Authorization`**，所以 `/mcp` 必须在服务端内部补斜杠一次命中；断言这件事必须 `follow_redirects=False`，否则 TestClient 会自动跟随、测试等于没测。
 14. **MCP 写工具"关 = 不注册"**：`MCP_WRITE_ENABLED` 与三个 `MCP_ALLOW_*` 决定工具是否注册，不是运行时才拒绝；想确认当下能力请看 `tools/list`，不要看文档。
@@ -285,5 +285,5 @@
 9. **MCP 侧的四项细化未做**（非缺口，见 `docs/architecture/11-mcp-agent-interface.md` [#12](11-mcp-agent-interface.md#12-未做与未验证事项当前口径)）：审计字段细化、错误码细化、预算与翻页边界细化、作业等待语义细化。
 10. **MCP 无速率限制**：审计能看见谁调了多少，但没有任何 per-key 限流（"限流未做"是明确记录在案的缺口）。
 11. **MCP 只在 Hermes 与 codex 上做过真机验收**：Claude Code（本机未安装）与自研 harness 的片段**未验证**；SSRF 闸残留 DNS rebinding 风险（解析与连接之间的竞态，已在 `net_guard.py` 明文标注）。
-9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` [#2](#2-关键文件与函数文件--函数类--作用)未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` [#3.4](#3-数据结构) 的导入示例含无效的 `-F source_type=…`（README 已精简，原 [#3.4](#3-数据结构) 示例移除）且响应示例字段名写作 `total_records`（同上），代码实际返回 `total`（`app/schemas/metadata.py`、`app/services/metadata_import.py`）；[MVP-SPEC.md](MVP-SPEC.md) 提示该文件部分表述已过期。
+9. **文档漂移（以代码为准）**：`docs/architecture/MVP-SPEC.md` [#2](MVP-SPEC.md#2-api-一览实测-openapijson)未列 `POST /api/jobs/{job_id}/retry` 与 `GET /api/search-logs`；`README.md` 第 3.4 节 的导入示例含无效的 `-F source_type=…`（README 已精简，原 第 3.4 节 示例移除）且响应示例字段名写作 `total_records`（同上），代码实际返回 `total`（`app/schemas/metadata.py`、`app/services/metadata_import.py`）；[MVP-SPEC.md](MVP-SPEC.md) 提示该文件部分表述已过期。
 10. **鉴权零单测**：401/403 与 `X-API-Key` 回退路径均无测试；测试统一绕过依赖，因此「precondition 挂了但鉴权漏配」这类回归不会被发现。

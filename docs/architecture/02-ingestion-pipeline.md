@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 依据 commit 3911a6b 的工作树实测（2026-09-22） |
 | 关键文件 | `app/workers/tasks.py`、`app/workers/queue.py`（427）、`app/workers/housekeeping.py`（341）、`app/services/ingestion_service.py`（552）、`app/api/jobs.py`（91）、`app/api/ingestion.py`（750）、`app/core/errors.py`（199）、`app/core/config.py`（274）、`app/main.py`（96） |
-| 相关文档 | `docs/architecture/09-upload-queue.md`（上传入口 HTTP 契约，分界见 [#1](#1-职责边界做什么--不做什么)）、`README.md` [#3.2](#3-数据结构表字段索引或内存结构)、`docs/progress/project.md` [#15](../progress/project.md#15-导入队列并发上限--排队2026-09-19)/[#16](../progress/project.md#16-批量上传三个入口--优先级--准入--清理2026-09-19) |
+| 相关文档 | `docs/architecture/09-upload-queue.md`（上传入口 HTTP 契约，分界见 [#1](#1-职责边界做什么--不做什么)）、`README.md` 第 3.2 节、`docs/progress/project.md` [#15](../progress/project.md#15-导入队列并发上限--排队2026-09-19)/[#16](../progress/project.md#16-批量上传三个入口--优先级--准入--清理2026-09-19) |
 
 背景文档与代码冲突处一律以代码为准，冲突点集中列在 [#5](#5-不变量与踩过的坑)。
 

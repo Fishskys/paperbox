@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | 依据 commit 54048a3 的工作树实测（2026-09-22） |
 | 关键文件 | `app/services/rerank_service.py`、`app/services/query_rewrite_service.py`、`app/search/hybrid.py`（精排落地）、`app/services/search_service.py`、`app/api/search.py`、`app/schemas/search.py`、`app/core/config.py`、`infra/embedding/server.py` |
-| 相关文档 | `docs/old/SPEC-P1-20260912.md`（D2/I1）、`AGENTS.md`（[#3.4](#3-数据结构)/[#3.6](#3-数据结构)）、`evals/report-jina-rerank-comparison.md`、`evals/report-jina-rerank.md`、`evals/report-zh-llm-rewrite.md`、`.env.example` |
+| 相关文档 | `docs/old/SPEC-P1-20260912.md`（D2/I1）、`AGENTS.md`（第 3.4 节/第 3.6 节）、`evals/report-jina-rerank-comparison.md`、`evals/report-jina-rerank.md`、`evals/report-zh-llm-rewrite.md`、`.env.example` |
 
 ## 1. 职责边界（做什么 / 不做什么）
 
@@ -96,7 +96,7 @@
 | 日志文案 | 降级 warning：`rerank request failed, falling back to first-stage order`、`rerank response was not JSON, falling back`、`rerank response was not an object`/`missing 'results'`/`returned %d scores for %d documents`/`index %s is out of range`；正常 info：`chunk search finished` 带 `rerank`/`rerank_took_ms`（`hybrid.py`） | 同上 |
 | `rerank_took_ms` 口径 | 客户端整段耗时（含网络与容器排队），容器自己的 `took_ms` 未被读取（只取 `results`） | `hybrid.py`；`rerank_service.py` |
 | `RERANK_MODEL` 不参与调用 | 它只出现在响应 `rerank.model` 里；实际模型由容器环境变量决定，两侧不一致不会被发现 | `config.py`；`app/services/search_pipeline.py`；`infra/embedding/server.py` |
-| 候选数放不大 | 容器单批上限 `RERANK_MAX_BATCH`；交叉编码器激活内存随 `token × 候选数` 增长，故 `RERANK_CANDIDATES` 调大只会线性拉长批次数与总时长，不能靠堆候选换精度。**批大小也有反效果**（50 候选）：jina 档 4 → 2.4GB / 8 → 3.3GB / 16 → 5.1GB（未复测，3GB 封顶即 OOM-kill）；现役 int8 档按 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB —— 更大的批更慢**也更占内存**（批内按最长补齐），所以仍用 4 | `infra/embedding/server.py`；`AGENTS.md` [#3.3](#3-数据结构)；`infra/.env.example`；`logs/eval/rerank-model-*.json` |
+| 候选数放不大 | 容器单批上限 `RERANK_MAX_BATCH`；交叉编码器激活内存随 `token × 候选数` 增长，故 `RERANK_CANDIDATES` 调大只会线性拉长批次数与总时长，不能靠堆候选换精度。**批大小也有反效果**（50 候选）：jina 档 4 → 2.4GB / 8 → 3.3GB / 16 → 5.1GB（未复测，3GB 封顶即 OOM-kill）；现役 int8 档按 4/8/16 = 3.2/4.0/4.8 秒每调用、匿名峰值 2351/2555/3199 MiB —— 更大的批更慢**也更占内存**（批内按最长补齐），所以仍用 4 | `infra/embedding/server.py`；`AGENTS.md` 第 3.3 节；`infra/.env.example`；`logs/eval/rerank-model-*.json` |
 | 容器侧无候选上限 | `RerankRequest.documents` 不设 `max_length`（对比 `/embed` 的 `MAX_BATCH` 限批），长候选清单由容器内部切批，不会 422 | `infra/embedding/server.py`、|
 | 改写触发条件 | 需同时满足：`QUERY_REWRITE_ENABLED=true`、查询非空、长度 ≤ `QUERY_REWRITE_MAX_CHARS`、命中 CJK 正则；**纯 ASCII 查询即使开启也不改** | `app/services/search_pipeline.py`；`query_rewrite_service.py`；`tests/test_query_rewrite.py` |
 | 改写失败降级 | 非 200、JSON 解析失败、无 `choices`/`content`、清洗后为空、改写结果与原查询相同 → `applied=false`、原查询继续检索 | `query_rewrite_service.py`；`tests/test_query_rewrite.py` |

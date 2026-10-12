@@ -130,9 +130,9 @@ paperbox/
 
 > **给 agent 用**：paperbox 也能作为 **MCP 服务**被 codex / Claude Code / Hermes 等直接调用
 > （检索 + 读正文 + 导入/维护，默认关闭，需配 `MCP_ENABLED` 与白名单）。接入片段与排障见
-> `UserManual.md` [#1.7](#1-项目简介) 与 `docs/architecture/11-mcp-agent-interface.md` [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入)。
+> `UserManual.md` [#1.7](UserManual.md#17-mcp-接入让-agent-直接查读论文) 与 `docs/architecture/11-mcp-agent-interface.md` [#10](docs/architecture/11-mcp-agent-interface.md#10-客户端接入)。
 
-所有接口都在 `/api/**` 下。鉴权由 `AUTH_ENABLED` 全开全关：默认关闭（匿名 admin）；开启时 `/api/*` 与 `/mcp` 都要 `Authorization: Bearer <key>`，密钥按 `read < write < admin` 三档区分（`scripts/manage_keys.py` 分发），日志记密钥前缀。详见 `UserManual.md` [#1.3.7.1](#1-项目简介) 与 [#2.1](#2-快速开始)。
+所有接口都在 `/api/**` 下。鉴权由 `AUTH_ENABLED` 全开全关：默认关闭（匿名 admin）；开启时 `/api/*` 与 `/mcp` 都要 `Authorization: Bearer <key>`，密钥按 `read < write < admin` 三档区分（`scripts/manage_keys.py` 分发），日志记密钥前缀。详见 `UserManual.md` [#1.3.7.1](UserManual.md#1371-密钥分发auth_enabledtrue-时) 与 [#2.1](UserManual.md#21-通用约定)。
 
 | 分组 | 方法 | 端点 | 说明 |
 |---|---|---|---|

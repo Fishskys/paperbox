@@ -7,7 +7,7 @@
 > **状态**：本文件保留作实现依据与字段语义参考；**当前实际状态一律以 `docs/progress/project.md` 为准**。
 
 ## 0. 全局约定
-- 鉴权（实现计划 `.hermes/plans/2026-10-05_145619-api-auth-keys-roles.md`）：`AUTH_ENABLED=false`（默认）时 `/api/*` 免鉴权（匿名=admin）；`=true` 时除 `/health` 外都要 `Authorization: Bearer <key>`，key 解析自 `api_keys` 表（`app/services/api_key_service.py`，REST 与 `/mcp` 共用），三档 `read < write < admin`（端点→档位表见 `UserManual.md` [#2.1.1](#2-api-一览实测-openapijson)），缺凭证 401、key 不匹配 403、档位不足 403（`insufficient role`）。`GET /api/downloads/{paper_id}` 只认 HMAC 签名（免 Bearer）。
+- 鉴权（实现计划 `.hermes/plans/2026-10-05_145619-api-auth-keys-roles.md`）：`AUTH_ENABLED=false`（默认）时 `/api/*` 免鉴权（匿名=admin）；`=true` 时除 `/health` 外都要 `Authorization: Bearer <key>`，key 解析自 `api_keys` 表（`app/services/api_key_service.py`，REST 与 `/mcp` 共用），三档 `read < write < admin`（端点→档位表见 `UserManual.md` [#2.1.1](../../UserManual.md#211-端点--最低密钥档位auth_enabledtrue-时)），缺凭证 401、key 不匹配 403、档位不足 403（`insufficient role`）。`GET /api/downloads/{paper_id}` 只认 HMAC 签名（免 Bearer）。
 - `paper_id` = UUID 字符串。论文状态：`PENDING / PROCESSING / INDEXED / FAILED / DELETED`（软删除用 `deleted_at`）。
 - 配置统一走 `app/core/config.py`（pydantic-settings），从根目录 `.env` 读取；禁止硬编码地址/密钥。
 - 依赖服务地址（Windows 宿主经 `127.0.0.1` 直连 WSL 端口，需在 WSL 的 ufw 白名单内；不要写 `localhost`，IPv6 回环不转发会每次多等 8 秒）：
@@ -108,7 +108,7 @@ POST   /api/search                  检索（keyword / semantic / hybrid）
 - 每篇论文新增 `paper_files` 行时 `file_type='original'`；`url` 列为来源 URL。
 
 ## 4. 单元测试（tests/）
-- **限制**：fingerprint 生成/去重与 metadata normalization **无单测**（见 `docs/progress/project.md` [#4](#4-单元测试tests) 第 11 项）。实际测试文件见 `README.md` [#7](#7-embedding--opensearch)。
+- **限制**：fingerprint 生成/去重与 metadata normalization **无单测**（见 `docs/progress/project.md` [#4](../progress/project.md#4-待办与下一步按建议优先级) 第 11 项）。实际测试文件见 `README.md` 第 7 节。
 - 测试不得连真实数据库/服务（纯函数 + mock）。
 - 运行：`uv run pytest`（tests 已有 `__init__.py`）。
 

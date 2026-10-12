@@ -117,7 +117,7 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | 3 | 每批新建 `httpx.Client`，无连接复用；批次串行、批内重试，单条流水线内部无并发（并发来自多条流水线） | `embedding_service.py`（with 块）、（顺序循环） |
 | 4 | 重试 = `EMBEDDING_MAX_RETRIES`(2) 次额外尝试，退避 `0.5 * 2**attempt`（0.5s、1.0s）；超时 = 单批 `EMBEDDING_TIMEOUT`(**300s**：服务端排队后它必须大于最坏排队时间，否则排队会变成失败) | `embedding_service.py`；`config.py` |
 | 5 | 维度分处三处（应用校验、索引 mapping、容器实际输出）；启动期三方对账（[#5](#5-不变量与踩过的坑)b），写侧逐批校验不变 | `embedding_service.py` 的 `validate_dimension()`、`mappings.py` 的 `build_mapping()`、`infra/embedding/server.py` 的 `embed()` |
-| 6 | 容器失败码：推理本身出错 `/embed` = **500**、`/rerank` = **503**；**队满一侧统一 503**（带 `Retry-After: 5`）——`AGENTS.md` [#3.3](#3-数据结构表字段索引或内存结构) 的“未就绪返回 503”只对精排与“队满”成立 | `infra/embedding/server.py`（500） vs `infra/embedding/server.py` + `infra/embedding/server.py`（队满 503）、`infra/embedding/server.py`（精排 503） |
+| 6 | 容器失败码：推理本身出错 `/embed` = **500**、`/rerank` = **503**；**队满一侧统一 503**（带 `Retry-After: 5`）——`AGENTS.md` 第 3.3 节 的“未就绪返回 503”只对精排与“队满”成立 | `infra/embedding/server.py`（500） vs `infra/embedding/server.py` + `infra/embedding/server.py`（队满 503）、`infra/embedding/server.py`（精排 503） |
 | 7 | `/v1/embeddings` 不受 `MAX_BATCH` 限制，且应用侧不使用它（应用只走 `/embed`）；它同样排在队列后面 | `infra/embedding/server.py`；`embedding_service.py`（`EMBED_PATH="/embed"`） |
 | 8 | 向量条数不匹配（第 8 跳）落 `IngestionError`，不在 `EmbeddingError` 分支 → `error_code=INTERNAL`，不是 `EMBEDDING_FAILED` | `tasks.py`；`errors.py`（`EmbeddingError` 分支，尾部兜底） |
 | 9 | 失败保留现场：`_advance_stage` 已 COMMIT，`EMBEDDING/80` 是可读的失败点；`_record_failure` 只改 job 与 paper.status。降级账本骑在同一个事务上：作业回滚则降级行一并回滚（不是漏记——那次运行没留下产物） | `tasks.py`；`degradation_service.py` |
@@ -237,5 +237,5 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 5. **验收**：`GET /api/consistency` 看 `embedding_models.{chunks,documents}`——重嵌完成后应只剩一个
    模型名；没重嵌完的论文若两侧模型不一致，会以 `embedding_model_mismatch` 出现在 problems 里。
 6. **SRW 旁路**：`paper_repr` 的向量与 connector 的 `model` 参数都是旧模型的，重跑
-   `uv run python scripts/srw_setup.py build` 幂等刷新（详见 `docs/architecture/10-eval-ops.md` [#9](#9-换-embedding-模型-runbook)）。
+   `uv run python scripts/srw_setup.py build` 幂等刷新（详见 `docs/architecture/10-eval-ops.md` [#9](10-eval-ops.md#9-srw-评测旁路)）。
 7. **评测**：换模型后旧基线作废，重跑 `scripts/eval.py` 出新基线再谈指标。
