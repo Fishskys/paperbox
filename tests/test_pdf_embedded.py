@@ -154,6 +154,37 @@ def test_an_arxiv_id_in_the_keywords_is_not_claimed() -> None:
     assert metadata.arxiv_id is None
 
 
+def test_embedded_text_drops_control_characters() -> None:
+    """Regression: the PDF's own metadata is the other door for the NUL trap.
+
+    Page text has been scrubbed since the arXiv corpus import failed on it, but
+    a NUL in ``/Title`` or in the XMP packet reaches the same PostgreSQL columns
+    -- there it fails the paper insert instead of the chunk one.
+    """
+    data = build_pdf(
+        {
+            "/Title": "Chopping\x00 Comparator\x01 Offsets",
+            "/Keywords": "offset\x07 cancellation",
+            "/Subject": "A study\x00 of chopping.",
+        }
+    )
+
+    metadata = extract_embedded_metadata(data)
+
+    for field in (
+        metadata.title,
+        metadata.abstract,
+        metadata.keywords,
+        metadata.raw.get("/Title"),
+        metadata.raw.get("Keywords"),
+    ):
+        if field:
+            for code in ("\x00", "\x01", "\x07"):
+                assert code not in field
+    assert metadata.title == "Chopping Comparator Offsets"
+    assert metadata.abstract == "A study of chopping."
+
+
 def test_a_pdf_without_any_metadata_is_empty_not_an_error() -> None:
     metadata = extract_embedded_metadata(build_pdf())
 

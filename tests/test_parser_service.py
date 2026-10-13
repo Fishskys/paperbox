@@ -106,6 +106,31 @@ def test_docling_is_used_when_it_works() -> None:
     assert bundle.timings["docling_processing_s"] == 1.25
 
 
+def test_docling_markdown_is_scrubbed_of_control_characters() -> None:
+    """Regression: docling passes the PDF's own NUL bytes into its markdown.
+
+    An IEEE PDF encoded glyphs of an equation as 0x00; the markdown, the chunks
+    cut from it (and therefore the ``INSERT INTO paper_chunks``) inherited them
+    and the whole job died with
+    ``DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes``.
+    """
+    result = DoclingResult(
+        markdown=DOCLING_MARKDOWN.replace(
+            "Body paragraph one.", "gap \x00\u03c6(t)\x01 here"
+        ),
+        page_count=2,
+        parser_version="fake 1.0",
+    )
+    bundle = parser_service.parse_pdf(
+        b"not read by the fake", filename="a.pdf", backend="docling",
+        converter=_ok_converter(result),  # type: ignore[arg-type]
+    )
+
+    assert "\x00" not in bundle.markdown
+    assert "\x01" not in bundle.markdown
+    assert "gap \u03c6(t) here" in bundle.markdown
+
+
 def test_default_backend_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "parser_backend", "pypdf")
     bundle = parser_service.parse_pdf(_pdf_bytes(), filename="a.pdf")

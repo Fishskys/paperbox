@@ -17,16 +17,9 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from app.core.logging import get_logger
+from app.parsing.text import strip_control_chars
 
 logger = get_logger(__name__)
-
-#: Control characters removed from extracted text. NUL (0x00) cannot be stored in
-#: a PostgreSQL ``text`` column at all; the rest of the C0 range would be stored
-#: but corrupts the JSON documents sent to OpenSearch. Tab and newline stay.
-_CONTROL_CHAR_TABLE = {
-    code: None for code in range(0x20) if code not in (0x09, 0x0A)
-}
-_CONTROL_CHAR_TABLE[0x7F] = None
 
 
 class PdfParseError(RuntimeError):
@@ -69,13 +62,14 @@ def normalize_page_text(text: str) -> str:
     wrapped lines into prose happens later, per paragraph, once the section
     boundaries are known (``app.parsing.structure``).
 
-    Control characters are dropped here: PostgreSQL rejects NUL (0x00) outright
-    (``DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes``, which
-    made whole ingestion jobs fail on some arXiv PDFs) and the remaining C0
-    controls poison the JSON sent to OpenSearch. Tab/newline survive.
+    Control characters are dropped here (``app.parsing.text``): PostgreSQL
+    rejects NUL (0x00) outright (``DataError: PostgreSQL text fields cannot
+    contain NUL (0x00) bytes``, which made whole ingestion jobs fail on some
+    arXiv PDFs) and the remaining C0 controls poison the JSON sent to
+    OpenSearch. Tab/newline survive.
     """
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    normalized = normalized.translate(_CONTROL_CHAR_TABLE)
+    normalized = strip_control_chars(normalized)
     out: list[str] = []
     pending_blank = False
     for raw_line in normalized.split("\n"):
@@ -263,7 +257,10 @@ def _text(value: object) -> str | None:
         parts = [_text(item) for item in value]
         joined = ", ".join(part for part in parts if part)
         return joined or None
-    text = str(value).strip()
+    # Embedded metadata is PDF-supplied text like any other: a NUL in ``/Title``
+    # or in the XMP packet reaches the same PostgreSQL columns that page text
+    # does, so the same scrubbing applies (``app.parsing.text``).
+    text = strip_control_chars(str(value)).strip()
     return text or None
 
 

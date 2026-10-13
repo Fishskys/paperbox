@@ -61,7 +61,10 @@ DOCLING_BACKEND = "docling"
 #: normalization, span computation, or the request-option fingerprint below): an
 #: entry written under an older value is re-parsed instead of replayed.
 #: 2 = ``parse-meta.json`` carries ``options`` and replay requires the same ones.
-PARSE_CACHE_VERSION = 2
+#: 3 = control characters are stripped from both backends' markdown
+#:     (``app.parsing.text``): an entry cached before that still holds the NULs
+#:     its PDF encoded, and replaying it would fail the chunk insert again.
+PARSE_CACHE_VERSION = 3
 PARSE_MARKDOWN_ARTIFACT = "document.md"
 PARSE_JSON_ARTIFACT = "document.json"
 PARSE_META_ARTIFACT = "parse-meta.json"

@@ -4,6 +4,21 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **docling 解析路径漏删控制字符**（2026-10-13）：丢控制字符这件事原本只在 `app/parsing/pdf.py` 的
+  `normalize_page_text()` 里做，那只覆盖 pypdf 侧。docling 会把 PDF 文本层的 NUL 原样带进它返回的
+  markdown，于是字形被编码成 `0x00` 的 PDF（实测某 IEEE 会议论文有 21 个）整条 ingest 死在
+  `INSERT INTO paper_chunks`：`DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes`。
+  现在清单与剔除**只有一份**（新增 `app/parsing/text.py` 的 `strip_control_chars()`），三条入口共用：
+  pypdf 逐页文本、内嵌元数据（`/Title` 与 XMP 是同一个坑的另一扇门，此前也未清）、两后端共用的
+  markdown 方言 `normalize_markdown()`。`PARSE_CACHE_VERSION` 2→3 —— 旧缓存里的脏 markdown 会被
+  原样重放（`_load_cached_bundle` 不二次归一化），必须重新解析。
+  回归用例：`tests/test_parsing.py`、`tests/test_pdf_embedded.py`、`tests/test_markdown_fallback.py`、
+  `tests/test_parser_service.py`。
+
 ## [0.5.3] - 2026-10-12
 
 ### Changed

@@ -29,6 +29,7 @@ from typing import Any, Callable, Sequence
 
 from app.core.logging import get_logger
 from app.parsing.pdf import PageText
+from app.parsing.text import strip_control_chars
 from app.parsing.layout import (
     ORDER_UNVERIFIED_REASON,
     prepare_pages,
@@ -116,13 +117,19 @@ def normalize_markdown(text: str) -> str:
 
     LF line endings, no trailing whitespace, runs of blank lines collapsed to
     one, runs of spaces collapsed to one, ``&gt;``-style escapes decoded, exotic
-    spaces turned into plain ASCII spaces. Both backends go through this, so
+    spaces turned into plain ASCII spaces, control characters dropped (NUL and
+    the rest of C0, plus DEL). Both backends go through this, so
     ``normalize_markdown`` must stay idempotent.
     """
     if not text:
         return ""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = html.unescape(normalized)
+    # Control characters survive ``html.unescape`` (``&#1;`` decodes to one), so
+    # they go last. They come from the PDF's own text layer -- an IEEE PDF whose
+    # equation font encodes glyphs as 0x00 -- and docling hands them straight
+    # through; the shared policy is ``app.parsing.text``.
+    normalized = strip_control_chars(normalized)
     for exotic, plain in (
         ("\u00a0", " "),  # no-break space
         ("\u2007", " "),  # figure space

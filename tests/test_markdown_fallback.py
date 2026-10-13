@@ -50,6 +50,27 @@ def test_normalize_markdown_unescapes_html_entities() -> None:
     assert normalize_markdown("non\u00a0break\u200bspace") == "non breakspace"
 
 
+def test_normalize_markdown_drops_control_characters() -> None:
+    """Regression: docling hands the PDF's own NUL bytes through into markdown.
+
+    An IEEE PDF encoded several equation glyphs as 0x00; the markdown kept them
+    and ``INSERT INTO paper_chunks`` died with
+    ``DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes``.
+    """
+    dirty = "phase error \x00\u03c6(t)\x01 narrowed\x07\n\nnext\x7f line"
+
+    cleaned = normalize_markdown(dirty)
+
+    for code in ("\x00", "\x01", "\x07", "\x7f"):
+        assert code not in cleaned
+    assert cleaned == "phase error \u03c6(t) narrowed\n\nnext line"
+
+
+def test_normalize_markdown_drops_characters_that_unescape_into_controls() -> None:
+    """``html.unescape`` can produce a control character, so scrubbing is last."""
+    assert normalize_markdown("a&#1;b") == "ab"
+
+
 def test_normalize_markdown_is_idempotent() -> None:
     once = normalize_markdown("# Title\n\n\n  Body &gt; here  \n\n")
     assert normalize_markdown(once) == once

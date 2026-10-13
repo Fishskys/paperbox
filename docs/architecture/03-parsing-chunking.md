@@ -13,7 +13,7 @@
 | 能力 | 实现位置 |
 |---|---|
 | 抽取文本层，逐页产出 `PageText`（1-based 页码） | `app/parsing/pdf.py` |
-| 文本规范化：统一换行、丢控制字符、保留行结构 | `app/parsing/pdf.py` 的 `normalize_page_text()` |
+| 文本规范化：统一换行、丢控制字符、保留行结构 | 控制字符清单在 `app/parsing/text.py` 的 `strip_control_chars()`；`app/parsing/pdf.py` 的 `normalize_page_text()` 逐页套用 |
 | 章节识别 + 段落化（硬换行拼回散文） | `app/parsing/structure.py`、`detect_sections()`、|
 | 远端 docling 解析：版面顺序 + 标题层级 + 真表格 + 公式 LaTeX → markdown | `app/parsing/docling_client.py` 的 `convert_markdown()` |
 | 后端选择 / 降级留痕 / 解析产物缓存 | `app/services/parser_service.py` 的 `parse_pdf()`（纯函数）、`parse_paper_file()`（带缓存） |
@@ -37,15 +37,22 @@
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用）
 
+`app/parsing/text.py`
+
+| 函数/类 | 作用 |
+|---|---|
+| `CONTROL_CHAR_TABLE` | 待删控制字符：C0 全删（除 `\t`/`\n`），另加 0x7F |
+| `strip_control_chars` | 按上表剔除；pypdf 逐页文本、内嵌元数据、两后端共用的 markdown 方言都调它 —— **只此一份定义** |
+
 `app/parsing/pdf.py`
 
 | 函数/类 | 作用 |
 |---|---|
-| `_CONTROL_CHAR_TABLE` | 待删控制字符：C0 全删（除 `\t`/`\n`），另加 0x7F |
 | `PdfParseError` | 字节流读不成 PDF 时的唯一异常出口 |
 | `PageText` / `is_blank` | `page`(1-based) + `text`；`is_blank` = `not text.strip()` |
 | `_page_text` | 单页抽取；单页异常吞掉记 warning 返回 `""` |
-| `normalize_page_text` | CRLF→LF、translate 控制字符、连续空行压成 `\n\n`、逐行 strip |
+| `normalize_page_text` | CRLF→LF、`strip_control_chars`、连续空行压成 `\n\n`、逐行 strip |
+| `_text` | 内嵌元数据字段归一：`strip_control_chars` + strip，空串→`None`（列表递归 join） |
 | `extract_pages` | `PdfReader(BytesIO)` → 逐页 `PageText`；空 payload/损坏/加密/页树异常均转 `PdfParseError` |
 | `_XMP_NS` / `_XMP_ACCESSORS` / `_XMP_LOCAL_NAMES` | 只认 `dc`/`prism`/`xmp`；本地名→pypdf accessor 兜底表；手解 16 个本地名（含 `doi`、`publicationName`、`startingPage`） |
 | `_DOI_IN_TEXT` / `_ARXIV_IN_TEXT` / `_ISBN_IN_TEXT` / `_ISSN_IN_TEXT` | 从元数据文本捞标识符 |
@@ -159,7 +166,7 @@
 | `DEGRADED_NO_FORMULA` / `DEGRADED_TABLE` / `DEGRADED_ORDER` | 三个降级词：`no formula latex` / `table structure` / `reading order not verified` |
 | `PageSpan` | `page` + **半开**区间 `[char_start, char_end)`（`markdown[a:b]` 恰是一页） |
 | `ParseBundle` | 解析器统一返回：`markdown/page_count/spans/backend/parser_version/degraded_reason/timings/headings/raw_json/cache_hit`（**字段冻结**） |
-| `normalize_markdown` | LF 化、压空行、`html.unescape`（`&gt;` 已反转义） |
+| `normalize_markdown` | LF 化、压空行、`html.unescape`（`&gt;` 已反转义）、`strip_control_chars`（**放最后**：`&#1;` 这类反转义后才出现的控制字符也要丢掉） |
 | `heading_level` | `Section.number` / `title` → markdown 标题层级 |
 | `page_spans_from_markdown` | 按页标记切 `PageSpan`，**两侧共用** |
 | `clamp_heading_levels` | 超 6 级收敛（`####### REFERENCES` → 6 个 `#`） |
@@ -313,7 +320,7 @@ run_ingestion_job(`tasks.py` 的 `run_ingestion_job()`) / run_reindex_job(`run_r
 2. **chunk 绝不跨章节**：每节独立调 `_chunk_section`，`next_index=len(chunks)`（`chunking.py`），故 `chunk_index` 文档内全局递增有序。
 3. **硬上限 `MAX_TOKENS=450`**：`window_chars = max(1, min(target_chars, max_chars - overlap_chars))`（`chunking.py`），给 overlap 预留空间，否则超长段落永远带不上重叠。`tests/test_parsing.py` 的 `test_chunk_token_target_and_hard_cap()`、`Chunk` 断言 `token_count <= MAX_TOKENS`。
 4. **参数校验**（`chunking.py`）：`target_tokens>0`、`overlap_tokens>=0` 且 `< target_tokens`、`max_tokens>=target_tokens`，否则 `ValueError`。
-5. **控制字符必须删**：PostgreSQL `text` 不接受 NUL；其余 C0 会污染发往 OpenSearch 的 JSON（`pdf.py`）。
+5. **控制字符必须删**：PostgreSQL `text` 不接受 NUL，其余 C0 会污染发往 OpenSearch 的 JSON。清单与剔除**只有一份**（`app/parsing/text.py` 的 `strip_control_chars()`），三条入口都过它：pypdf 逐页文本（`normalize_page_text()`）、内嵌元数据（`_text()`）、两后端共用的 markdown 方言（`normalize_markdown()`）。**docling 会把 PDF 的 NUL 原样带进它返回的 markdown**，所以只清 pypdf 侧不够 —— 那会让整条 ingest 死在 `INSERT INTO paper_chunks`（`DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes`）；三条入口各有回归用例（`tests/test_parsing.py`、`tests/test_pdf_embedded.py`、`tests/test_markdown_fallback.py`、`tests/test_parser_service.py`）。改这条政策要 bump `PARSE_CACHE_VERSION`，否则旧缓存里的脏 markdown 会被原样重放。
 6. **标题误判两处**：(a) running header——同一行在后续 3 行内复现即判页眉并入 `suppressed`，之后**同文本行被整篇跳过**（`structure.py`），正文里重复的短行也会被吞；(b) 全大写行当章节（`structure.py`，≤8 词、不以 `.` 结尾），`TABLE I ...` 这类表标题会被误判。
 8. **段落不跨页**：`pending` 每页开头重置（`structure.py`），跨页段落被切成两段，后一段记到后一页页码。
 9. **占位标题**：新 ingest 先用文件名当标题，那不是 claim，所以解析前 `_reset_placeholder_title` 清空（仅当无 `title` claim 且当前标题等于占位名，`tasks.py`），解析后 `_restore_placeholder_title` 兜底为占位名或 `"untitled"`（`title` NOT NULL）。

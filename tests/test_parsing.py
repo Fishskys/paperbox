@@ -12,6 +12,7 @@ from app.parsing.chunking import (
 )
 from app.parsing.pdf import PageText, normalize_page_text
 from app.parsing.structure import Section, detect_sections
+from app.parsing.text import strip_control_chars
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -300,3 +301,14 @@ def test_normalize_page_text_keeps_line_structure() -> None:
     cleaned = normalize_page_text("First\n\n\nSecond  \nThird")
 
     assert cleaned == "First\n\nSecond\nThird"
+
+
+def test_strip_control_chars_is_the_shared_policy() -> None:
+    """One definition in ``app.parsing.text``, used by both parser backends."""
+    dirty = "tab\tkept newline\nkept NUL\x00 gone\x01 DEL\x7f gone"
+
+    assert strip_control_chars(dirty) == "tab\tkept newline\nkept NUL gone DEL gone"
+    assert strip_control_chars("") == ""
+    # idempotent, like every other normalization in the dialect
+    once = strip_control_chars(dirty)
+    assert strip_control_chars(once) == once
