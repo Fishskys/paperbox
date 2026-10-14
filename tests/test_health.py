@@ -22,7 +22,7 @@ from app.core.config import settings
 from app.main import app
 from app.services import health_service as hs
 
-SERVICES = ("postgres", "opensearch", "minio", "embedding", "docling")
+SERVICES = ("postgres", "opensearch", "minio", "embedding", "rerank", "docling")
 
 #: A port nothing listens on: the probe must report an error, not raise.
 CLOSED_PORT_URL = "http://127.0.0.1:1"
@@ -56,10 +56,11 @@ def run(name: str, mock: httpx.MockTransport) -> hs.ProbeResult:
     return asyncio.run(hs.run_probe(replace(spec(name), transport=mock)))
 
 
-def test_health_reports_all_five_dependencies(client: TestClient) -> None:
+def test_health_reports_every_dependency(client: TestClient) -> None:
     body = client.get("/health").json()
     assert body["status"] == "ok"
-    assert set(body["services"]) == set(SERVICES), "docling 必须出现在服务清单里"
+    assert set(body["services"]) == set(SERVICES), "docling 与 rerank 都要在服务清单里"
+    assert body["dependencies"]["rerank"]["required"] is False, "rerank 是可选项"
 
 
 def test_docling_is_disabled_when_no_url_is_configured(

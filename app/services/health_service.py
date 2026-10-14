@@ -530,6 +530,27 @@ def docling_spec() -> ProbeSpec:
     )
 
 
+def rerank_spec() -> ProbeSpec:
+    """The cross-encoder behind ``RERANK_URL`` (the embedding container, here).
+
+    Optional on purpose: a reranker that cannot answer only means search keeps
+    the first-stage order, so it is reported without degrading the deployment.
+    """
+    return ProbeSpec(
+        name="rerank",
+        kind=KIND_HTTP,
+        target=lambda: settings.rerank_url if settings.rerank_enabled else "",
+        path="/health",
+        ok_when=lambda body: body.get("status") == "ok" or "rerank_model" in body,
+        # Same container contract: it answers /health before loading the model.
+        unknown_when=lambda body: body.get("rerank_loaded") is False,
+        timeout_s=_timeout_for("rerank"),
+        retries=settings.health_probe_retries,
+        required=False,
+        detail="GET /health (rerank_model present)",
+    )
+
+
 def health_specs() -> tuple[ProbeSpec, ...]:
     """The registry: one spec per dependency, in the order the endpoint reports."""
     return (
@@ -537,6 +558,7 @@ def health_specs() -> tuple[ProbeSpec, ...]:
         opensearch_spec(),
         minio_spec(),
         embedding_spec(),
+        rerank_spec(),
         docling_spec(),
     )
 
@@ -608,5 +630,6 @@ __all__ = [
     "postgres_spec",
     "probe_all",
     "redact",
+    "rerank_spec",
     "run_probe",
 ]

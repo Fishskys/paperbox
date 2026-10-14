@@ -513,3 +513,62 @@ def test_the_openai_probe_uses_the_external_timeout(monkeypatch: pytest.MonkeyPa
     openai_settings(monkeypatch, health_http_timeout=15.0)
 
     assert hs.embedding_spec().timeout_s == 15.0
+
+
+# --------------------------------------------------------------------------- #
+# the rerank probe (optional dependency, same container as embedding)
+# --------------------------------------------------------------------------- #
+
+
+def test_rerank_is_disabled_when_the_feature_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "rerank_enabled", False, raising=False)
+
+    result = asyncio.run(hs.run_probe(replace(hs.rerank_spec(), transport=transport(200))))
+
+    assert result.status == hs.DISABLED
+    assert result.required is False
+
+
+def test_rerank_is_ok_when_the_model_is_there(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "rerank_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "rerank_url", "http://embed.test:8090", raising=False)
+
+    result = asyncio.run(
+        hs.run_probe(
+            replace(
+                hs.rerank_spec(),
+                transport=transport(
+                    200, payload={"status": "ok", "rerank_model": "m", "rerank_loaded": True}
+                ),
+            )
+        )
+    )
+
+    assert result.status == hs.OK
+
+
+def test_a_reranker_that_is_not_loaded_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "rerank_enabled", True, raising=False)
+
+    result = asyncio.run(
+        hs.run_probe(
+            replace(
+                hs.rerank_spec(),
+                transport=transport(200, payload={"status": "ok", "rerank_loaded": False}),
+            )
+        )
+    )
+
+    assert result.status == hs.UNKNOWN
+    assert hs.is_degraded([result]) is False, "可选项不影响 degraded"
+
+
+def test_a_failing_rerank_does_not_degrade_the_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "rerank_enabled", True, raising=False)
+
+    result = asyncio.run(hs.run_probe(replace(hs.rerank_spec(), transport=transport(503))))
+
+    assert result.status == hs.ERROR
+    assert hs.is_degraded([result]) is False

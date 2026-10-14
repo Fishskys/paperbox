@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.5.3 starting`；`curl http://127.0.0.1:8077/health` 五个依赖都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
+| 6) 启动 | 日志出现 `paperbox 0.5.3 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
 
 一键自检（推荐）：
 
@@ -470,7 +470,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 方法 | 端点 | 说明 | 参数 |
 |---|---|---|---|
 | GET | `/` | 服务名、版本、文档地址 | 无 |
-| GET | `/health` | 应用存活 + 五个依赖（PG / OpenSearch / MinIO / Embedding / docling）的状态，免鉴权；`degraded` 汇总必需依赖是否就绪，`dependencies` 带每项详情（状态、延迟、原因）；docling 未配 `DOCLING_URL` 时报 `disabled` 且不影响 `degraded` | 无 |
+| GET | `/health` | 应用存活 + 六个依赖（PG / OpenSearch / MinIO / Embedding / rerank / docling）的状态，免鉴权；`degraded` 汇总必需依赖是否就绪，`dependencies` 带每项详情（状态、延迟、原因）；docling 未配 `DOCLING_URL` 时报 `disabled` 且不影响 `degraded` | 无 |
 | GET | `/api/consistency` | 三端只读对账：逐篇核对「文件记录 ↔ 对象存储对象」「切块记录 ↔ 索引文档」；响应另含两份普查 `parser_backends`（解析后端）与 `embedding_models.{chunks,documents}`（切块与索引文档各按 embedding 模型计数，`unknown` = 记录该列之前入库的） | `limit`（默认 200，1–1000）、`parser_papers`（默认 `false`，为 `true` 时附上每个解析后端下的存活论文清单） |
 
 ### 2.3 导入（五个入口）
