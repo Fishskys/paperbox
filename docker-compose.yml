@@ -30,11 +30,16 @@ services:
     ports:
       - "8077:8077"
     healthcheck:
+      # 健康 = API 活着**且必需依赖全 ok**：解析 /health 的 degraded，而不是只看
+      # 200（后者在依赖全挂时仍然是 200）。见 app/services/health_service.py。
+      # Healthy = the API is alive *and* every required dependency answers as
+      # expected: read `degraded` from /health instead of accepting any 200.
       test:
         - CMD-SHELL
         - >-
-          python -c "import urllib.request,sys;
-          sys.exit(0) if urllib.request.urlopen('http://localhost:8077/health', timeout=5).status==200 else sys.exit(1)"
+          python -c "import json,urllib.request,sys;
+          d=json.load(urllib.request.urlopen('http://localhost:8077/health', timeout=5));
+          sys.exit(0 if d.get('degraded') is False else 1)"
       interval: 20s
       timeout: 10s
       retries: 10

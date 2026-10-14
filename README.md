@@ -137,7 +137,7 @@ paperbox/
 | 分组 | 方法 | 端点 | 说明 |
 |---|---|---|---|
 | 服务 | GET | `/` | 服务名与版本 |
-| 服务 | GET | `/health` | 应用与五个依赖（含解析后端 docling）的健康状态 |
+| 服务 | GET | `/health` | 应用存活 + 五个依赖（含解析后端 docling）的状态：`degraded` 表示是否有**必需**依赖不 ok，`dependencies` 带每项详情；容器 healthcheck 判 `degraded` |
 | 服务 | GET | `/api/consistency` | 三端（数据库 / 对象存储 / 检索库）只读对账 |
 | 导入 | POST | `/api/papers/ingest` | 按 URL 导入 |
 | 导入 | POST | `/api/papers/ingest/file` | 上传单个 PDF |

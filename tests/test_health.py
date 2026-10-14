@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -257,3 +258,23 @@ def test_dependencies_do_not_leak_urls(client: TestClient, monkeypatch: pytest.M
 
     assert "://" not in detail["detail"]
     assert "dep.test" not in detail["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# 容器 healthcheck 的静态守卫（2026-10-14：从"看 200"改成"看 degraded"）
+# --------------------------------------------------------------------------- #
+
+COMPOSE = Path(__file__).resolve().parents[1] / "docker-compose.yml"
+
+
+def test_the_container_healthcheck_gates_on_dependencies() -> None:
+    """只看 200 的 healthcheck 在依赖全挂时照样报健康；必须解析 degraded。"""
+    import yaml
+
+    services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+    app_service = services["api"]
+    test = app_service["healthcheck"]["test"]
+    blob = "\n".join(test) if isinstance(test, list) else str(test)
+
+    assert "degraded" in blob, "容器健康必须反映依赖，而不是只看 HTTP 200"
+    assert "8077/health" in blob
