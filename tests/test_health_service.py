@@ -1,0 +1,206 @@
+"""``app.services.health_service``: declarative probes with explicit verdicts.
+
+The old endpoint judged a dependency by ``status < 500``; a 401 from a
+third-party API, a 404 for a renamed path or a 429 all counted as healthy. These
+tests pin the opposite: success is a whitelist, everything else is a verdict.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import httpx
+import pytest
+
+from app.services import health_service as hs
+
+
+def transport(
+    status: int,
+    *,
+    text: str | None = None,
+    payload: object | None = None,
+    calls: list[httpx.Request] | None = None,
+    raise_error: Exception | None = None,
+) -> httpx.MockTransport:
+    """A transport that answers ``status`` and records the requests it saw."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request)
+        if raise_error is not None:
+            raise raise_error
+        if payload is not None:
+            return httpx.Response(status, json=payload)
+        return httpx.Response(status, text=text or "")
+
+    return httpx.MockTransport(handler)
+
+
+def probe(**overrides) -> hs.ProbeSpec:
+    base = dict(
+        name="embedding",
+        kind=hs.KIND_HTTP,
+        target=lambda: "https://api.example/v1",
+        path="/embeddings",
+        method="POST",
+        json_body={"model": "m", "input": ["probe"]},
+    )
+    base.update(overrides)
+    return hs.ProbeSpec(**base)
+
+
+def run(spec: hs.ProbeSpec) -> hs.ProbeResult:
+    return asyncio.run(hs.run_probe(spec))
+
+
+# --------------------------------------------------------------------------- #
+# success is a whitelist, not "< 500"
+# --------------------------------------------------------------------------- #
+
+
+def test_a_200_with_the_expected_shape_is_ok() -> None:
+    spec = probe(
+        ok_when=lambda body: len(body["data"][0]["embedding"]) == 4,
+        transport=transport(200, payload={"data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]}),
+    )
+
+    result = run(spec)
+
+    assert result.status == hs.OK
+    assert result.latency_ms is not None and result.latency_ms >= 0
+    assert result.cached is False
+    assert result.checked_at
+
+
+def test_a_401_is_an_error_not_an_answer() -> None:
+    """The regression this whole module exists for: a wrong key looked healthy."""
+    spec = probe(
+        transport=transport(401, text='{"error":{"message":"No API-key provided."}}')
+    )
+
+    result = run(spec)
+
+    assert result.status == hs.ERROR
+    assert "401" in result.reason
+
+
+@pytest.mark.parametrize("status", [301, 403, 404, 429])
+def test_every_non_whitelisted_status_is_an_error(status: int) -> None:
+    result = run(probe(transport=transport(status, text="nope")))
+
+    assert result.status == hs.ERROR
+    assert str(status) in result.reason
+
+
+def test_a_200_that_fails_the_body_check_is_an_error() -> None:
+    spec = probe(
+        ok_when=lambda body: len(body["data"][0]["embedding"]) == 1024,
+        transport=transport(200, payload={"data": [{"embedding": [0.0] * 768}]}),
+    )
+
+    result = run(spec)
+
+    assert result.status == hs.ERROR
+    assert "criteria" in result.reason
+
+
+def test_a_non_json_body_where_json_is_required_is_an_error() -> None:
+    spec = probe(ok_when=lambda body: True, transport=transport(200, text="<html>"))
+
+    result = run(spec)
+
+    assert result.status == hs.ERROR
+    assert "JSON" in result.reason
+
+
+def test_only_the_configured_statuses_count() -> None:
+    spec = probe(
+        ok_status=(200, 201), transport=transport(201, payload={"ok": True})
+    )
+
+    assert run(spec).status == hs.OK
+
+
+# --------------------------------------------------------------------------- #
+# credentials
+# --------------------------------------------------------------------------- #
+
+
+def test_a_missing_token_is_an_error_and_no_request_is_sent() -> None:
+    calls: list[httpx.Request] = []
+    spec = probe(
+        auth=hs.AUTH_BEARER,
+        token=lambda: "   ",
+        transport=transport(200, payload={}, calls=calls),
+    )
+
+    result = run(spec)
+
+    assert result.status == hs.ERROR
+    assert "token" in result.reason
+    assert calls == [], "a request that can only 401 must not be sent"
+
+
+def test_a_bearer_token_is_sent_as_an_authorization_header() -> None:
+    calls: list[httpx.Request] = []
+    spec = probe(
+        auth=hs.AUTH_BEARER,
+        token=lambda: "secret-token",
+        transport=transport(200, payload={"data": []}, calls=calls),
+    )
+
+    assert run(spec).status == hs.OK
+    assert calls[0].headers["authorization"] == "Bearer secret-token"
+    assert json.loads(calls[0].content) == {"model": "m", "input": ["probe"]}
+
+
+# --------------------------------------------------------------------------- #
+# transport failures, retries, unknown targets
+# --------------------------------------------------------------------------- #
+
+
+def test_a_connection_error_is_an_error_with_the_exception_named() -> None:
+    spec = probe(transport=transport(200, raise_error=httpx.ConnectError("refused")))
+
+    result = run(spec)
+
+    assert result.status == hs.ERROR
+    assert "ConnectError" in result.reason
+
+
+def test_retries_are_attempts_on_top_of_the_first_and_default_to_none() -> None:
+    calls: list[httpx.Request] = []
+    failing = transport(200, raise_error=httpx.ConnectError("refused"), calls=calls)
+
+    assert run(probe(transport=failing)).status == hs.ERROR
+    assert len(calls) == 1
+
+    calls.clear()
+    assert run(probe(transport=failing, retries=1)).status == hs.ERROR
+    assert len(calls) == 2
+
+
+def test_an_empty_http_target_is_disabled_not_an_error() -> None:
+    spec = probe(target=lambda: "   ", transport=transport(200))
+
+    result = run(spec)
+
+    assert result.status == hs.DISABLED
+    assert result.status not in (hs.OK, hs.ERROR)
+    assert result.healthy is True
+
+
+def test_the_result_carries_the_spec_context() -> None:
+    spec = probe(
+        required=False,
+        detail="OpenAI-compatible /embeddings",
+        transport=transport(200, payload={"data": []}),
+    )
+
+    result = run(spec)
+
+    assert result.name == "embedding"
+    assert result.required is False
+    assert result.detail == "OpenAI-compatible /embeddings"
