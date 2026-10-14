@@ -373,6 +373,24 @@ class Settings(BaseSettings):
     #: unreachable (the pinned tag is part of the artifact provenance).
     docling_image_tag: str = Field(default="", alias="DOCLING_IMAGE_TAG")
 
+    # --- dependency probes (``GET /health``, ``app/services/health_service.py``) ---
+    #: Timeout for probes whose target may sit outside this machine (docling on
+    #: the NAS, a third-party embedding API). Internal dependencies keep the
+    #: shorter local default baked into their spec (3 s).
+    health_http_timeout: float = Field(default=10.0, alias="HEALTH_HTTP_TIMEOUT")
+    #: Per-dependency override, ``name=seconds`` pairs: ``docling=5,embedding=10``.
+    #: Wins over ``HEALTH_HTTP_TIMEOUT`` for the names it mentions. Kept as the raw
+    #: string (pydantic-settings would demand JSON for a dict field) and parsed by
+    #: :func:`parse_timeout_overrides` through :attr:`health_timeout_map`.
+    health_timeout_overrides: str = Field(default="", alias="HEALTH_TIMEOUT_OVERRIDES")
+    #: Extra attempts after a failed **HTTP** probe (PostgreSQL and the object
+    #: store answer through clients that handle their own reconnects).
+    health_probe_retries: int = Field(default=1, alias="HEALTH_PROBE_RETRIES")
+    #: How long a probe verdict may be reused. Billable probes (a third-party
+    #: embedding API) set their TTL from this: the container healthcheck polls
+    #: every 20 s and must not buy an API call each time.
+    health_probe_cache_ttl: float = Field(default=60.0, alias="HEALTH_PROBE_CACHE_TTL")
+
     @field_validator("log_level")
     @classmethod
     def _normalize_log_level(cls, value: str) -> str:
@@ -600,6 +618,11 @@ class Settings(BaseSettings):
         return parse_local_roots(self.ingest_local_roots)
 
     @property
+    def health_timeout_map(self) -> dict[str, float]:
+        """``HEALTH_TIMEOUT_OVERRIDES`` as ``{dependency: seconds}``."""
+        return parse_timeout_overrides(self.health_timeout_overrides)
+
+    @property
     def archive_tmp_dir(self) -> Path:
         """Directory the archive service extracts into (system temp by default)."""
         raw = (self.ingest_archive_tmp_dir or "").strip()
@@ -631,6 +654,39 @@ def parse_local_roots(value: str | None) -> list[Path]:
         seen.add(key)
         roots.append(Path(resolved))
     return roots
+
+
+def parse_timeout_overrides(value: str | None) -> dict[str, float]:
+    """Parse ``HEALTH_TIMEOUT_OVERRIDES`` (``name=seconds`` pairs).
+
+    Accepts ``,`` and ``;`` as separators, ignores empty items, and rejects a
+    malformed pair or a non-positive number outright: a typo here would
+    otherwise silently leave a probe on the wrong timeout.
+    """
+    overrides: dict[str, float] = {}
+    text = str(value or "").replace(";", ",")
+    for chunk in text.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        name, separator, raw_seconds = item.partition("=")
+        name = name.strip()
+        if not separator or not name:
+            raise ValueError(
+                f"HEALTH_TIMEOUT_OVERRIDES entry {item!r} is not 'name=seconds'"
+            )
+        try:
+            seconds = float(raw_seconds.strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"HEALTH_TIMEOUT_OVERRIDES entry {item!r} has a non-numeric timeout"
+            ) from exc
+        if seconds <= 0:
+            raise ValueError(
+                f"HEALTH_TIMEOUT_OVERRIDES entry {item!r} must be positive"
+            )
+        overrides[name] = seconds
+    return overrides
 
 
 @lru_cache(maxsize=1)

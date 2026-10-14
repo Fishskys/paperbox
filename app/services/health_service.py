@@ -326,6 +326,18 @@ async def run_probe(spec: ProbeSpec) -> ProbeResult:
 # the deployment's own dependencies
 # --------------------------------------------------------------------------- #
 
+#: Timeout for a probe whose target stays on this machine.
+LOCAL_PROBE_TIMEOUT_S = 3.0
+
+
+def _timeout_for(name: str, *, local: float = LOCAL_PROBE_TIMEOUT_S) -> float:
+    """Probe timeout: an explicit ``HEALTH_TIMEOUT_OVERRIDES`` entry wins.
+
+    ``local`` is the fallback for that dependency: 3 s for the internal services,
+    ``HEALTH_HTTP_TIMEOUT`` for the ones that may sit outside this machine.
+    """
+    return settings.health_timeout_map.get(name, local)
+
 
 def postgres_spec() -> ProbeSpec:
     """The metadata store: the cheapest statement that proves a usable session."""
@@ -344,6 +356,8 @@ def opensearch_spec() -> ProbeSpec:
         target=lambda: settings.opensearch_url,
         path="/_cluster/health",
         ok_when=lambda body: body.get("status") in {"green", "yellow"},
+        timeout_s=_timeout_for("opensearch"),
+        retries=settings.health_probe_retries,
         detail="GET /_cluster/health",
     )
 
@@ -366,6 +380,8 @@ def embedding_spec() -> ProbeSpec:
         target=lambda: settings.embedding_url,
         path="/health",
         ok_when=lambda body: body.get("status") == "ok",
+        timeout_s=_timeout_for("embedding"),
+        retries=settings.health_probe_retries,
         detail="container GET /health",
     )
 
@@ -379,6 +395,9 @@ def docling_spec() -> ProbeSpec:
         path="/health",
         # Exactly 200: a 404 on that port means something else is listening.
         ok_status=(200,),
+        # It runs on the NAS here, so it gets the external timeout by default.
+        timeout_s=_timeout_for("docling", local=settings.health_http_timeout),
+        retries=settings.health_probe_retries,
         detail="GET /health (may live on another host)",
     )
 
