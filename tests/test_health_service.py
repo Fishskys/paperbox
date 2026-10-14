@@ -310,3 +310,57 @@ def test_each_dependency_keeps_its_own_verdict(monkeypatch: pytest.MonkeyPatch) 
     asyncio.run(hs.run_probe(probe(name="b", cache_ttl_s=60.0, transport=mock)))
 
     assert len(calls) == 2, "one dependency's verdict must not answer for another"
+
+
+# --------------------------------------------------------------------------- #
+# report helpers (degraded / payload)
+# --------------------------------------------------------------------------- #
+
+
+def test_degraded_ignores_disabled_and_optional(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_clock(monkeypatch)
+
+    def verdict(name: str, status: str, *, required: bool = True) -> hs.ProbeResult:
+        spec = probe(name=name, required=required)
+        return hs.ProbeResult(name=name, status=status, required=required)
+
+    assert hs.is_degraded([verdict("a", hs.OK), verdict("b", hs.DISABLED)]) is False
+    assert hs.is_degraded([verdict("a", hs.OK), verdict("b", hs.ERROR, required=False)]) is False
+    assert hs.is_degraded([verdict("a", hs.OK), verdict("b", hs.ERROR)]) is True
+    assert hs.is_degraded([verdict("a", hs.UNKNOWN)]) is True, "还没结论不算健康"
+    assert hs.is_degraded([]) is False
+
+
+def test_a_payload_keeps_only_the_fields_that_mean_something() -> None:
+    minimal = hs.ProbeResult(name="docling", status=hs.DISABLED, required=True)
+
+    assert hs.dependency_payload(minimal) == {"status": "disabled", "required": True}
+
+    full = hs.ProbeResult(
+        name="embedding",
+        status=hs.OK,
+        reason="",
+        latency_ms=12.5,
+        checked_at="2026-10-14T00:00:00+00:00",
+        cached=True,
+        required=True,
+        detail="container GET /health",
+        meta={"dimension": 1024},
+    )
+
+    payload = hs.dependency_payload(full)
+    assert payload["latency_ms"] == 12.5
+    assert payload["cached"] is True
+    assert payload["meta"] == {"dimension": 1024}
+    assert "reason" not in payload, "空的 reason 不该出现"
+
+
+def test_redaction_covers_a_dsn_and_an_echoed_key() -> None:
+    assert "secret" not in hs.redact("postgresql://postgres:secret@127.0.0.1/db")
+    assert hs.redact("postgresql://postgres:secret@127.0.0.1/db").startswith(
+        "postgresql://***@"
+    )
+    assert "pw" not in hs.redact("key user:pw@host rejected")
+    assert "abcd1234" not in hs.redact("token abcd1234 rejected", secret="abcd1234")

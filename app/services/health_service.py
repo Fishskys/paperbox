@@ -19,6 +19,7 @@ credentials come from (``auth``/``token``), how long it may take
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -145,7 +146,9 @@ def _result(
     return ProbeResult(
         name=spec.name,
         status=status,
-        reason=reason,
+        # Every reason leaves here through the same redaction: a driver naming
+        # the DSN it could not reach must not publish that DSN.
+        reason=redact(reason) if reason else "",
         latency_ms=latency_ms,
         checked_at=_now_iso(),
         cached=cached,
@@ -155,15 +158,16 @@ def _result(
     )
 
 
-def _profile_http(spec: ProbeSpec) -> tuple[str, dict[str, str]]:
-    """Full URL and headers for one HTTP probe, or raise for a missing token."""
+def _profile_http(spec: ProbeSpec) -> tuple[str, dict[str, str], str]:
+    """Full URL, headers and the token used, or raise for a missing credential."""
+    token = ""
     headers: dict[str, str] = {}
     if spec.auth == AUTH_BEARER:
         token = spec.token().strip()
         if not token:
             raise _MissingToken(spec.name)
         headers["Authorization"] = f"Bearer {token}"
-    return spec.target().rstrip("/") + spec.path, headers
+    return spec.target().rstrip("/") + spec.path, headers, token
 
 
 class _MissingToken(RuntimeError):
@@ -175,9 +179,29 @@ def _snippet(text_body: str) -> str:
     return collapsed[:REASON_BODY_CHARS]
 
 
+#: ``user:password@host`` inside a message we are about to echo back, with or
+#: without a scheme in front of it (``postgresql://user:pw@db`` or a service
+#: answering ``your key user:pw@host was rejected``).
+_CREDENTIALS_IN_TEXT = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)?[^/\s:@]+:[^/\s@]*@"
+)
+
+
+def redact(message: str, *, secret: str = "") -> str:
+    """Remove credential-shaped text from anything we report.
+
+    A ``/health`` body is public: a driver that names the DSN it failed on, or a
+    service that echoes the key it just rejected, must not leak through it.
+    """
+    cleaned = _CREDENTIALS_IN_TEXT.sub(r"\g<scheme>***@", message)
+    if secret:
+        cleaned = cleaned.replace(secret, "***")
+    return cleaned
+
+
 async def _probe_http(spec: ProbeSpec) -> ProbeResult:
     try:
-        url, headers = _profile_http(spec)
+        url, headers, token = _profile_http(spec)
     except _MissingToken:
         # Never send a request that can only come back 401: that is exactly the
         # mistake the old "< 500 means ok" rule made.
@@ -197,7 +221,7 @@ async def _probe_http(spec: ProbeSpec) -> ProbeResult:
                     headers=headers or None,
                 )
         except Exception as exc:  # noqa: BLE001 - a probe must never raise
-            reason = f"{type(exc).__name__}: {exc}"
+            reason = redact(f"{type(exc).__name__}: {exc}", secret=token)
             if attempt < spec.retries:
                 logger.warning("probe %s retrying: %s", spec.name, reason)
                 await asyncio.sleep(RETRY_DELAY_S)
@@ -212,7 +236,9 @@ async def _probe_http(spec: ProbeSpec) -> ProbeResult:
 
         latency = _elapsed_ms(started)
         if response.status_code not in spec.ok_status:
-            reason = f"HTTP {response.status_code}: {_snippet(response.text)}"
+            reason = redact(
+                f"HTTP {response.status_code}: {_snippet(response.text)}", secret=token
+            )
             logger.warning("probe %s failed: %s", spec.name, reason)
             return _result(spec, ERROR, reason=reason, latency_ms=latency)
 
@@ -220,7 +246,7 @@ async def _probe_http(spec: ProbeSpec) -> ProbeResult:
             try:
                 body = response.json()
             except ValueError as exc:
-                reason = f"non-JSON body: {exc}"
+                reason = redact(f"non-JSON body: {exc}", secret=token)
                 logger.warning("probe %s failed: %s", spec.name, reason)
                 return _result(spec, ERROR, reason=reason, latency_ms=latency)
             if not spec.ok_when(body):
@@ -467,6 +493,36 @@ async def probe_all(
     )
 
 
+def is_degraded(results: Sequence[ProbeResult]) -> bool:
+    """``True`` when a *required* dependency is not answering as expected.
+
+    ``disabled`` never counts: a dependency that is configured off (docling on a
+    pypdf-only deployment) is a decision, not an outage.
+    """
+    return any(result.required and not result.healthy for result in results)
+
+
+def dependency_payload(result: ProbeResult) -> dict[str, Any]:
+    """One dependency as the endpoint reports it (extra fields only when set)."""
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "required": result.required,
+    }
+    if result.detail:
+        payload["detail"] = result.detail
+    if result.latency_ms is not None:
+        payload["latency_ms"] = result.latency_ms
+    if result.checked_at:
+        payload["checked_at"] = result.checked_at
+    if result.cached:
+        payload["cached"] = True
+    if result.reason:
+        payload["reason"] = result.reason
+    if result.meta:
+        payload["meta"] = result.meta
+    return payload
+
+
 __all__ = [
     "AUTH_BEARER",
     "AUTH_NONE",
@@ -480,12 +536,15 @@ __all__ = [
     "ProbeSpec",
     "UNKNOWN",
     "clear_probe_cache",
+    "dependency_payload",
     "docling_spec",
     "embedding_spec",
     "health_specs",
+    "is_degraded",
     "minio_spec",
     "opensearch_spec",
     "postgres_spec",
     "probe_all",
+    "redact",
     "run_probe",
 ]

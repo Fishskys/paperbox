@@ -144,3 +144,116 @@ def test_health_needs_no_credentials_and_leaks_nothing(client: TestClient) -> No
     blob = str(body)
     for secret in ("@", "password", "token"):
         assert secret not in blob.lower().replace("opensearch", "")
+
+
+# --------------------------------------------------------------------------- #
+# 输出增强：degraded + dependencies（用假注册表，不连真实依赖）
+# --------------------------------------------------------------------------- #
+
+
+def ok_spec(name: str) -> hs.ProbeSpec:
+    return hs.ProbeSpec(
+        name=name,
+        target=lambda: "https://dep.test",
+        path="/health",
+        transport=transport(200, payload={"status": "ok"}),
+        detail=f"{name} probe",
+    )
+
+
+def bad_spec(name: str, *, required: bool = True) -> hs.ProbeSpec:
+    return hs.ProbeSpec(
+        name=name,
+        target=lambda: "https://dep.test",
+        path="/health",
+        transport=transport(503, payload={"status": "boom"}),
+        required=required,
+        detail=f"{name} probe",
+    )
+
+
+def disabled_spec(name: str) -> hs.ProbeSpec:
+    return hs.ProbeSpec(name=name, target=lambda: "", path="/health")
+
+
+def registry(monkeypatch: pytest.MonkeyPatch, *specs: hs.ProbeSpec) -> None:
+    monkeypatch.setattr(hs, "health_specs", lambda: tuple(specs))
+
+
+def test_a_failing_required_dependency_degrades_the_deployment(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry(monkeypatch, ok_spec("postgres"), bad_spec("opensearch"))
+
+    body = client.get("/health").json()
+
+    assert body["degraded"] is True
+    assert body["status"] == "ok", "端点本身仍回答 API 活着"
+    assert body["services"]["opensearch"] == "error"
+    detail = body["dependencies"]["opensearch"]
+    assert detail["status"] == "error"
+    assert detail["required"] is True
+    assert "503" in detail["reason"]
+    assert detail["latency_ms"] is not None
+    assert detail["checked_at"]
+    assert detail["detail"] == "opensearch probe"
+    assert body["dependencies"]["postgres"]["status"] == "ok"
+
+
+def test_an_optional_dependency_failing_does_not_degrade(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry(monkeypatch, ok_spec("embedding"), bad_spec("rerank", required=False))
+
+    body = client.get("/health").json()
+
+    assert body["services"]["rerank"] == "error", "仍然如实报告"
+    assert body["degraded"] is False, "但可选项不影响就绪判定"
+
+
+def test_a_disabled_dependency_is_not_a_degradation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry(monkeypatch, ok_spec("embedding"), disabled_spec("docling"))
+
+    body = client.get("/health").json()
+
+    assert body["services"]["docling"] == "disabled"
+    assert body["degraded"] is False
+    assert body["dependencies"]["docling"]["required"] is True
+
+
+def test_the_report_never_echoes_the_credential(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """一个把刚拒绝的 key 回显在 body 里的服务，不能顺着 /health 漏出去。"""
+    secret = "s3cr3t-value-0123456789"
+    spec = hs.ProbeSpec(
+        name="embedding",
+        target=lambda: "https://api.example/v1",
+        path="/embeddings",
+        method="POST",
+        json_body={"model": "m", "input": ["probe"]},
+        auth=hs.AUTH_BEARER,
+        token=lambda: secret,
+        transport=transport(
+            401, payload={"error": f"your key {secret} is invalid, see user:pw@host"}
+        ),
+    )
+    registry(monkeypatch, spec)
+
+    blob = client.get("/health").text
+
+    assert secret not in blob
+    assert "user:pw@" not in blob
+    assert "401" in blob, "判据仍要说明失败原因"
+
+
+def test_dependencies_do_not_leak_urls(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """detail 是人写的一句说明，不能顺手把内网地址写进去。"""
+    registry(monkeypatch, bad_spec("opensearch"))
+
+    detail = client.get("/health").json()["dependencies"]["opensearch"]
+
+    assert "://" not in detail["detail"]
+    assert "dep.test" not in detail["detail"]
