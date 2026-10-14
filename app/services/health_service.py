@@ -101,7 +101,10 @@ class ProbeSpec:
     #: (an embedding container whose model is not loaded) is ``unknown``, which
     #: is not the same as ``error`` and not the same as ``ok``.
     unknown_when: Callable[[Any], bool] | None = None
-    timeout_s: float = 3.0
+    #: Wall-clock budget for this probe. ``None`` means "take
+    #: ``HEALTH_HTTP_TIMEOUT`` at probe time" (the registry passes the resolved
+    #: value, so a config change never needs a restart to take effect here).
+    timeout_s: float | None = None
     #: Extra attempts after the first failure. Only set this on idempotent probes.
     retries: int = 0
     #: ``False`` for optional dependencies: a failure is reported but does not
@@ -207,6 +210,13 @@ def redact(message: str, *, secret: str = "") -> str:
     return cleaned
 
 
+def _effective_timeout(spec: ProbeSpec) -> float:
+    """The probe's budget: its own value, or ``HEALTH_HTTP_TIMEOUT``."""
+    if spec.timeout_s is not None:
+        return spec.timeout_s
+    return settings.health_http_timeout
+
+
 async def _probe_http(spec: ProbeSpec) -> ProbeResult:
     try:
         url, headers, token = _profile_http(spec)
@@ -215,12 +225,13 @@ async def _probe_http(spec: ProbeSpec) -> ProbeResult:
         # mistake the old "< 500 means ok" rule made.
         return _result(spec, ERROR, reason="credential missing: request not sent")
 
+    timeout = _effective_timeout(spec)
     started = time.perf_counter()
     reason = ""
     for attempt in range(max(0, spec.retries) + 1):
         try:
             async with httpx.AsyncClient(
-                timeout=spec.timeout_s, transport=spec.transport
+                timeout=timeout, transport=spec.transport
             ) as client:
                 response = await client.request(
                     spec.method,
@@ -298,11 +309,31 @@ def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 2)
 
 
+async def _probe_blocking(spec: ProbeSpec, check: Callable[[], None]) -> ProbeResult:
+    """Run a blocking check in a thread, under the probe's own budget.
+
+    ``asyncio.wait_for`` cancels the *await*, not the thread (a driver call in
+    flight finishes on its own). The point is that ``/health`` answers within the
+    budget instead of waiting forever on a socket that is not answering.
+    """
+    started = time.perf_counter()
+    budget = _effective_timeout(spec)
+    try:
+        await asyncio.wait_for(asyncio.to_thread(check), timeout=budget)
+    except TimeoutError:
+        reason = f"timed out after {budget:g}s"
+        logger.warning("probe %s failed: %s", spec.name, reason)
+        return _result(spec, ERROR, reason=reason, latency_ms=_elapsed_ms(started))
+    except Exception as exc:  # noqa: BLE001 - a probe must never raise
+        reason = f"{type(exc).__name__}: {exc}"
+        logger.warning("probe %s failed: %s", spec.name, reason)
+        return _result(spec, ERROR, reason=reason, latency_ms=_elapsed_ms(started))
+    return _result(spec, OK, latency_ms=_elapsed_ms(started))
+
+
 async def _probe_postgres(spec: ProbeSpec) -> ProbeResult:
     """``SELECT 1`` through the application's own session factory."""
     from app.db.session import SessionLocal
-
-    started = time.perf_counter()
 
     def _check() -> None:
         session = SessionLocal()
@@ -311,13 +342,7 @@ async def _probe_postgres(spec: ProbeSpec) -> ProbeResult:
         finally:
             session.close()
 
-    try:
-        await asyncio.to_thread(_check)
-    except Exception as exc:  # noqa: BLE001 - a probe must never raise
-        reason = f"{type(exc).__name__}: {exc}"
-        logger.warning("probe %s failed: %s", spec.name, reason)
-        return _result(spec, ERROR, reason=reason, latency_ms=_elapsed_ms(started))
-    return _result(spec, OK, latency_ms=_elapsed_ms(started))
+    return await _probe_blocking(spec, _check)
 
 
 async def _probe_s3(spec: ProbeSpec) -> ProbeResult:
@@ -328,23 +353,16 @@ async def _probe_s3(spec: ProbeSpec) -> ProbeResult:
     """
     from app.services import object_storage
 
-    started = time.perf_counter()
-
     def _check() -> None:
         client = object_storage.get_client()
-        client.bucket_exists(spec.target())
+        try:
+            client.bucket_exists(spec.target())
+        except S3Error as exc:
+            if exc.code in {"NoSuchBucket", "NoSuchKey"}:
+                return
+            raise
 
-    try:
-        await asyncio.to_thread(_check)
-    except S3Error as exc:
-        if exc.code in {"NoSuchBucket", "NoSuchKey"}:
-            return
-        raise
-    except Exception as exc:  # noqa: BLE001 - a probe must never raise
-        reason = f"{type(exc).__name__}: {exc}"
-        logger.warning("probe %s failed: %s", spec.name, reason)
-        return _result(spec, ERROR, reason=reason, latency_ms=_elapsed_ms(started))
-    return _result(spec, OK, latency_ms=_elapsed_ms(started))
+    return await _probe_blocking(spec, _check)
 
 
 #: Verdict cache for specs that set ``cache_ttl_s``: name -> (verdict, monotonic).
@@ -406,17 +424,15 @@ async def _probe_once(spec: ProbeSpec) -> ProbeResult:
 # the deployment's own dependencies
 # --------------------------------------------------------------------------- #
 
-#: Timeout for a probe whose target stays on this machine.
-LOCAL_PROBE_TIMEOUT_S = 3.0
+def _timeout_for(name: str) -> float:
+    """Probe budget: an explicit ``HEALTH_TIMEOUT_OVERRIDES`` entry wins.
 
-
-def _timeout_for(name: str, *, local: float = LOCAL_PROBE_TIMEOUT_S) -> float:
-    """Probe timeout: an explicit ``HEALTH_TIMEOUT_OVERRIDES`` entry wins.
-
-    ``local`` is the fallback for that dependency: 3 s for the internal services,
-    ``HEALTH_HTTP_TIMEOUT`` for the ones that may sit outside this machine.
+    Every dependency gets the same default -- ``HEALTH_HTTP_TIMEOUT`` (10 s) --
+    because the budget answers "how long may one probe take", not "where does the
+    target live". A dependency that needs a different budget gets it from
+    ``HEALTH_TIMEOUT_OVERRIDES`` (``docling=30``).
     """
-    return settings.health_timeout_map.get(name, local)
+    return settings.health_timeout_map.get(name, settings.health_http_timeout)
 
 
 def postgres_spec() -> ProbeSpec:
@@ -424,6 +440,7 @@ def postgres_spec() -> ProbeSpec:
     return ProbeSpec(
         name="postgres",
         kind=KIND_POSTGRES,
+        timeout_s=_timeout_for("postgres"),
         detail="SELECT 1 over POSTGRES_DSN",
     )
 
@@ -448,6 +465,7 @@ def minio_spec() -> ProbeSpec:
         name="minio",
         kind=KIND_S3,
         target=lambda: settings.minio_bucket,
+        timeout_s=_timeout_for("minio"),
         detail="bucket_exists(MINIO_BUCKET)",
     )
 
@@ -507,7 +525,7 @@ def _openai_embedding_spec() -> ProbeSpec:
         token=lambda: settings.embedding_api_key,
         ok_status=(200,),
         ok_when=_vector_width_matches,
-        timeout_s=_timeout_for("embedding", local=settings.health_http_timeout),
+        timeout_s=_timeout_for("embedding"),
         retries=0,
         cache_ttl_s=settings.health_probe_cache_ttl,
         detail="OpenAI-compatible /embeddings (vector width checked)",
@@ -523,8 +541,7 @@ def docling_spec() -> ProbeSpec:
         path="/health",
         # Exactly 200: a 404 on that port means something else is listening.
         ok_status=(200,),
-        # It runs on the NAS here, so it gets the external timeout by default.
-        timeout_s=_timeout_for("docling", local=settings.health_http_timeout),
+        timeout_s=_timeout_for("docling"),
         retries=settings.health_probe_retries,
         detail="GET /health (may live on another host)",
     )

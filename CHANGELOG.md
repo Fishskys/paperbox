@@ -22,6 +22,10 @@
 
 ### Changed
 
+- **探针超时不按"本机/外部"分档，统一 `HEALTH_HTTP_TIMEOUT`（默认 10s）**（2026-10-14）：预算回答的是"一次探针最多等多久"，
+  而不是"目标在哪儿"，需要不同预算的依赖用 `HEALTH_TIMEOUT_OVERRIDES`（`docling=30`）单独指定。PG 与对象存储的检查
+  也纳入同一预算（`asyncio.wait_for`）：以前它们没有任何超时，连接真挂住会让 `/health` 一直等 —— 现在超预算即判
+  `error`（`timed out after Ns`），端点总能给出答复。
 - **4xx 不再算健康**（2026-10-14）：探针的成功判据从「`status < 500` 即活」改成白名单 + body 语义。
   旧判据会把 401（key 失效）、404（接口改名）、429（限流）都报成健康，第三方依赖下这是最危险的假阳性。
 - **容器 healthcheck 判 `degraded`**（2026-10-14）：`docker-compose.yml` 的 app 服务不再只看 `/health`

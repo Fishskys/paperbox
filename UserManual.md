@@ -191,8 +191,8 @@ uv run python scripts/healthcheck.py
 | `PAPER_API_KEY` | 引导管理员密钥（Bearer，prefix `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
 | `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
-| `HEALTH_HTTP_TIMEOUT` | 目标可能不在本机的探针超时（秒） | `10` | 本机依赖自带更短的 3s 默认值；NAS 上的 docling 与第三方 embedding 用这个 |
-| `HEALTH_TIMEOUT_OVERRIDES` | 单个依赖的超时覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `docling=5,embedding=10`）；写错直接报错，不静默 |
+| `HEALTH_HTTP_TIMEOUT` | 每个依赖探针的超时（秒） | `10` | **统一一个值，不按"本机/外部"分档**；PG 与对象存储的检查也走这个预算（超时判 `error`，不让 `/health` 无限等） |
+| `HEALTH_TIMEOUT_OVERRIDES` | 单个依赖的超时覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `docling=30,embedding=5`）；覆盖优先于统一默认值，写错直接报错 |
 | `HEALTH_PROBE_RETRIES` | 探针失败后的额外尝试次数 | `1` | 只作用于 HTTP 探针（PG / 对象存储由客户端自己重连） |
 | `HEALTH_PROBE_CACHE_TTL` | 探针结论的复用时长（秒） | `60` | 计费探针（第三方 embedding）按它设 TTL：容器 healthcheck 20s 一次，不缓存就是每次买一次调用 |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |

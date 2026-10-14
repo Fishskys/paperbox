@@ -572,3 +572,32 @@ def test_a_failing_rerank_does_not_degrade_the_deployment(
 
     assert result.status == hs.ERROR
     assert hs.is_degraded([result]) is False
+
+
+# --------------------------------------------------------------------------- #
+# one budget for every dependency (10s by default, overridable by name)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_spec_without_a_timeout_takes_the_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "health_http_timeout", 7.5, raising=False)
+    spec = hs.ProbeSpec(name="api", target=lambda: "https://dep.test", path="/health")
+
+    assert hs._effective_timeout(spec) == 7.5
+
+
+def test_a_blocking_probe_is_cut_off_by_its_budget() -> None:
+    """PG / 对象存储的检查跑在线程里；超预算时判 error，而不是让 /health 一直等。"""
+    import time as _time
+
+    def slow_check() -> None:
+        _time.sleep(0.3)
+
+    spec = hs.ProbeSpec(name="minio", kind=hs.KIND_S3, timeout_s=0.05)
+
+    result = asyncio.run(hs._probe_blocking(spec, slow_check))
+
+    assert result.status == hs.ERROR
+    assert "timed out after 0.05s" in result.reason

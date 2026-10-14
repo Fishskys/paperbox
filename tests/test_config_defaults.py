@@ -55,19 +55,18 @@ def test_settings_exposes_the_parsed_map(
 # --------------------------------------------------------------------------- #
 
 
-def test_the_external_default_applies_to_probes_that_may_leave_the_machine(
+def test_every_probe_gets_the_same_default_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """超时不按"本机/外部"分档：每个依赖默认都是 HEALTH_HTTP_TIMEOUT。"""
     monkeypatch.setattr(settings, "health_timeout_overrides", "", raising=False)
     monkeypatch.setattr(settings, "health_http_timeout", 12.0, raising=False)
 
-    assert hs.docling_spec().timeout_s == 12.0
-    # docling runs on the NAS here; the internal services keep the short default.
-    assert hs.embedding_spec().timeout_s == hs.LOCAL_PROBE_TIMEOUT_S
-    assert hs.opensearch_spec().timeout_s == hs.LOCAL_PROBE_TIMEOUT_S
+    for spec in hs.health_specs():
+        assert spec.timeout_s == 12.0, spec.name
 
 
-def test_an_override_wins_over_both_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_override_wins_over_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         settings, "health_timeout_overrides", "docling=5,embedding=2.5", raising=False
     )
@@ -75,7 +74,7 @@ def test_an_override_wins_over_both_defaults(monkeypatch: pytest.MonkeyPatch) ->
 
     assert hs.docling_spec().timeout_s == 5.0
     assert hs.embedding_spec().timeout_s == 2.5
-    assert hs.opensearch_spec().timeout_s == hs.LOCAL_PROBE_TIMEOUT_S
+    assert hs.opensearch_spec().timeout_s == 12.0, "没被覆盖的仍用统一默认值"
 
 
 def test_probe_retries_come_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
