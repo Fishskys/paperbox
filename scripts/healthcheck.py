@@ -100,7 +100,10 @@ def main(
         tuple(specs) if specs is not None else (*health_service.health_specs(), api_spec())
     )
     print("paperbox healthcheck")
-    results = asyncio.run(health_service.probe_all(chosen))
+    # Always a real probe: the CLI is the operator's deliberate "check it now", so
+    # it bypasses the verdict cache the endpoint uses (a fresh process would have an
+    # empty cache anyway -- being explicit keeps that true if this ever runs in-process).
+    results = asyncio.run(health_service.probe_all(chosen, use_cache=False))
     report(results)
 
     if with_extras:

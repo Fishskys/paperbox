@@ -29,17 +29,12 @@ services:
       PAPER_API_PORT: "8077"
     ports:
       - "8077:8077"
-    healthcheck:
-      # 健康 = API 活着**且必需依赖全 ok**：解析 /health 的 degraded，而不是只看
-      # 200（后者在依赖全挂时仍然是 200）。见 app/services/health_service.py。
-      # Healthy = the API is alive *and* every required dependency answers as
-      # expected: read `degraded` from /health instead of accepting any 200.
-      test:
-        - CMD-SHELL
-        - >-
-          python -c "import json,urllib.request,sys;
-          d=json.load(urllib.request.urlopen('http://localhost:8077/health', timeout=5));
-          sys.exit(0 if d.get('degraded') is False else 1)"
-      interval: 20s
-      timeout: 10s
-      retries: 10
+    # 没有 healthcheck（2026-10-14 定论）：compose 的 healthcheck 是**定时轮询**，
+    # 而本项目的探测策略是**只按需**（启动一次 + 调用 /health 时）—— 接了第三方
+    # embedding API 后，定时探针就是定时计费。`docker ps` 因此不显示 healthy 字样；
+    # 要看健康状况就调 /health（或 scripts/healthcheck.py），它给出 degraded 与逐项状态。
+    # No healthcheck (2026-10-14): a compose healthcheck polls on a timer, and this
+    # project probes on demand only (once at startup, then whenever /health is called)
+    # -- a timer would bill a third-party embedding API on every tick. `docker ps` will
+    # not show a health status; call /health (or scripts/healthcheck.py) instead: it
+    # reports `degraded` plus the per-dependency verdicts.

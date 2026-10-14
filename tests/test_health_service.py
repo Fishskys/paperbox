@@ -57,12 +57,8 @@ def run(spec: hs.ProbeSpec) -> hs.ProbeResult:
     return asyncio.run(hs.run_probe(spec))
 
 
-@pytest.fixture(autouse=True)
-def _no_cache_leak() -> None:
-    """The verdict cache is process-wide: never let one test seed another."""
-    hs.clear_probe_cache()
-    yield
-    hs.clear_probe_cache()
+# 缓存隔离由 tests/conftest.py 的 autouse fixture 统一负责（每个依赖都带 TTL，
+# 结论是进程级共享的，不能让一个用例喂给下一个）。
 
 
 def fake_clock(monkeypatch: pytest.MonkeyPatch, start: float = 1_000.0) -> dict:
@@ -509,7 +505,7 @@ def test_the_openai_probe_never_retries_and_caches_its_call(
     assert len(calls) == 1
 
 
-def test_the_openai_probe_uses_the_external_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_openai_probe_gets_the_configured_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     openai_settings(monkeypatch, health_http_timeout=15.0)
 
     assert hs.embedding_spec().timeout_s == 15.0

@@ -46,7 +46,7 @@
 | | `load_corpus` / `resolve` | 取存活 `INDEXED` 论文；按 `arxiv` 或 `title_like` 前缀解析成 `paper_id` |
 | | `main` | 读 `queries-spec.json`，写 `queries.jsonl` + `labels.jsonl`，打印 UNRESOLVED |
 | `scripts/build_arxiv_ids.py`（50） | 模块级流程 | 5 个主题各 12 条，去重后写 `evals/arxiv_ids.txt`（44-48） |
-| `scripts/healthcheck.py` | `api_spec` / `report` / `extras` / `main` | 复用 `/health` 的探针注册表（`app/services/health_service.py`）+ 探 API 进程自身，另打印索引文档数与检索管道漂移；退出码 = 必需依赖是否全 ok |
+| `scripts/healthcheck.py` | `api_spec` / `report` / `extras` / `main` | 复用 `/health` 的探针注册表（`app/services/health_service.py`）+ 探 API 进程自身，另打印索引文档数与检索管道漂移；退出码 = 必需依赖是否全 ok；`use_cache=False`：运维的实时检查不吃缓存 |
 | `scripts/acceptance.py` | `Checker` | 逐条 `PASS/FAIL/SKIP` 记录与汇总 |
 | | `main` | 跑 plan plan 第 38 节 的 8 条（外加 `0 dependencies healthy`，共 9 行输出） |
 | `scripts/reindex.py` | `targets` | 未删论文；`--missing` 排除已有 chunks；`--degraded[-stage/-code]` 按账本未解决降级；`--parser-backend` 按 `papers.parser_backend`（`unknown` = 无戳）；三者 AND |
@@ -218,7 +218,7 @@ create_index.py: ensure_index → _reindex(wait_for_completion=false) → wait_f
 
 | 脚本 | 作用 | 主要参数 | 幂等 | 碰真机数据 | 退出码 |
 |---|---|---|---|---|---|
-| `healthcheck.py` | 五依赖（含解析后端 docling，未配 `DOCLING_URL` 时该行显式 `skip`）+ API 健康检查与文档数 | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py`） |
+| `healthcheck.py` | 六依赖（含解析后端 docling，未配 `DOCLING_URL` 时报 `disabled`）+ API 健康检查与文档数；**总是真探**（`use_cache=False`，绕开 `/health` 的结论缓存） | 无 | 是（只读） | 只读 | `0` 全通 / `1` 有失败（`healthcheck.py`） |
 | `acceptance.py` | plan plan 第 38 节 端到端验收 9 项 | `--api`、`--url` | 否（会真导入一篇 arXiv PDF，判重则复用） | **写**：导入论文 | `0` 全 PASS / `1` 有 FAIL（`acceptance.py`, 118`） |
 | `reindex.py` | 重建 chunks/向量/索引 | `<paper_id…>`、`--missing`、`--degraded`（+`--degraded-stage`/`--degraded-code`）、`--degradations`、`--parser-backend`、`--dry-run` | 是（重建同输入同输出） | **写**：删旧 chunks 重写索引（`--dry-run`/`--degradations` 只读不写） | `0` 无失败 / `1` 有失败（`reindex.py`, 228`） |
 | `purge_deleted.py` | 清已删论文的索引文档与 MinIO 对象 | `--dry-run` | 是 | **写**：删索引文档 + 对象（PG 行保留） | 无残留 `0`；有失败 `1`；`--dry-run` 恒 `0`（`purge_deleted.py`, 96, 101`） |

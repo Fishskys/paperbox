@@ -402,10 +402,15 @@ class Settings(BaseSettings):
     #: Extra attempts after a failed **HTTP** probe (PostgreSQL and the object
     #: store answer through clients that handle their own reconnects).
     health_probe_retries: int = Field(default=1, alias="HEALTH_PROBE_RETRIES")
-    #: How long a probe verdict may be reused. Billable probes (a third-party
-    #: embedding API) set their TTL from this: a burst of ``/health`` calls must
-    #: not buy one API call each.
-    health_probe_cache_ttl: float = Field(default=60.0, alias="HEALTH_PROBE_CACHE_TTL")
+    #: How long a probe verdict may be reused, in seconds. It applies to **every**
+    #: dependency, local ones included: a bulk upload hammers ``/health`` and each
+    #: call must not re-probe the whole stack (nor buy an API call). Per-dependency
+    #: values come from ``HEALTH_CACHE_TTL_OVERRIDES``.
+    health_probe_cache_ttl: float = Field(default=300.0, alias="HEALTH_PROBE_CACHE_TTL")
+    #: Per-dependency TTL override, same ``name=seconds`` syntax as the timeout one
+    #: (``opensearch=30,embedding=900``). Parsed through
+    #: :func:`parse_seconds_overrides` by :attr:`health_cache_ttl_map`.
+    health_cache_ttl_overrides: str = Field(default="", alias="HEALTH_CACHE_TTL_OVERRIDES")
     #: Probe every dependency once while booting (logged, never fatal) so a
     #: deployment's log line answers "were the dependencies up when I started?".
     #: **There is deliberately no periodic probing** -- on demand only: this one
@@ -656,6 +661,13 @@ class Settings(BaseSettings):
         return parse_timeout_overrides(self.health_timeout_overrides)
 
     @property
+    def health_cache_ttl_map(self) -> dict[str, float]:
+        """``HEALTH_CACHE_TTL_OVERRIDES`` as ``{dependency: seconds}``."""
+        return parse_seconds_overrides(
+            self.health_cache_ttl_overrides, env="HEALTH_CACHE_TTL_OVERRIDES"
+        )
+
+    @property
     def archive_tmp_dir(self) -> Path:
         """Directory the archive service extracts into (system temp by default)."""
         raw = (self.ingest_archive_tmp_dir or "").strip()
@@ -689,12 +701,15 @@ def parse_local_roots(value: str | None) -> list[Path]:
     return roots
 
 
-def parse_timeout_overrides(value: str | None) -> dict[str, float]:
-    """Parse ``HEALTH_TIMEOUT_OVERRIDES`` (``name=seconds`` pairs).
+def parse_seconds_overrides(
+    value: str | None, *, env: str = "HEALTH_TIMEOUT_OVERRIDES"
+) -> dict[str, float]:
+    """Parse a ``name=seconds`` override list (``HEALTH_TIMEOUT_OVERRIDES``,
+    ``HEALTH_CACHE_TTL_OVERRIDES``).
 
     Accepts ``,`` and ``;`` as separators, ignores empty items, and rejects a
     malformed pair or a non-positive number outright: a typo here would
-    otherwise silently leave a probe on the wrong timeout.
+    otherwise silently leave a probe on the wrong timeout or cache TTL.
     """
     overrides: dict[str, float] = {}
     text = str(value or "").replace(";", ",")
@@ -705,21 +720,22 @@ def parse_timeout_overrides(value: str | None) -> dict[str, float]:
         name, separator, raw_seconds = item.partition("=")
         name = name.strip()
         if not separator or not name:
-            raise ValueError(
-                f"HEALTH_TIMEOUT_OVERRIDES entry {item!r} is not 'name=seconds'"
-            )
+            raise ValueError(f"{env} entry {item!r} is not 'name=seconds'")
         try:
             seconds = float(raw_seconds.strip())
         except ValueError as exc:
             raise ValueError(
-                f"HEALTH_TIMEOUT_OVERRIDES entry {item!r} has a non-numeric timeout"
+                f"{env} entry {item!r} has a non-numeric value"
             ) from exc
         if seconds <= 0:
-            raise ValueError(
-                f"HEALTH_TIMEOUT_OVERRIDES entry {item!r} must be positive"
-            )
+            raise ValueError(f"{env} entry {item!r} must be positive")
         overrides[name] = seconds
     return overrides
+
+
+def parse_timeout_overrides(value: str | None) -> dict[str, float]:
+    """Parse ``HEALTH_TIMEOUT_OVERRIDES`` (``name=seconds`` pairs)."""
+    return parse_seconds_overrides(value, env="HEALTH_TIMEOUT_OVERRIDES")
 
 
 @lru_cache(maxsize=1)

@@ -194,3 +194,18 @@ def _never_touch_real_object_storage(monkeypatch):
     store = InMemoryArtifactStore()
     monkeypatch.setattr(parser_service, "_default_store", lambda: store)
     return store
+
+
+@pytest.fixture(autouse=True)
+def _isolated_probe_cache() -> None:
+    """The probe verdict cache is process-wide, and every dependency now caches.
+
+    A verdict seeded by one test (``postgres``, ``opensearch`` ...) would otherwise
+    be reused by the next test that probes the same name -- 5 minutes of TTL is far
+    longer than a test run. Clear it on both sides of every test.
+    """
+    from app.services import health_service
+
+    health_service.clear_probe_cache()
+    yield
+    health_service.clear_probe_cache()

@@ -18,8 +18,18 @@
   200 且向量宽度等于 `EMBEDDING_DIMENSION` —— key 错（401）、模型名错（404）、换了个别的宽度的模型，
   都会如实报 `error`。**只影响判定**：客户端仍打容器的 `POST /embed`。
 - 探针配置键：`HEALTH_HTTP_TIMEOUT`、`HEALTH_TIMEOUT_OVERRIDES`、`HEALTH_PROBE_RETRIES`、
-  `HEALTH_PROBE_CACHE_TTL`、`HEALTH_PROBE_ON_STARTUP`、`EMBEDDING_HEALTH_MODE`、`EMBEDDING_API_KEY`
-  （`.env.example` 有中英注释）。
+  `HEALTH_PROBE_CACHE_TTL`、`HEALTH_CACHE_TTL_OVERRIDES`、`HEALTH_PROBE_ON_STARTUP`、
+  `EMBEDDING_HEALTH_MODE`、`EMBEDDING_API_KEY`（`.env.example` 有中英注释）。
+- **每个依赖的探针结论都缓存，默认 5 分钟，可按依赖覆盖**（2026-10-14）：以前只有计费探针（第三方 embedding）
+  带 TTL，本地依赖每次 `/health` 都真探。按需探测下这没意义 —— 批量上传期间 `/health` 会被反复调用，每次都重跑
+  `SELECT 1` + 集群健康查询 + 桶存在性检查。现在本地依赖同样缓存，`HEALTH_PROBE_CACHE_TTL` 默认 300s，
+  `HEALTH_CACHE_TTL_OVERRIDES`（`opensearch=30,embedding=900`）按依赖调。**新鲜度上限就是 TTL**：依赖挂掉后
+  `/health` 最多 5 分钟才改口，响应里的 `cached: true` 与原始 `checked_at` 表明这个结论有多旧；
+  `scripts/healthcheck.py` 走 `use_cache=False`，运维要实时结果时永远真探。
+- **应用容器不再声明 compose healthcheck**（2026-10-14）：compose 的 healthcheck 是**定时轮询**（原为 20s），与
+  "只按需探测"直接冲突 —— 接了第三方 embedding API 就是定时计费。`docker ps` 因此不再显示 healthy 字样；健康看
+  `/health` 或 `scripts/healthcheck.py`（`restart: unless-stopped` 仍在，进程死了照样被拉起来）。
+  `tests/test_health.py` 有一条守卫用例钉住这个决定，免得有人"顺手补一个健康检查"。
 - **启动时探一次依赖并写进日志**（2026-10-14，`HEALTH_PROBE_ON_STARTUP`，默认开）：失败只 `warning`、不拦启动
   （进程可以先于容器起来，真正必须拦的是维度对账）。**探测策略定为"只按需"**：这一次 + 之后每次调 `/health`，
   **没有定时器** —— 周期探第三方 API 是逐次计费的，本地部署无所谓，接了第三方就承受不起。启动那次结论同时落缓存，

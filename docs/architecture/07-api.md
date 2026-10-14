@@ -29,7 +29,7 @@
 
 | 方法 | 路径 | 作用 | Bearer | 关键查询参数 | 出处 |
 |---|---|---|---|---|---|
-| GET | `/health` | 每个依赖一条**声明式探针**（PG / OpenSearch / MinIO / embedding / rerank / docling；未配置的报 `disabled`）。顶层 `status` 只表示 API 进程存活，`degraded` 汇总**必需**依赖是否就绪，`dependencies` 带每项状态/延迟/检查时刻/原因；容器 healthcheck 判 `degraded` | public | — | `app/api/health.py`、`app/services/health_service.py` |
+| GET | `/health` | 每个依赖一条**声明式探针**（PG / OpenSearch / MinIO / embedding / rerank / docling；未配置的报 `disabled`）。顶层 `status` 只表示 API 进程存活，`degraded` 汇总**必需**依赖是否就绪，`dependencies` 带每项状态/延迟/检查时刻/原因。**探测只按需**（启动一次 + 每次调用），没有定时器；每项结论按 `HEALTH_PROBE_CACHE_TTL`（默认 300s，`HEALTH_CACHE_TTL_OVERRIDES` 可按依赖覆盖）复用，命中时带 `cached: true` 与原始 `checked_at` | public | — | `app/api/health.py`、`app/services/health_service.py` |
 | GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | read | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
 | GET | `/` | landing（`include_in_schema=False`） | public | — | `app/main.py` 的 `lifespan()` |
 | POST | `/api/papers/ingest` | URL 摄取 | write | — | `app/api/ingestion.py` |

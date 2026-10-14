@@ -134,17 +134,33 @@ def test_the_default_registry_is_the_endpoint_registry(monkeypatch) -> None:
 
 
 def test_the_report_marks_a_cached_verdict(capsys: pytest.CaptureFixture) -> None:
+    """缓存命中要标出来 —— 但 CLI 自己**不**吃缓存（它总是真探）。"""
     spec_with_ttl = replace(
         spec("embedding", mock=transport(200)), cache_ttl_s=60.0
     )
-    clock = {"now": 1_000.0}
-    real_clock = hs._CLOCK
-    hs._CLOCK = lambda: clock["now"]
-    try:
-        asyncio.run(hs.run_probe(spec_with_ttl))
-        healthcheck.main((spec_with_ttl,), with_extras=False)
-    finally:
-        hs._CLOCK = real_clock
+    # Seed a verdict as if an earlier /health call had probed (not via the CLI).
+    asyncio.run(hs.run_probe(spec_with_ttl))
+
+    healthcheck.main((spec_with_ttl,), with_extras=False)
 
     out = capsys.readouterr().out
-    assert "cached verdict" in out
+    assert "cached verdict" not in out, "CLI 是运维的实时检查：必须绕开缓存"
+
+
+def test_the_cli_bypasses_the_verdict_cache() -> None:
+    """运维的实时检查必须绕开缓存：缓存里有结论也要真探一次。"""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, text="")
+
+    spec_with_ttl = replace(
+        spec("embedding", mock=httpx.MockTransport(handler)), cache_ttl_s=60.0
+    )
+    asyncio.run(hs.run_probe(spec_with_ttl))  # 一次「/health 已经探过」的假象
+    calls.clear()
+
+    healthcheck.main((spec_with_ttl,), with_extras=False)
+
+    assert calls, "缓存里有结论也必须真探一次"

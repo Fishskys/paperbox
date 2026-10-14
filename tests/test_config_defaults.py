@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import parse_timeout_overrides, settings
+from app.core.config import Settings, parse_seconds_overrides, parse_timeout_overrides, settings
 from app.services import health_service as hs
 
 
@@ -118,3 +118,46 @@ def test_the_embedding_batch_default_matches_the_deployed_value(
     monkeypatch.delenv("EMBEDDING_BATCH_SIZE", raising=False)
 
     assert Settings(_env_file=None).embedding_batch_size == 16
+
+
+# --------------------------------------------------------------------------- #
+# 每个依赖的探针结论都有缓存时长（默认 5 分钟，可按依赖覆盖）
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shipped_default_is_five_minutes() -> None:
+    """诊断边界：默认 TTL 就是"新鲜度"—— 依赖挂了最多 5 分钟内会被 /health 复用旧结论。"""
+    assert Settings(_env_file=None).health_probe_cache_ttl == 300.0
+
+
+def test_every_probe_caches_its_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地依赖也要缓存：批量上传时 /health 被反复调用，不该每次都重探整个栈。"""
+    monkeypatch.setattr(settings, "health_cache_ttl_overrides", "", raising=False)
+    monkeypatch.setattr(settings, "health_probe_cache_ttl", 300.0, raising=False)
+
+    for spec in hs.health_specs():
+        assert spec.cache_ttl_s == 300.0, spec.name
+
+
+def test_a_cache_ttl_override_is_per_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        settings, "health_cache_ttl_overrides", "opensearch=30,embedding=900", raising=False
+    )
+    monkeypatch.setattr(settings, "health_probe_cache_ttl", 300.0, raising=False)
+
+    assert hs.opensearch_spec().cache_ttl_s == 30.0
+    assert hs.embedding_spec().cache_ttl_s == 900.0
+    assert hs.postgres_spec().cache_ttl_s == 300.0, "没被覆盖的用统一默认值"
+
+
+def test_a_malformed_cache_override_names_its_own_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """报错要说清是哪个配置键写错了 —— 超时与缓存用的是同一个解析器。"""
+    monkeypatch.setattr(settings, "health_cache_ttl_overrides", "opensearch=x", raising=False)
+
+    with pytest.raises(ValueError, match="HEALTH_CACHE_TTL_OVERRIDES"):
+        settings.health_cache_ttl_map
+
+
+def test_the_shared_parser_labels_the_env_var_it_was_given() -> None:
+    with pytest.raises(ValueError, match="SOMETHING_ELSE"):
+        parse_seconds_overrides("a=b", env="SOMETHING_ELSE")

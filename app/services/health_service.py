@@ -9,11 +9,11 @@ Here each dependency is one :class:`ProbeSpec` that says out loud how success is
 judged (``ok_status`` plus an optional ``ok_when`` on the body), where its
 credentials come from (``auth``/``token``), how long it may take
 (``timeout_s``/``retries``), whether a failure makes the deployment *degraded*
-(``required``) and, for billable probes, how long an answer may be reused
-(``cache_ttl_s``).
+(``required``) and how long a verdict may be reused (``cache_ttl_s`` -- every
+dependency has one, and probing here is on demand only: no timer, ever).
 
 :func:`run_probe` never raises: a probe answers ``ok`` / ``error`` / ``disabled``
-/ ``unknown`` / ``stale`` and carries a human-readable ``reason``.
+/ ``unknown`` and carries a human-readable ``reason``.
 """
 
 from __future__ import annotations
@@ -110,8 +110,11 @@ class ProbeSpec:
     #: ``False`` for optional dependencies: a failure is reported but does not
     #: make the deployment degraded.
     required: bool = True
-    #: Reuse a fresh verdict for this many seconds (billable probes: a container
-    #: healthcheck polls every 20 s and must not buy an API call each time).
+    #: Reuse a fresh verdict for this many seconds. Every registry spec sets it
+    #: (``HEALTH_PROBE_CACHE_TTL``, 5 min by default): probing is on demand, so a
+    #: burst of ``/health`` calls -- a bulk upload hitting the API -- must reuse one
+    #: round of checks instead of re-running them all, and a billable probe must
+    #: not buy an API call each time. ``0`` means "never cache".
     cache_ttl_s: float = 0.0
     #: One line for humans: which endpoint/contract this probe speaks.
     detail: str = ""
@@ -435,12 +438,24 @@ def _timeout_for(name: str) -> float:
     return settings.health_timeout_map.get(name, settings.health_http_timeout)
 
 
+def _cache_ttl_for(name: str) -> float:
+    """Verdict TTL for one dependency.
+
+    Every probe is cached -- the local ones too: a bulk upload hammers ``/health``
+    and each call must not re-run ``SELECT 1``, a cluster health query and a bucket
+    existence check. ``HEALTH_CACHE_TTL_OVERRIDES`` tunes one dependency
+    (``opensearch=30``); the default is ``HEALTH_PROBE_CACHE_TTL`` (5 min).
+    """
+    return settings.health_cache_ttl_map.get(name, settings.health_probe_cache_ttl)
+
+
 def postgres_spec() -> ProbeSpec:
     """The metadata store: the cheapest statement that proves a usable session."""
     return ProbeSpec(
         name="postgres",
         kind=KIND_POSTGRES,
         timeout_s=_timeout_for("postgres"),
+        cache_ttl_s=_cache_ttl_for("postgres"),
         detail="SELECT 1 over POSTGRES_DSN",
     )
 
@@ -454,6 +469,7 @@ def opensearch_spec() -> ProbeSpec:
         path="/_cluster/health",
         ok_when=lambda body: body.get("status") in {"green", "yellow"},
         timeout_s=_timeout_for("opensearch"),
+        cache_ttl_s=_cache_ttl_for("opensearch"),
         retries=settings.health_probe_retries,
         detail="GET /_cluster/health",
     )
@@ -466,6 +482,7 @@ def minio_spec() -> ProbeSpec:
         kind=KIND_S3,
         target=lambda: settings.minio_bucket,
         timeout_s=_timeout_for("minio"),
+        cache_ttl_s=_cache_ttl_for("minio"),
         detail="bucket_exists(MINIO_BUCKET)",
     )
 
@@ -493,6 +510,7 @@ def _container_embedding_spec() -> ProbeSpec:
         unknown_when=lambda body: body.get("loaded") is False,
         timeout_s=_timeout_for("embedding"),
         retries=settings.health_probe_retries,
+        cache_ttl_s=_cache_ttl_for("embedding"),
         detail="container GET /health",
     )
 
@@ -527,7 +545,7 @@ def _openai_embedding_spec() -> ProbeSpec:
         ok_when=_vector_width_matches,
         timeout_s=_timeout_for("embedding"),
         retries=0,
-        cache_ttl_s=settings.health_probe_cache_ttl,
+        cache_ttl_s=_cache_ttl_for("embedding"),
         detail="OpenAI-compatible /embeddings (vector width checked)",
     )
 
@@ -543,6 +561,7 @@ def docling_spec() -> ProbeSpec:
         ok_status=(200,),
         timeout_s=_timeout_for("docling"),
         retries=settings.health_probe_retries,
+        cache_ttl_s=_cache_ttl_for("docling"),
         detail="GET /health (may live on another host)",
     )
 
@@ -563,6 +582,7 @@ def rerank_spec() -> ProbeSpec:
         unknown_when=lambda body: body.get("rerank_loaded") is False,
         timeout_s=_timeout_for("rerank"),
         retries=settings.health_probe_retries,
+        cache_ttl_s=_cache_ttl_for("rerank"),
         required=False,
         detail="GET /health (rerank_model present)",
     )

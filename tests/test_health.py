@@ -262,23 +262,25 @@ def test_dependencies_do_not_leak_urls(client: TestClient, monkeypatch: pytest.M
 
 
 # --------------------------------------------------------------------------- #
-# 容器 healthcheck 的静态守卫（2026-10-14：从"看 200"改成"看 degraded"）
+# 容器 healthcheck：**故意不设**（2026-10-14 定论）
 # --------------------------------------------------------------------------- #
 
 COMPOSE = Path(__file__).resolve().parents[1] / "docker-compose.yml"
 
 
-def test_the_container_healthcheck_gates_on_dependencies() -> None:
-    """只看 200 的 healthcheck 在依赖全挂时照样报健康；必须解析 degraded。"""
+def test_the_api_service_declares_no_healthcheck() -> None:
+    """compose 的 healthcheck 是定时轮询，与"只按需探测"的策略冲突（会定时计费）。
+
+    策略在 docker-compose.yml 的注释与 UserManual 里写明；这里钉住它，免得有人
+    "顺手补一个健康检查"而把定时探针又引回来。
+    """
     import yaml
 
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
-    app_service = services["api"]
-    test = app_service["healthcheck"]["test"]
-    blob = "\n".join(test) if isinstance(test, list) else str(test)
+    api = services["api"]
 
-    assert "degraded" in blob, "容器健康必须反映依赖，而不是只看 HTTP 200"
-    assert "8077/health" in blob
+    assert "healthcheck" not in api, "探测只按需：不要给 api 服务加定时 healthcheck"
+    assert api["restart"] == "unless-stopped", "进程死了仍应被 compose 拉起来"
 
 
 def test_the_suite_pins_the_startup_probe_off() -> None:

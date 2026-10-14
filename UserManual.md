@@ -194,7 +194,8 @@ uv run python scripts/healthcheck.py
 | `HEALTH_HTTP_TIMEOUT` | 每个依赖探针的超时（秒） | `10` | **统一一个值，不按"本机/外部"分档**；PG 与对象存储的检查也走这个预算（超时判 `error`，不让 `/health` 无限等） |
 | `HEALTH_TIMEOUT_OVERRIDES` | 单个依赖的超时覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `docling=30,embedding=5`）；覆盖优先于统一默认值，写错直接报错 |
 | `HEALTH_PROBE_RETRIES` | 探针失败后的额外尝试次数 | `1` | 只作用于 HTTP 探针（PG / 对象存储由客户端自己重连） |
-| `HEALTH_PROBE_CACHE_TTL` | 探针结论的复用时长（秒） | `60` | 只影响声明了 TTL 的探针（当前仅计费探针：第三方 embedding）。按需探测下它的意义是"一串密集的 `/health` 调用不该每次买一次 API 调用" |
+| `HEALTH_PROBE_CACHE_TTL` | 每个依赖探针结论的复用时长（秒） | `300`（5 分钟） | **对所有依赖生效**（本地也缓存：批量上传期间 `/health` 被反复调用，不该每次都重探整个栈）。它同时就是"新鲜度"上限：依赖挂掉后最多这么久才会被改口 |
+| `HEALTH_CACHE_TTL_OVERRIDES` | 单个依赖的缓存时长覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `opensearch=30,embedding=900`）；语法与超时覆盖一致，写错直接报错 |
 | `HEALTH_PROBE_ON_STARTUP` | 启动时把每个依赖探一次并写日志 | `true` | 失败只告警、不拦启动；结论同时落缓存。**探测只按需（这一次 + 每次调 `/health`），没有定时器** —— 周期探第三方 API 逐次计费；不想要这次启动探测就设 `false` |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
@@ -796,13 +797,17 @@ upsert 成 `source=env` 的 admin 行；也可以直接用 `uv run python script
 **Q23 `/health` 报 `degraded: true`，或者第三方 embedding 的 key 失效了会怎么表现？**
 每一项依赖都有自己的判据，`dependencies` 里能看到状态、延迟、检查时刻与原因。embedding 在
 `EMBEDDING_HEALTH_MODE=openai_compatible` 下会真发一次 `POST /embeddings`（探针文本固定一条），key 错或过期
-→ 401 → 该项 `error`、`degraded` 变 `true`，容器 healthcheck 随之把 `paperbox-api` 标成 unhealthy。
+→ 401 → 该项 `error`、`degraded` 变 `true`（看 `/health` 或 `scripts/healthcheck.py`；本项目**故意不给 api 容器
+设定时 healthcheck**，见下）。
 判据不是"有应答就算好"：**401 / 404 / 429 / 3xx 都是 `error`**（旧实现只按「<500 即活」判，会把它们当成
-健康）。这条探针是**计费**的，所以结论按 `HEALTH_PROBE_CACHE_TTL`（默认 60s）缓存；要看实时结果用
-`uv run python scripts/healthcheck.py`，它逐项打印状态、延迟与失败原因，并给出退出码。
-**探测频率：只按需，没有定时器** —— 启动时探一次（`HEALTH_PROBE_ON_STARTUP`，结论进日志）、之后每次调 `/health`
-真探一轮（本地依赖不缓存；计费探针按 TTL 复用）。服务端**不会**周期性地自己去探：本地部署无所谓，接了第三方 API
-就是逐次计费，所以宁可让健康状态"在你问的时候是新的"，也不要"没人问也在花钱"。
+健康）。**要看实时结果用 `uv run python scripts/healthcheck.py`** —— 它总是一次真探（绕开缓存），逐项打印状态、
+延迟与失败原因，并给出退出码。
+**探测频率：只按需，没有定时器** —— 启动时探一次（`HEALTH_PROBE_ON_STARTUP`，结论进日志）、之后调 `/health` 时才探。
+服务端**不会**周期性地自己去探：本地部署无所谓，接了第三方 API 就是逐次计费，所以宁可让健康状态"在你问的时候
+够新"，也不要"没人问也在花钱"。**代价是新鲜度**：每个依赖的结论都按 `HEALTH_PROBE_CACHE_TTL`（默认 **300s / 5 分钟**）
+复用，所以依赖在某时刻挂掉，`/health` 最多 5 分钟后才会改口（响应里带 `cached: true` 与原始 `checked_at`，一眼能看出
+这个结论有多旧）；要更实时就调小 TTL，或按依赖单独设（`HEALTH_CACHE_TTL_OVERRIDES`）。这样批量上传期间反复调
+`/health` 不会每次都重探整个依赖栈。
 注意 `EMBEDDING_HEALTH_MODE` 只影响**判定**：客户端仍打容器的 `POST /embed`，真把嵌入切到第三方需要适配层，
 是另一件事。第三个常见取值是 `disabled`（比如没配 `DOCLING_URL`、或 `RERANK_ENABLED=false`）——**不是故障**，
 不影响 `degraded`。
