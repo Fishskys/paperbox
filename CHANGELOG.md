@@ -4,7 +4,7 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.6.0] - 2026-10-14
 
 ### Added
 
@@ -27,8 +27,9 @@
   `/health` 最多 5 分钟才改口，响应里的 `cached: true` 与原始 `checked_at` 表明这个结论有多旧；
   `scripts/healthcheck.py` 走 `use_cache=False`，运维要实时结果时永远真探。
 - **应用容器不再声明 compose healthcheck**（2026-10-14）：compose 的 healthcheck 是**定时轮询**（原为 20s），与
-  "只按需探测"直接冲突 —— 接了第三方 embedding API 就是定时计费。`docker ps` 因此不再显示 healthy 字样；健康看
-  `/health` 或 `scripts/healthcheck.py`（`restart: unless-stopped` 仍在，进程死了照样被拉起来）。
+  "只按需探测"直接冲突 —— 接了第三方 embedding API 就是定时计费。（先改成解析 `degraded` 的那一版因此被这一步取代：
+  依赖挂了不再由 `docker ps` 显示，而是由 `/health` 的 `degraded` 如实表达。）`docker ps` 因此不再显示 healthy
+  字样；健康看 `/health` 或 `scripts/healthcheck.py`（`restart: unless-stopped` 仍在，进程死了照样被拉起来）。
   `tests/test_health.py` 有一条守卫用例钉住这个决定，免得有人"顺手补一个健康检查"。
 - **启动时探一次依赖并写进日志**（2026-10-14，`HEALTH_PROBE_ON_STARTUP`，默认开）：失败只 `warning`、不拦启动
   （进程可以先于容器起来，真正必须拦的是维度对账）。**探测策略定为"只按需"**：这一次 + 之后每次调 `/health`，
@@ -43,8 +44,6 @@
   `error`（`timed out after Ns`），端点总能给出答复。
 - **4xx 不再算健康**（2026-10-14）：探针的成功判据从「`status < 500` 即活」改成白名单 + body 语义。
   旧判据会把 401（key 失效）、404（接口改名）、429（限流）都报成健康，第三方依赖下这是最危险的假阳性。
-- **容器 healthcheck 判 `degraded`**（2026-10-14）：`docker-compose.yml` 的 app 服务不再只看 `/health`
-  是否 200（依赖全挂时它照样 200），改为解析 body 的 `degraded`，并加了一条静态守卫用例防止回退。
 - **`EMBEDDING_BATCH_SIZE` 代码默认值 32 → 16**（2026-10-14）：与 `.env` / `.env.example` 早已采用的值一致，
   且低于第三方 embedding API 的单请求上限（实测 25 条以上直接 400）。
 - **`scripts/healthcheck.py` 复用同一份探针注册表**（2026-10-14）：删掉自带的一套 `check_tcp`/`check_http`
