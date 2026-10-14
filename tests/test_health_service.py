@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
 
+from app.core.config import settings
 from app.services import health_service as hs
 
 
@@ -364,3 +366,150 @@ def test_redaction_covers_a_dsn_and_an_echoed_key() -> None:
     )
     assert "pw" not in hs.redact("key user:pw@host rejected")
     assert "abcd1234" not in hs.redact("token abcd1234 rejected", secret="abcd1234")
+
+
+# --------------------------------------------------------------------------- #
+# the embedding probe: container contract vs OpenAI-compatible API
+# --------------------------------------------------------------------------- #
+
+
+def embeddings_body(width: int) -> dict:
+    return {
+        "object": "list",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.01] * width}],
+        "usage": {"prompt_tokens": 4, "total_tokens": 4},
+    }
+
+
+def openai_settings(monkeypatch: pytest.MonkeyPatch, **overrides) -> None:
+    values = {
+        "embedding_health_mode": "openai_compatible",
+        "embedding_url": "https://api.example/v1",
+        "embedding_model": "embedding-model-x",
+        "embedding_api_key": "k-1234567890",
+        "embedding_dimension": 1024,
+        "health_probe_cache_ttl": 0.0,
+    }
+    values.update(overrides)
+    for key, value in values.items():
+        monkeypatch.setattr(settings, key, value, raising=False)
+
+
+def test_the_container_mode_keeps_its_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "embedding_health_mode", "container", raising=False)
+    monkeypatch.setattr(settings, "embedding_url", "http://embed.test:8090", raising=False)
+
+    spec = hs.embedding_spec()
+    assert spec.path == "/health" and spec.method == "GET"
+
+    loaded = run(replace(spec, transport=transport(200, payload={"status": "ok", "loaded": True})))
+    assert loaded.status == hs.OK
+
+
+def test_a_container_that_has_not_loaded_its_model_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """答得上话 ≠ 能干活：容器 load 完模型前不能算 ok，也不该算 error。"""
+    monkeypatch.setattr(settings, "embedding_health_mode", "container", raising=False)
+
+    result = run(
+        replace(
+            hs.embedding_spec(),
+            transport=transport(200, payload={"status": "ok", "loaded": False}),
+        )
+    )
+
+    assert result.status == hs.UNKNOWN
+    assert hs.is_degraded([result]) is True, "unknown 不是健康"
+
+
+def test_the_openai_mode_checks_the_vector_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openai_settings(monkeypatch)
+    calls: list[httpx.Request] = []
+
+    result = run(
+        replace(
+            hs.embedding_spec(),
+            transport=transport(200, payload=embeddings_body(1024), calls=calls),
+        )
+    )
+
+    assert result.status == hs.OK
+    request = calls[0]
+    assert str(request.url) == "https://api.example/v1/embeddings"
+    assert request.method == "POST"
+    assert request.headers["authorization"] == "Bearer k-1234567890"
+    assert json.loads(request.content) == {
+        "model": "embedding-model-x",
+        "input": [hs.PROBE_TEXT],
+    }
+
+
+def test_the_openai_mode_reports_a_rejected_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    openai_settings(monkeypatch)
+
+    result = run(
+        replace(hs.embedding_spec(), transport=transport(401, text="No API-key provided."))
+    )
+
+    assert result.status == hs.ERROR
+    assert "401" in result.reason
+
+
+def test_the_openai_mode_reports_a_model_of_the_wrong_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openai_settings(monkeypatch)
+
+    result = run(
+        replace(hs.embedding_spec(), transport=transport(200, payload=embeddings_body(768)))
+    )
+
+    assert result.status == hs.ERROR
+    assert "criteria" in result.reason
+
+
+def test_the_openai_probe_fails_without_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openai_settings(monkeypatch, embedding_api_key="")
+    calls: list[httpx.Request] = []
+
+    result = run(
+        replace(
+            hs.embedding_spec(),
+            transport=transport(200, payload=embeddings_body(1024), calls=calls),
+        )
+    )
+
+    assert result.status == hs.ERROR
+    assert calls == []
+
+
+def test_the_openai_probe_never_retries_and_caches_its_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openai_settings(monkeypatch, health_probe_cache_ttl=60.0)
+    fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    spec = replace(
+        hs.embedding_spec(),
+        transport=transport(200, payload=embeddings_body(1024), calls=calls),
+    )
+
+    assert spec.retries == 0, "计费调用不重试"
+    assert spec.cache_ttl_s == 60.0, "计费调用必须带缓存 TTL"
+
+    run(spec)
+    second = run(spec)
+
+    assert second.cached is True
+    assert len(calls) == 1
+
+
+def test_the_openai_probe_uses_the_external_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    openai_settings(monkeypatch, health_http_timeout=15.0)
+
+    assert hs.embedding_spec().timeout_s == 15.0

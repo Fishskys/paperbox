@@ -63,6 +63,12 @@ READ_ACCESS_PUBLIC = "public"
 READ_ACCESS_KEY = "key"
 READ_ACCESS_MODES = frozenset({READ_ACCESS_PUBLIC, READ_ACCESS_KEY})
 
+#: ``EMBEDDING_HEALTH_MODE`` vocabulary: the probe speaks the container's own
+#: endpoints, or an OpenAI-compatible ``/embeddings``.
+EMBEDDING_HEALTH_CONTAINER = "container"
+EMBEDDING_HEALTH_OPENAI = "openai_compatible"
+EMBEDDING_HEALTH_MODES = frozenset({EMBEDDING_HEALTH_CONTAINER, EMBEDDING_HEALTH_OPENAI})
+
 
 class Settings(BaseSettings):
     """Typed view over the process environment."""
@@ -115,6 +121,16 @@ class Settings(BaseSettings):
     #: otherwise normal backpressure shows up as a failed batch.
     embedding_timeout: float = Field(default=300.0, alias="EMBEDDING_TIMEOUT")
     embedding_max_retries: int = Field(default=2, alias="EMBEDDING_MAX_RETRIES")
+    #: Which contract the **probe** speaks (``container`` | ``openai_compatible``).
+    #: The client keeps the container contract (``POST /embed``) either way: using
+    #: a third-party embedding API for real needs an adapter, which is separate
+    #: work. This only decides how ``/health`` judges the dependency.
+    embedding_health_mode: str = Field(
+        default=EMBEDDING_HEALTH_CONTAINER, alias="EMBEDDING_HEALTH_MODE"
+    )
+    #: Credential for the probe in ``openai_compatible`` mode (unused by the
+    #: client, and only ever read when that mode is on).
+    embedding_api_key: str = Field(default="", alias="EMBEDDING_API_KEY")
 
     # --- HTTP API ---
     paper_api_key: str = Field(default="change-me", alias="PAPER_API_KEY")
@@ -402,6 +418,17 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("EMBEDDING_BATCH_SIZE must be positive")
         return value
+
+    @field_validator("embedding_health_mode")
+    @classmethod
+    def _check_embedding_health_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in EMBEDDING_HEALTH_MODES:
+            raise ValueError(
+                "EMBEDDING_HEALTH_MODE must be one of "
+                f"{sorted(EMBEDDING_HEALTH_MODES)}, got {value!r}"
+            )
+        return normalized
 
     @field_validator("rrf_keyword_weight", "rrf_semantic_weight")
     @classmethod

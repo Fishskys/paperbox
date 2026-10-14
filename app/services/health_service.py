@@ -30,7 +30,7 @@ import httpx
 from minio.error import S3Error
 from sqlalchemy import text
 
-from app.core.config import settings
+from app.core.config import EMBEDDING_HEALTH_OPENAI, settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -60,6 +60,10 @@ RETRY_DELAY_S = 0.3
 
 #: How much of a non-2xx body is kept in the reason (enough to see the message).
 REASON_BODY_CHARS = 200
+
+#: The text a billable probe embeds. Fixed and tiny on purpose: the same input is
+#: a single token, cheap, and cacheable on the provider's side.
+PROBE_TEXT = "paperbox health probe"
 
 
 def _no_token() -> str:
@@ -93,6 +97,10 @@ class ProbeSpec:
     ok_status: tuple[int, ...] = (200,)
     #: Extra verdict on a successful status (needs the parsed JSON body).
     ok_when: Callable[[Any], bool] | None = None
+    #: Checked *before* ``ok_when``: a service that answers but cannot serve yet
+    #: (an embedding container whose model is not loaded) is ``unknown``, which
+    #: is not the same as ``error`` and not the same as ``ok``.
+    unknown_when: Callable[[Any], bool] | None = None
     timeout_s: float = 3.0
     #: Extra attempts after the first failure. Only set this on idempotent probes.
     retries: int = 0
@@ -242,14 +250,20 @@ async def _probe_http(spec: ProbeSpec) -> ProbeResult:
             logger.warning("probe %s failed: %s", spec.name, reason)
             return _result(spec, ERROR, reason=reason, latency_ms=latency)
 
-        if spec.ok_when is not None:
+        if spec.ok_when is not None or spec.unknown_when is not None:
             try:
                 body = response.json()
             except ValueError as exc:
                 reason = redact(f"non-JSON body: {exc}", secret=token)
                 logger.warning("probe %s failed: %s", spec.name, reason)
                 return _result(spec, ERROR, reason=reason, latency_ms=latency)
-            if not spec.ok_when(body):
+            if spec.unknown_when is not None and spec.unknown_when(body):
+                # Answering is not the same as serving: an embedding container
+                # whose model is not loaded yet cannot embed anything.
+                reason = "the service answered but cannot serve yet"
+                logger.warning("probe %s: %s", spec.name, reason)
+                return _result(spec, UNKNOWN, reason=reason, latency_ms=latency)
+            if spec.ok_when is not None and not spec.ok_when(body):
                 reason = "body did not match the success criteria"
                 logger.warning("probe %s failed: %s", spec.name, reason)
                 return _result(spec, ERROR, reason=reason, latency_ms=latency)
@@ -439,16 +453,64 @@ def minio_spec() -> ProbeSpec:
 
 
 def embedding_spec() -> ProbeSpec:
-    """The embedding service, by the contract actually in use (the container's)."""
+    """The embedding dependency, judged by the contract the probe is told to speak.
+
+    ``container`` (default) is the deployment's own service; ``openai_compatible``
+    is a third-party API, whose answer must also prove the vector width. The
+    *client* keeps the container contract either way -- this is health only.
+    """
+    if settings.embedding_health_mode == EMBEDDING_HEALTH_OPENAI:
+        return _openai_embedding_spec()
+    return _container_embedding_spec()
+
+
+def _container_embedding_spec() -> ProbeSpec:
     return ProbeSpec(
         name="embedding",
         kind=KIND_HTTP,
         target=lambda: settings.embedding_url,
         path="/health",
         ok_when=lambda body: body.get("status") == "ok",
+        # The container answers /health before the model finishes loading.
+        unknown_when=lambda body: body.get("loaded") is False,
         timeout_s=_timeout_for("embedding"),
         retries=settings.health_probe_retries,
         detail="container GET /health",
+    )
+
+
+def _openai_embedding_spec() -> ProbeSpec:
+    """A third-party embedding API: ``POST /embeddings`` with a bearer token.
+
+    Success is a 200 whose first vector has the configured width -- a wrong key
+    (401), a renamed model (404) or a swapped model (768 dims) all have to read
+    as a problem, which is what the old "< 500 means ok" rule could not see. The
+    call is billable, so it is never retried and its verdict is cached.
+    """
+    expected = settings.embedding_dimension
+
+    def _vector_width_matches(body: Any) -> bool:
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list) or not data:
+            return False
+        vector = data[0].get("embedding") if isinstance(data[0], dict) else None
+        return isinstance(vector, list) and len(vector) == expected
+
+    return ProbeSpec(
+        name="embedding",
+        kind=KIND_HTTP,
+        target=lambda: settings.embedding_url,
+        path="/embeddings",
+        method="POST",
+        json_body={"model": settings.embedding_model, "input": [PROBE_TEXT]},
+        auth=AUTH_BEARER,
+        token=lambda: settings.embedding_api_key,
+        ok_status=(200,),
+        ok_when=_vector_width_matches,
+        timeout_s=_timeout_for("embedding", local=settings.health_http_timeout),
+        retries=0,
+        cache_ttl_s=settings.health_probe_cache_ttl,
+        detail="OpenAI-compatible /embeddings (vector width checked)",
     )
 
 

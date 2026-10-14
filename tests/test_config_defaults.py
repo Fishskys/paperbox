@@ -83,3 +83,24 @@ def test_probe_retries_come_from_settings(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert hs.docling_spec().retries == 3
     assert hs.embedding_spec().retries == 3
+
+
+def test_an_unknown_embedding_health_mode_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    monkeypatch.setenv("EMBEDDING_HEALTH_MODE", "nope")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_the_embedding_health_mode_defaults_to_the_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import Settings
+
+    monkeypatch.delenv("EMBEDDING_HEALTH_MODE", raising=False)
+    assert Settings(_env_file=None).embedding_health_mode == "container"
