@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -28,6 +29,7 @@ import httpx
 from minio.error import S3Error
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -182,7 +184,7 @@ async def _probe_http(spec: ProbeSpec) -> ProbeResult:
     except _MissingToken:
         # Never send a request that can only come back 401: that is exactly the
         # mistake the old "< 500 means ok" rule made.
-        return _result(spec, ERROR, reason="missing token: nothing to authenticate with")
+        return _result(spec, ERROR, reason="credential missing: request not sent")
 
     started = time.perf_counter()
     reason = ""
@@ -320,6 +322,88 @@ async def run_probe(spec: ProbeSpec) -> ProbeResult:
     return await _probe_http(spec)
 
 
+# --------------------------------------------------------------------------- #
+# the deployment's own dependencies
+# --------------------------------------------------------------------------- #
+
+
+def postgres_spec() -> ProbeSpec:
+    """The metadata store: the cheapest statement that proves a usable session."""
+    return ProbeSpec(
+        name="postgres",
+        kind=KIND_POSTGRES,
+        detail="SELECT 1 over POSTGRES_DSN",
+    )
+
+
+def opensearch_spec() -> ProbeSpec:
+    """The search cluster: 200 is not enough, a red cluster cannot answer."""
+    return ProbeSpec(
+        name="opensearch",
+        kind=KIND_HTTP,
+        target=lambda: settings.opensearch_url,
+        path="/_cluster/health",
+        ok_when=lambda body: body.get("status") in {"green", "yellow"},
+        detail="GET /_cluster/health",
+    )
+
+
+def minio_spec() -> ProbeSpec:
+    """The object store: a missing bucket is fine, a refused key is not."""
+    return ProbeSpec(
+        name="minio",
+        kind=KIND_S3,
+        target=lambda: settings.minio_bucket,
+        detail="bucket_exists(MINIO_BUCKET)",
+    )
+
+
+def embedding_spec() -> ProbeSpec:
+    """The embedding service, by the contract actually in use (the container's)."""
+    return ProbeSpec(
+        name="embedding",
+        kind=KIND_HTTP,
+        target=lambda: settings.embedding_url,
+        path="/health",
+        ok_when=lambda body: body.get("status") == "ok",
+        detail="container GET /health",
+    )
+
+
+def docling_spec() -> ProbeSpec:
+    """The parsing backend. Empty ``DOCLING_URL`` means "not in use", not "down"."""
+    return ProbeSpec(
+        name="docling",
+        kind=KIND_HTTP,
+        target=lambda: settings.docling_url,
+        path="/health",
+        # Exactly 200: a 404 on that port means something else is listening.
+        ok_status=(200,),
+        detail="GET /health (may live on another host)",
+    )
+
+
+def health_specs() -> tuple[ProbeSpec, ...]:
+    """The registry: one spec per dependency, in the order the endpoint reports."""
+    return (
+        postgres_spec(),
+        opensearch_spec(),
+        minio_spec(),
+        embedding_spec(),
+        docling_spec(),
+    )
+
+
+async def probe_all(
+    specs: Sequence[ProbeSpec] | None = None,
+) -> tuple[ProbeResult, ...]:
+    """Probe every spec concurrently, preserving the registry's order."""
+    chosen = tuple(specs) if specs is not None else health_specs()
+    if not chosen:
+        return ()
+    return tuple(await asyncio.gather(*(run_probe(spec) for spec in chosen)))
+
+
 __all__ = [
     "AUTH_BEARER",
     "AUTH_NONE",
@@ -333,5 +417,12 @@ __all__ = [
     "ProbeSpec",
     "STALE",
     "UNKNOWN",
+    "docling_spec",
+    "embedding_spec",
+    "health_specs",
+    "minio_spec",
+    "opensearch_spec",
+    "postgres_spec",
+    "probe_all",
     "run_probe",
 ]

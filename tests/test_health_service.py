@@ -139,7 +139,7 @@ def test_a_missing_token_is_an_error_and_no_request_is_sent() -> None:
     result = run(spec)
 
     assert result.status == hs.ERROR
-    assert "token" in result.reason
+    assert "credential" in result.reason
     assert calls == [], "a request that can only 401 must not be sent"
 
 
