@@ -23,7 +23,7 @@
 | `app/services/rerank_service.py` | `truncate_document(text, limit=MAX_DOCUMENT_CHARS)` | 单文档截断到 2000 字符（`MAX_DOCUMENT_CHARS`），索引不变 |
 | 同上 | `rerank_texts(query, texts, top_n=None)` | 调用 `/rerank`；`RERANK_ENABLED=false` 时直接 `None`，空候选返回 `[]` |
 | 同上 | `_parse_scores(body, expected)` | 严格校验：必须是 dict、有 `results`、条数等于输入数、`index` 为 int 且在界内、`score` 为数值；最后按分降序 |
-| 同上 | `is_available()` | 探 `/health`，接受 `status=ok` 或含 `rerank_model`；**全仓无调用方**（仅 /` 出现） |
+| 同上 | `is_available()` | 探 `/health`，接受 `status=ok` 或含 `rerank_model`；单测直接调用，生产由 `app/services/health_service.py` 的 rerank 探针复用同一判据（`required=false`，失败只告警） |
 | 同上 | `rerank_took_ms(started)` | `perf_counter` 毫秒差 |
 | `app/services/query_rewrite_service.py` | `needs_rewrite(query)` | 触发判定：非空、长度 ≤ `QUERY_REWRITE_MAX_CHARS`、命中 CJK 正则（覆盖 Han/假名/谚文） |
 | 同上 | `rewrite_query(query)` | 调 LLM 并清洗；返回 `RewriteOutcome`（永不出错） |

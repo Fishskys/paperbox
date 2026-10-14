@@ -46,9 +46,7 @@
 | | `load_corpus` / `resolve` | 取存活 `INDEXED` 论文；按 `arxiv` 或 `title_like` 前缀解析成 `paper_id` |
 | | `main` | 读 `queries-spec.json`，写 `queries.jsonl` + `labels.jsonl`，打印 UNRESOLVED |
 | `scripts/build_arxiv_ids.py`（50） | 模块级流程 | 5 个主题各 12 条，去重后写 `evals/arxiv_ids.txt`（44-48） |
-| `scripts/healthcheck.py` | `host_port` | 从 URL 文本解析主机与端口（缺省 80） |
-| | `check_tcp` / `check_http` | TCP 连接与 HTTP 探测，各自打印 `ok`/`FAIL` 行 |
-| | `main` | 依赖逐项检查 + 索引文档计数，`RESULT:` 汇总 |
+| `scripts/healthcheck.py` | `api_spec` / `report` / `extras` / `main` | 复用 `/health` 的探针注册表（`app/services/health_service.py`）+ 探 API 进程自身，另打印索引文档数与检索管道漂移；退出码 = 必需依赖是否全 ok |
 | `scripts/acceptance.py` | `Checker` | 逐条 `PASS/FAIL/SKIP` 记录与汇总 |
 | | `main` | 跑 plan plan 第 38 节 的 8 条（外加 `0 dependencies healthy`，共 9 行输出） |
 | `scripts/reindex.py` | `targets` | 未删论文；`--missing` 排除已有 chunks；`--degraded[-stage/-code]` 按账本未解决降级；`--parser-backend` 按 `papers.parser_backend`（`unknown` = 无戳）；三者 AND |
@@ -148,8 +146,8 @@ bulk_ingest_dir.py: collect_files → build_manifest
 **运维**
 
 ```
-healthcheck.py: check_tcp(postgres) → check_http(opensearch /_cluster/health, minio /minio/health/live,
- embedding /health, api /health) → GET <alias>/_count
+healthcheck.py: health_service.probe_all(注册表 + api) → 逐项 status/latency/reason → GET <alias>/_count
+                → ensure_pipelines(dry_run) 漂移检查 → RESULT（必需依赖非 ok 即 exit 1）
 acceptance.py : /health → /api/papers/ingest → /api/jobs/{id} → /api/papers/{id}[/file|/chunks]
  → OpenSearch _count(embedding:*) → /api/search(keyword|semantic|hybrid) → 无鉴权 401
 reindex.py : targets → tasks.reindex_paper → 统计 PaperChunk 数

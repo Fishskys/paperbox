@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **依赖健康检查改成声明式探针**（2026-10-14）：每个依赖一条 `ProbeSpec`（`app/services/health_service.py`），
+  自带成功判据（白名单状态码 + body 语义）、鉴权来源、超时/重试、是否必需、以及计费探针的结论缓存 TTL。
+  `/health` 因此多了 `degraded`（必需依赖是否就绪）与 `dependencies`（每项状态 / 延迟 / 检查时刻 / 原因，
+  失败原因经凭据脱敏后才回显），`services` 与顶层 `status` 保持不变。新增 rerank 探针（可选项，
+  `RERANK_ENABLED=false` 报 `disabled`）与 embedding 的"答得上话 ≠ 能干活"判定（容器模型未加载 ⇒ `unknown`）。
+- **第三方 embedding 的探针契约**：`EMBEDDING_HEALTH_MODE=openai_compatible` 时探针改打
+  `POST {EMBEDDING_URL}/embeddings`（Bearer 来自 `EMBEDDING_API_KEY`，固定一条极短探针文本），判据是
+  200 且向量宽度等于 `EMBEDDING_DIMENSION` —— key 错（401）、模型名错（404）、换了个别的宽度的模型，
+  都会如实报 `error`。**只影响判定**：客户端仍打容器的 `POST /embed`。
+- 探针配置键：`HEALTH_HTTP_TIMEOUT`、`HEALTH_TIMEOUT_OVERRIDES`、`HEALTH_PROBE_RETRIES`、
+  `HEALTH_PROBE_CACHE_TTL`、`EMBEDDING_HEALTH_MODE`、`EMBEDDING_API_KEY`（`.env.example` 有中英注释）。
+
+### Changed
+
+- **4xx 不再算健康**（2026-10-14）：探针的成功判据从「`status < 500` 即活」改成白名单 + body 语义。
+  旧判据会把 401（key 失效）、404（接口改名）、429（限流）都报成健康，第三方依赖下这是最危险的假阳性。
+- **容器 healthcheck 判 `degraded`**（2026-10-14）：`docker-compose.yml` 的 app 服务不再只看 `/health`
+  是否 200（依赖全挂时它照样 200），改为解析 body 的 `degraded`，并加了一条静态守卫用例防止回退。
+- **`EMBEDDING_BATCH_SIZE` 代码默认值 32 → 16**（2026-10-14）：与 `.env` / `.env.example` 早已采用的值一致，
+  且低于第三方 embedding API 的单请求上限（实测 25 条以上直接 400）。
+- **`scripts/healthcheck.py` 复用同一份探针注册表**（2026-10-14）：删掉自带的一套 `check_tcp`/`check_http`
+  （两套实现会互相漂移），只保留探针表达不了的部分（API 进程自身、索引文档数、检索管道漂移）；退出码语义
+  改为"必需依赖不 ok 即 1"，可选依赖失败只警告。
+
 ### Fixed
 
 - **docling 解析路径漏删控制字符**（2026-10-13）：丢控制字符这件事原本只在 `app/parsing/pdf.py` 的

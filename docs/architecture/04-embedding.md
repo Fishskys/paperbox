@@ -55,7 +55,7 @@
 | `POST /v1/embeddings` | `{"model"?: str"input": str\|list[str]"encoding_format"?: str}` | OpenAI 形态 `{"object":"list""model""data":[{"embedding":[...]}]"usage":{...}"latency_ms"}` | 无长度上限（`infra/embedding/server.py`）；`usage` token 恒为 0（`infra/embedding/server.py`） |
 | `POST /rerank` | `{"query": str"documents": [...]"top_n"?: int}` | `{"results":[{"index""score"}...]"model""took_ms"}`，按 score 降序 | 无入参长度上限；服务内按 `RERANK_MAX_BATCH` 分片（`infra/embedding/server.py`） |
 | `GET /info` | — | `{"model""dimension": <int\|null>"max_batch""rerank_model""rerank_max_batch""inference":{workers,queue_depth,waiting,running,completed,rejected}}` | `dimension` 是**模型加载时探针实测**的输出宽度（`get_model()` 里 embed 一条探针文本），模型未加载时为 `null`（`infra/embedding/server.py`）；不再是写死的 1024 |
-| `GET /health` | — | `{"status":"ok""model""dimension": <int\|null>"loaded""rerank_model""rerank_loaded""queue":{...}}` | 模型未加载也返回 200（惰性加载，`infra/embedding/server.py`），此时 `dimension` 为 `null` |
+| `GET /health` | — | `{"status":"ok""model""dimension": <int\|null>"loaded""rerank_model""rerank_loaded""queue":{...}}` | 模型未加载也返回 200（惰性加载，`infra/embedding/server.py`），此时 `dimension` 为 `null`，应用侧探针据此判 `unknown`（**答得上话 ≠ 能干活**，`app/services/health_service.py`） |
 
 PostgreSQL（`app/db/models.py`）：
 
@@ -159,7 +159,9 @@ OpenSearch（`app/search/mappings.py`）：`embedding` = `knn_vector`，`dimensi
 | `EMBEDDING_URL` | `http://localhost:8090`（`.env` 实为 `http://127.0.0.1:8090`） | 应用侧 `/embed` base | `app/core/config.py`、`.env:19` |
 | `EMBEDDING_MODEL` | 代码 `BAAI/bge-m3`；`.env`/compose `intfloat/multilingual-e5-large` | 容器加载的模型名；应用仅作为请求字段与溯源值 | `config.py`、`infra/embedding/server.py`、`infra/docker-compose.yml`、`.env:20` |
 | `EMBEDDING_DIMENSION` | 1024 | 应用侧维度校验 + mapping `dimension` | `config.py`、`.env:21` |
-| `EMBEDDING_BATCH_SIZE` | 代码 32；`.env`/`.env.example` 16 | 单次 `/embed` 的 texts 数 | `config.py`、（正数校验）、`.env:22`、`.env.example` |
+| `EMBEDDING_BATCH_SIZE` | 代码 16；`.env`/`.env.example` 16 | 单次 `/embed` 的 texts 数（默认值必须低于任何提供方的单请求上限：第三方实测 25 条） | `config.py`、（正数校验）、`.env:22`、`.env.example` |
+| `EMBEDDING_HEALTH_MODE` | `container` | `/health` 的 embedding 探针按哪种契约判定：`container`（容器自身的 `/health`）或 `openai_compatible`（第三方 `POST /embeddings`，判据含向量宽度断言）。**只影响探针**，客户端仍打容器的 `POST /embed` | `config.py`、`app/services/health_service.py`、`.env.example` |
+| `EMBEDDING_API_KEY` | 空 | `openai_compatible` 模式探针用的 Bearer 凭证；留空则探针直接判 `error` 且**不发请求** | `config.py`、`app/services/health_service.py` |
 | `EMBEDDING_TIMEOUT` | **300.0** | 单批 HTTP 超时；必须大于服务端最坏排队时间 | `config.py`、`.env.example` |
 | `EMBEDDING_MAX_RETRIES` | 2 | 每批额外重试次数 | `config.py`、`.env.example` |
 | `MAX_BATCH` | 代码 64；compose `16`（`infra/.env` 未设） | `/embed` 入参上限（超批 422） | `infra/embedding/server.py`、`infra/docker-compose.yml` |

@@ -70,9 +70,13 @@ POST   /api/search                  检索（keyword / semantic / hybrid）
 
 ### GET /health 响应
 ```json
-{"status":"ok","version":"0.1.0","services":{"postgres":"ok|error","opensearch":"ok|error","minio":"ok|error","embedding":"ok|error","docling":"ok|error|disabled"}}
+{"status":"ok","version":"0.1.0","degraded":false,
+ "services":{"postgres":"ok|error","opensearch":"ok|error","minio":"ok|error","embedding":"ok|error","rerank":"ok|error|disabled|unknown","docling":"ok|error|disabled"},
+ "dependencies":{"<name>":{"status":"…","required":true,"detail":"…","latency_ms":1.2,"checked_at":"…","reason":"…"}}}
 ```
-（各依赖做轻量探测，不可用时该字段为 `"error"`，整体 status 仍为 ok；embedding 探测 GET /health）
+（每个依赖一条声明式探针，判据是白名单状态码 + body 语义：401/404/429/3xx 都是 `error`，不再是"<500 即活"。
+顶层 `status` 仍只表示 API 进程存活；`degraded` = 有**必需**依赖非 ok；`disabled`（未配置）不算故障。
+`app/services/health_service.py` 是唯一实现，`scripts/healthcheck.py` 复用它。）
 
 ### POST /api/papers/ingest 逻辑（核心）
 1. 校验 `source_type=url` 且 `source` 以 http(s) 开头；创建 `ingestion_jobs` 行 `stage=RECEIVED, progress=0`，随后 `mark_queued()` 置 `stage=QUEUED` 并入队（`app/workers/queue.py`）。

@@ -103,7 +103,9 @@ uv run python scripts/healthcheck.py
 | `EMBEDDING_URL` | 向量/精排推理服务地址 | `http://127.0.0.1:8090` | 与容器 `embedding` 的端口一致 |
 | `EMBEDDING_MODEL` | 向量模型名 | `intfloat/multilingual-e5-large` | 只作为记录与溯源（真正加载的模型由容器侧决定） |
 | `EMBEDDING_DIMENSION` | 向量维度 | `1024` | 必须与索引 `knn_vector.dimension` **和容器模型的实测输出维度**一致；启动时三方对账，不符拒绝启动（见 [#3.5](#35-使用中会遇到的问题) Q19） |
-| `EMBEDDING_BATCH_SIZE` | 单次 `/embed` 的文本数 | `16` | **必须与容器 `MAX_BATCH` 相同**（超批 422） |
+| `EMBEDDING_BATCH_SIZE` | 单次 `/embed` 的文本数 | `16` | **必须与容器 `MAX_BATCH` 相同**（超批 422）；默认值也刻意低于第三方 embedding API 的单请求上限（实测 25 条） |
+| `EMBEDDING_HEALTH_MODE` | `/health` 判定 embedding 依赖用哪种契约 | `container` | `container` = 探容器自身的 `/health`；`openai_compatible` = 探第三方 `POST /embeddings`（判据含向量宽度断言）。**只影响探针判定**，客户端始终打容器的 `POST /embed` |
+| `EMBEDDING_API_KEY` | 第三方 embedding 探针的凭证 | 空 | 仅 `openai_compatible` 模式读取；留空时探针直接报 `error` 且不发请求 |
 | `EMBEDDING_TIMEOUT` | 单批 HTTP 超时（秒） | `300` | 必须大于最坏排队时间；容器把推理串在一条 FIFO 队列后 |
 | `EMBEDDING_MAX_RETRIES` | 每批额外重试次数 | `2` | 退避 `0.5 × 2^n` 秒 |
 | `RERANK_ENABLED` | 是否具备精排能力 | `true` | 设为 `false` 时精排请求直接跳过（`rerank=true` 也无效） |
@@ -189,6 +191,10 @@ uv run python scripts/healthcheck.py
 | `PAPER_API_KEY` | 引导管理员密钥（Bearer，prefix `default`） | `change-me` | `AUTH_ENABLED=true` 时**务必换掉**；启动时会被 upsert 成 `api_keys` 表里 `source=env` 的 admin 行；改了要重启应用 |
 | `PAPER_API_HOST` | 监听地址 | `0.0.0.0` | 只对本机开放可写 `127.0.0.1`；`AUTH_ENABLED=false` 且非回环地址时启动打 WARNING |
 | `PAPER_API_PORT` | 监听端口 | `8077` | |
+| `HEALTH_HTTP_TIMEOUT` | 目标可能不在本机的探针超时（秒） | `10` | 本机依赖自带更短的 3s 默认值；NAS 上的 docling 与第三方 embedding 用这个 |
+| `HEALTH_TIMEOUT_OVERRIDES` | 单个依赖的超时覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `docling=5,embedding=10`）；写错直接报错，不静默 |
+| `HEALTH_PROBE_RETRIES` | 探针失败后的额外尝试次数 | `1` | 只作用于 HTTP 探针（PG / 对象存储由客户端自己重连） |
+| `HEALTH_PROBE_CACHE_TTL` | 探针结论的复用时长（秒） | `60` | 计费探针（第三方 embedding）按它设 TTL：容器 healthcheck 20s 一次，不缓存就是每次买一次调用 |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
 > **改完根 `.env` 必须重启应用**：配置在启动时读入，`--reload` 不会重读。
@@ -785,3 +791,14 @@ upsert 成 `source=env` 的 admin 行；也可以直接用 `uv run python script
 （同 prefix 再 `create`）；**换完钥匙客户端不会自动更新** —— webui 的 `PAPERBOX_API_KEY`、Hermes 的
 `mcp_servers.paperbox.headers.Authorization` 都要各自换，否则一直 403。完整流程见
 [#1.3.7.1](#1371-密钥分发auth_enabledtrue-时)。
+
+**Q23 `/health` 报 `degraded: true`，或者第三方 embedding 的 key 失效了会怎么表现？**
+每一项依赖都有自己的判据，`dependencies` 里能看到状态、延迟、检查时刻与原因。embedding 在
+`EMBEDDING_HEALTH_MODE=openai_compatible` 下会真发一次 `POST /embeddings`（探针文本固定一条），key 错或过期
+→ 401 → 该项 `error`、`degraded` 变 `true`，容器 healthcheck 随之把 `paperbox-api` 标成 unhealthy。
+判据不是"有应答就算好"：**401 / 404 / 429 / 3xx 都是 `error`**（旧实现只按「<500 即活」判，会把它们当成
+健康）。这条探针是**计费**的，所以结论按 `HEALTH_PROBE_CACHE_TTL`（默认 60s）缓存；要看实时结果用
+`uv run python scripts/healthcheck.py`，它逐项打印状态、延迟与失败原因，并给出退出码。
+注意 `EMBEDDING_HEALTH_MODE` 只影响**判定**：客户端仍打容器的 `POST /embed`，真把嵌入切到第三方需要适配层，
+是另一件事。第三个常见取值是 `disabled`（比如没配 `DOCLING_URL`、或 `RERANK_ENABLED=false`）——**不是故障**，
+不影响 `degraded`。

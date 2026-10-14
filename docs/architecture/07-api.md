@@ -29,7 +29,7 @@
 
 | 方法 | 路径 | 作用 | Bearer | 关键查询参数 | 出处 |
 |---|---|---|---|---|---|
-| GET | `/health` | 五个依赖的轻量探针（含解析后端 docling，未配置时该项为 `disabled`） | public | — | `app/api/health.py` |
+| GET | `/health` | 每个依赖一条**声明式探针**（PG / OpenSearch / MinIO / embedding / rerank / docling；未配置的报 `disabled`）。顶层 `status` 只表示 API 进程存活，`degraded` 汇总**必需**依赖是否就绪，`dependencies` 带每项状态/延迟/检查时刻/原因；容器 healthcheck 判 `degraded` | public | — | `app/api/health.py`、`app/services/health_service.py` |
 | GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | read | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
 | GET | `/` | landing（`include_in_schema=False`） | public | — | `app/main.py` 的 `lifespan()` |
 | POST | `/api/papers/ingest` | URL 摄取 | write | — | `app/api/ingestion.py` |
@@ -212,6 +212,7 @@
 | `paper_id` 为 UUID 字符串 | 遵守（schema 层是 `str`，未做 UUID 格式校验） | `app/schemas/paper.py` |
 | 错误体统一 `{"detail": "…"}` | 手写 `HTTPException` 处遵守；框架请求体校验失败时 `detail` 是**列表** | [MVP-SPEC.md](MVP-SPEC.md)；代码未注册处理器（[#2.3](#23-错误处理)） |
 | 列表响应带总数 | 遵守：`{total, items/papers/jobs/chunks/logs}` | `job.py` 的 `JobListOut`、`paper.py` 的 `PaperListOut`、`paper.py` 的 `PaperChunkList`、`search_log.py`、`metadata.py` |
+| 健康探针不把"有应答"当健康 | 遵守：成功是**白名单状态码 + body 语义**（401 / 404 / 429 / 3xx 一律 `error`），失败原因经脱敏后才回显 | `app/services/health_service.py`；`tests/test_health_service.py`、`tests/test_health.py` |
 
 未使用统一的泛型分页模型：每个列表各自定义字段名（`papers` / `jobs` / `chunks` / `logs` / `items`）。
 
