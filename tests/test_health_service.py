@@ -55,6 +55,20 @@ def run(spec: hs.ProbeSpec) -> hs.ProbeResult:
     return asyncio.run(hs.run_probe(spec))
 
 
+@pytest.fixture(autouse=True)
+def _no_cache_leak() -> None:
+    """The verdict cache is process-wide: never let one test seed another."""
+    hs.clear_probe_cache()
+    yield
+    hs.clear_probe_cache()
+
+
+def fake_clock(monkeypatch: pytest.MonkeyPatch, start: float = 1_000.0) -> dict:
+    clock = {"now": start}
+    monkeypatch.setattr(hs, "_CLOCK", lambda: clock["now"])
+    return clock
+
+
 # --------------------------------------------------------------------------- #
 # success is a whitelist, not "< 500"
 # --------------------------------------------------------------------------- #
@@ -204,3 +218,95 @@ def test_the_result_carries_the_spec_context() -> None:
     assert result.name == "embedding"
     assert result.required is False
     assert result.detail == "OpenAI-compatible /embeddings"
+
+
+# --------------------------------------------------------------------------- #
+# the verdict cache (billable probes must not be re-bought every poll)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_verdict_is_reused_within_its_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    spec = probe(
+        cache_ttl_s=60.0,
+        transport=transport(200, payload={"data": []}, calls=calls),
+    )
+
+    first = run(spec)
+    clock["now"] += 30
+    second = run(spec)
+
+    assert first.status == second.status == hs.OK
+    assert first.cached is False and second.cached is True
+    assert len(calls) == 1, "the second call must come from the cache"
+    assert second.checked_at == first.checked_at, "the verdict keeps its own time"
+
+
+def test_the_verdict_is_probed_again_once_the_ttl_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    spec = probe(
+        cache_ttl_s=60.0,
+        transport=transport(200, payload={"data": []}, calls=calls),
+    )
+
+    run(spec)
+    clock["now"] += 61
+    fresh = run(spec)
+
+    assert fresh.cached is False
+    assert len(calls) == 2
+
+
+def test_a_ttl_of_zero_never_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    spec = probe(transport=transport(200, payload={"data": []}, calls=calls))
+
+    run(spec)
+    run(spec)
+
+    assert len(calls) == 2
+
+
+def test_a_failing_verdict_is_cached_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken (billable) endpoint must not be re-billed on every poll."""
+    fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    spec = probe(cache_ttl_s=60.0, transport=transport(401, text="no", calls=calls))
+
+    assert run(spec).status == hs.ERROR
+    second = run(spec)
+
+    assert second.status == hs.ERROR and second.cached is True
+    assert len(calls) == 1
+
+
+def test_use_cache_false_forces_a_real_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    spec = probe(
+        cache_ttl_s=60.0,
+        transport=transport(200, payload={"data": []}, calls=calls),
+    )
+
+    asyncio.run(hs.run_probe(spec))
+    asyncio.run(hs.run_probe(spec, use_cache=False))
+
+    assert len(calls) == 2
+
+
+def test_each_dependency_keeps_its_own_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_clock(monkeypatch)
+    calls: list[httpx.Request] = []
+    mock = transport(200, payload={"data": []}, calls=calls)
+
+    asyncio.run(hs.run_probe(probe(name="a", cache_ttl_s=60.0, transport=mock)))
+    asyncio.run(hs.run_probe(probe(name="b", cache_ttl_s=60.0, transport=mock)))
+
+    assert len(calls) == 2, "one dependency's verdict must not answer for another"

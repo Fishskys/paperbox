@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -43,9 +43,6 @@ DISABLED = "disabled"
 #: The probe could not decide (the service answered something that carries no
 #: verdict yet, e.g. an embedding container whose model is not loaded).
 UNKNOWN = "unknown"
-#: A cached verdict is being reported after its TTL passed and the fresh probe
-#: failed; the reported status is the last known one.
-STALE = "stale"
 
 #: ``auth`` vocabulary.
 AUTH_NONE = "none"
@@ -310,8 +307,51 @@ async def _probe_s3(spec: ProbeSpec) -> ProbeResult:
     return _result(spec, OK, latency_ms=_elapsed_ms(started))
 
 
-async def run_probe(spec: ProbeSpec) -> ProbeResult:
-    """Run one probe and answer with a verdict -- never raises."""
+#: Verdict cache for specs that set ``cache_ttl_s``: name -> (verdict, monotonic).
+_CACHE: dict[str, "ProbeResult"] = {}
+_CACHE_STAMPS: dict[str, float] = {}
+#: Clock behind the cache; tests drive it, production uses the monotonic one.
+_CLOCK: Callable[[], float] = time.monotonic
+
+
+async def run_probe(spec: ProbeSpec, *, use_cache: bool = True) -> ProbeResult:
+    """Run one probe and answer with a verdict -- never raises.
+
+    With ``cache_ttl_s`` set, the verdict is reused for that many seconds (a
+    billable probe must not be bought again just because the container
+    healthcheck polled again). ``checked_at`` belongs to the verdict, not to the
+    request: a reused verdict keeps the moment it was actually measured, so an
+    operator can see how old the answer is.
+    """
+    if not use_cache or spec.cache_ttl_s <= 0:
+        return await _probe_once(spec)
+    cached = _cached_verdict(spec)
+    if cached is not None:
+        return replace(cached, cached=True)
+    fresh = await _probe_once(spec)
+    _CACHE[spec.name] = fresh
+    _CACHE_STAMPS[spec.name] = _CLOCK()
+    return fresh
+
+
+def _cached_verdict(spec: ProbeSpec) -> ProbeResult | None:
+    result = _CACHE.get(spec.name)
+    stored_at = _CACHE_STAMPS.get(spec.name)
+    if result is None or stored_at is None:
+        return None
+    if _CLOCK() - stored_at >= spec.cache_ttl_s:
+        return None
+    return result
+
+
+def clear_probe_cache() -> None:
+    """Drop every cached verdict (operator action: force a fresh probe)."""
+    _CACHE.clear()
+    _CACHE_STAMPS.clear()
+
+
+async def _probe_once(spec: ProbeSpec) -> ProbeResult:
+    """One real probe, no cache in the way."""
     target = spec.target().strip()
     if spec.kind == KIND_HTTP and not target:
         return _result(spec, DISABLED, reason="not configured")
@@ -414,13 +454,17 @@ def health_specs() -> tuple[ProbeSpec, ...]:
 
 
 async def probe_all(
-    specs: Sequence[ProbeSpec] | None = None,
+    specs: Sequence[ProbeSpec] | None = None, *, use_cache: bool = True
 ) -> tuple[ProbeResult, ...]:
     """Probe every spec concurrently, preserving the registry's order."""
     chosen = tuple(specs) if specs is not None else health_specs()
     if not chosen:
         return ()
-    return tuple(await asyncio.gather(*(run_probe(spec) for spec in chosen)))
+    return tuple(
+        await asyncio.gather(
+            *(run_probe(spec, use_cache=use_cache) for spec in chosen)
+        )
+    )
 
 
 __all__ = [
@@ -434,8 +478,8 @@ __all__ = [
     "OK",
     "ProbeResult",
     "ProbeSpec",
-    "STALE",
     "UNKNOWN",
+    "clear_probe_cache",
     "docling_spec",
     "embedding_spec",
     "health_specs",
