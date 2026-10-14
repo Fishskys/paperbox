@@ -154,6 +154,7 @@
 | 时点 | 调用 | 实际行为 |
 |---|---|---|
 | 启动 | `configure_logging(settings.log_level)` | 根 logger 只配置一次（`app/core/logging.py`） |
+| 启动 | `await health_service.log_startup_report()`（**仅当 `HEALTH_PROBE_ON_STARTUP=true`**） | 每个依赖探一次并把结论写进日志（失败只 `warning`，不拦启动；结论同时落缓存）。**探测只按需**：这一次 + 之后每次调 `/health`，没有定时器 —— 周期探第三方 API 是逐次计费的 |
 | 启动 | `job_queue.start()` | 建 `INGEST_CONCURRENCY` 个 worker 协程 |
 | 启动 | `job_queue.recover()` | `RECEIVED/QUEUED` 且未结束的作业重新入队；中间态作业标 `FAILED` + `error_code='INTERRUPTED'`（→ `app/services/ingestion_service.py`） |
 | 启动 | `housekeeping.start()` | 起周期任务，**首轮立即执行**（`housekeeping.py`：先 `run_gc` 再 `sleep(interval)`） |
@@ -245,7 +246,7 @@
 5. **429 的判定在服务端**（客户端无并发参数）：`INGEST_UPLOAD_CONCURRENCY` 管在途请求，`INGEST_QUEUE_HIGH_WATERMARK` 只管多文件请求（`upload_admission.py`），单文件永远放行。`Retry-After` 值硬编码 2 秒。
 6. **`X-Request-ID` 总是回显**：带了沿用，没带生成 `uuid4().hex`（`main.py` 的 `lifespan()`），响应头无条件写入（`main.py` 的 `lifespan()`）；日志侧靠 ContextVar（`logging.py` 的 `get_request_id()`）。
 7. **关闭不排空**：`job_queue.stop()` 只 cancel 协程，线程内流水线继续跑；作业行停在中间态，靠下次启动的 `recover()` 标 `INTERRUPTED`。想让在途作业跑完必须显式 `job_queue.join()`，lifespan 目前不调用。
-8. **`GET /health` 恒 200**（`health.py`）：任一依赖挂掉只是该字段变 `"error"`，`status` 永远是 `"ok"`；用 200 判依赖健康会误判，必须看 `services.*`。`services` 是**五项**：`postgres` / `opensearch` / `minio` / `embedding` / `docling`；最后一项在 `DOCLING_URL` 为空时报 `"disabled"`（部署只用 pypdf 解析，不是故障）。
+8. **`GET /health` 恒 200**（`health.py`）：任一依赖挂掉只是该字段变 `"error"`，`status` 永远是 `"ok"`；用 200 判依赖健康会误判，必须看 `services.*`。`services` 是**六项**：`postgres` / `opensearch` / `minio` / `embedding` / `rerank` / `docling`；未配置的依赖（`DOCLING_URL` 为空、`RERANK_ENABLED=false`）报 `"disabled"`，不是故障。
 9. **分页参数不一致**：`chunks` 夹取 1..200（`papers.py`）、`review` 有 `ge=1, le=200`（`metadata.py`）、`search-logs` 依赖服务常量（`search_logs.py`），但 `GET /api/jobs`、`GET /api/papers` 的 `limit/offset` 无任何上下界（`jobs.py`, `papers.py`）。
 10. **DELETE 的补偿语义**：先清 OpenSearch、再清 MinIO、最后才标记软删（`papers.py` 的 `dismiss_paper_conflict()`），任一步 503 时论文仍可见且可原样重试——不要把顺序调换。
 11. **`POST /api/metadata/import` 的 multipart 只读 `file` 一个 part**（`metadata.py`）；`source_type` 只来自 query（`metadata.py`）。README 第 3.4 节 的 `-F source_type=import_file` 示例不生效（默认值恰好相同，故不易察觉）。
@@ -283,7 +284,7 @@
 | `MCP_MAX_CHARS` / `_CEILING`、`MCP_WAIT_SECONDS`、`MCP_TOOLSET`、`MCP_PUBLIC_BASE_URL` | `8000`/`32000`、`120`、`v1`、`""` | 正文预算与上限（超上限报错不夹紧）、写工具等待上限、工具集版本、无请求上下文时的下载兜底基址 | `config.py` |
 | `INGEST_ALLOW_PRIVATE_HOSTS` | `""` | `paper_import`/`/ingest` 访问私网地址的白名单（主机名或 CIDR）；空 = 只允许公网（SSRF 闸逃逸阀） | `config.py`, `app/services/net_guard.py` |
 
-非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py` 的 `RETRY_AFTER_SECONDS`）、`PROBE_TIMEOUT = 3.0`（`app/api/health.py` 的 `PROBE_TIMEOUT`）、chunk 分页上限 200（`app/api/papers.py` 的 `get_paper_degradations()`）。
+非配置常量：`RETRY_AFTER_SECONDS = 2`（`app/services/upload_admission.py` 的 `RETRY_AFTER_SECONDS`）、chunk 分页上限 200（`app/api/papers.py` 的 `get_paper_degradations()`）。探针超时不再是非配置常量：统一取 `HEALTH_HTTP_TIMEOUT`（默认 10s，`HEALTH_TIMEOUT_OVERRIDES` 可按依赖覆盖），见 `app/services/health_service.py` 的 `_timeout_for()` / `_effective_timeout()`。
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 

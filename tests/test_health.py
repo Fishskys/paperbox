@@ -279,3 +279,57 @@ def test_the_container_healthcheck_gates_on_dependencies() -> None:
 
     assert "degraded" in blob, "容器健康必须反映依赖，而不是只看 HTTP 200"
     assert "8077/health" in blob
+
+
+def test_the_suite_pins_the_startup_probe_off() -> None:
+    """用例绝不连真实依赖：这个开关被 conftest 钉住，防止有人顺手改回去。"""
+    assert settings.health_probe_on_startup is False
+
+
+def test_the_lifespan_probes_every_dependency_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """启动探一次（并且只探一次），之后完全按需 —— 没有定时器。"""
+    monkeypatch.setattr(settings, "health_probe_on_startup", True, raising=False)
+    calls: list[bool] = []
+
+    async def fake_report(*, use_cache: bool = True):
+        calls.append(use_cache)
+        return ()
+
+    monkeypatch.setattr(hs, "log_startup_report", fake_report)
+
+    with TestClient(app):
+        pass
+
+    assert calls == [True], "启动应当恰好真探一次"
+
+
+def test_the_lifespan_probe_is_off_when_the_switch_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "health_probe_on_startup", False, raising=False)
+    calls: list[bool] = []
+
+    async def fake_report(*, use_cache: bool = True):
+        calls.append(use_cache)
+        return ()
+
+    monkeypatch.setattr(hs, "log_startup_report", fake_report)
+
+    with TestClient(app):
+        pass
+
+    assert calls == []
+
+
+def test_a_broken_probe_never_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "health_probe_on_startup", True, raising=False)
+
+    async def exploding(*, use_cache: bool = True):
+        raise RuntimeError("probe machinery is broken")
+
+    monkeypatch.setattr(hs, "log_startup_report", exploding)
+
+    with TestClient(app) as test_client:
+        assert test_client.get("/health").status_code == 200

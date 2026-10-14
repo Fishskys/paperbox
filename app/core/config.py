@@ -403,9 +403,15 @@ class Settings(BaseSettings):
     #: store answer through clients that handle their own reconnects).
     health_probe_retries: int = Field(default=1, alias="HEALTH_PROBE_RETRIES")
     #: How long a probe verdict may be reused. Billable probes (a third-party
-    #: embedding API) set their TTL from this: the container healthcheck polls
-    #: every 20 s and must not buy an API call each time.
+    #: embedding API) set their TTL from this: a burst of ``/health`` calls must
+    #: not buy one API call each.
     health_probe_cache_ttl: float = Field(default=60.0, alias="HEALTH_PROBE_CACHE_TTL")
+    #: Probe every dependency once while booting (logged, never fatal) so a
+    #: deployment's log line answers "were the dependencies up when I started?".
+    #: **There is deliberately no periodic probing** -- on demand only: this one
+    #: plus whatever ``/health`` is called with. A timer would bill a third-party
+    #: dependency on every tick.
+    health_probe_on_startup: bool = Field(default=True, alias="HEALTH_PROBE_ON_STARTUP")
 
     @field_validator("log_level")
     @classmethod

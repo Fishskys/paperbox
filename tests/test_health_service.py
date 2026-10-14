@@ -601,3 +601,52 @@ def test_a_blocking_probe_is_cut_off_by_its_budget() -> None:
 
     assert result.status == hs.ERROR
     assert "timed out after 0.05s" in result.reason
+
+
+# --------------------------------------------------------------------------- #
+# startup: one probe while booting, then on demand -- never a timer
+# --------------------------------------------------------------------------- #
+
+
+def test_startup_lines_only_flag_required_problems() -> None:
+    results = (
+        hs.ProbeResult(name="postgres", status=hs.OK, latency_ms=12.3, required=True),
+        hs.ProbeResult(name="rerank", status=hs.ERROR, reason="boom", required=False),
+        hs.ProbeResult(name="docling", status=hs.DISABLED, required=True),
+    )
+
+    lines = hs.startup_report_lines(results)
+
+    assert [problem for problem, _, _ in lines] == [False, False, False]
+    assert lines[0][1] == "startup health: postgres=ok (12 ms)"
+    assert lines[1][2]["reason"] == "boom"
+
+
+def test_a_failing_dependency_at_startup_is_logged_not_raised(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """依赖没起来不该拦住进程：只留告警，/health 才是判定入口。"""
+
+    async def fake_probe_all(*, use_cache: bool = True):
+        assert use_cache is True, "启动这一次必须真探（缓存此时也是空的）"
+        return (
+            hs.ProbeResult(
+                name="postgres",
+                status=hs.ERROR,
+                reason="OperationalError: could not connect",
+                required=True,
+            ),
+            hs.ProbeResult(name="minio", status=hs.OK, latency_ms=9.0, required=True),
+        )
+
+    monkeypatch.setattr(hs, "probe_all", fake_probe_all)
+    # INFO, not WARNING: the "no periodic probing" note and the degraded summary
+    # are INFO lines -- they must be in the log too, not just the failures.
+    with caplog.at_level("INFO"):
+        results = asyncio.run(hs.log_startup_report())
+
+    assert [result.status for result in results] == [hs.ERROR, hs.OK]
+    assert "startup health: postgres=error" in caplog.text
+    assert "could not connect" in caplog.text
+    assert "degraded=postgres" in caplog.text
+    assert "no periodic probing" in caplog.text

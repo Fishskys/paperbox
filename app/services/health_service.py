@@ -594,6 +594,56 @@ async def probe_all(
     )
 
 
+def startup_report_lines(results: Sequence[ProbeResult]) -> list[tuple[bool, str, dict]]:
+    """``(is_problem, message, fields)`` for the one line each dependency gets."""
+    lines: list[tuple[bool, str, dict]] = []
+    for result in results:
+        fields = {
+            "dependency": result.name,
+            "status": result.status,
+            "required": result.required,
+            "latency_ms": result.latency_ms,
+            "detail": result.detail,
+        }
+        message = f"startup health: {result.name}={result.status}"
+        if result.latency_ms is not None:
+            message += f" ({result.latency_ms:.0f} ms)"
+        if result.reason:
+            message += f" — {result.reason}"
+            fields["reason"] = result.reason
+        lines.append((not result.healthy and result.required, message, fields))
+    return lines
+
+
+async def log_startup_report(use_cache: bool = True) -> tuple[ProbeResult, ...]:
+    """Probe every dependency once at startup and log the verdict.
+
+    **Nothing here starts a timer.** Probing stays on demand: the app does it once
+    while booting and then whenever ``/health`` is called, because a periodic
+    probe of a third-party dependency would be billed on every tick. The startup
+    verdict also seeds the cache, so a ``/health`` call right afterwards does not
+    pay for the same answer twice.
+
+    A failing dependency is logged, never raised: the app may legitimately start
+    before its containers do (the dimension check is the one that must stop it).
+    """
+    results = await probe_all(use_cache=use_cache)
+    for is_problem, message, fields in startup_report_lines(results):
+        extra = {"extra_fields": fields}
+        if is_problem:
+            logger.warning(message, extra=extra)
+        else:
+            logger.info(message, extra=extra)
+    degraded = [result.name for result in results if result.required and not result.healthy]
+    logger.info(
+        "startup health: %s (probed %d dependenc%s, on demand only — no periodic probing)",
+        f"degraded={','.join(degraded)}" if degraded else "all required dependencies ok",
+        len(results),
+        "y" if len(results) == 1 else "ies",
+    )
+    return results
+
+
 def is_degraded(results: Sequence[ProbeResult]) -> bool:
     """``True`` when a *required* dependency is not answering as expected.
 
@@ -642,6 +692,7 @@ __all__ = [
     "embedding_spec",
     "health_specs",
     "is_degraded",
+    "log_startup_report",
     "minio_spec",
     "opensearch_spec",
     "postgres_spec",
@@ -649,4 +700,5 @@ __all__ = [
     "redact",
     "rerank_spec",
     "run_probe",
+    "startup_report_lines",
 ]

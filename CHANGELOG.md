@@ -18,7 +18,12 @@
   200 且向量宽度等于 `EMBEDDING_DIMENSION` —— key 错（401）、模型名错（404）、换了个别的宽度的模型，
   都会如实报 `error`。**只影响判定**：客户端仍打容器的 `POST /embed`。
 - 探针配置键：`HEALTH_HTTP_TIMEOUT`、`HEALTH_TIMEOUT_OVERRIDES`、`HEALTH_PROBE_RETRIES`、
-  `HEALTH_PROBE_CACHE_TTL`、`EMBEDDING_HEALTH_MODE`、`EMBEDDING_API_KEY`（`.env.example` 有中英注释）。
+  `HEALTH_PROBE_CACHE_TTL`、`HEALTH_PROBE_ON_STARTUP`、`EMBEDDING_HEALTH_MODE`、`EMBEDDING_API_KEY`
+  （`.env.example` 有中英注释）。
+- **启动时探一次依赖并写进日志**（2026-10-14，`HEALTH_PROBE_ON_STARTUP`，默认开）：失败只 `warning`、不拦启动
+  （进程可以先于容器起来，真正必须拦的是维度对账）。**探测策略定为"只按需"**：这一次 + 之后每次调 `/health`，
+  **没有定时器** —— 周期探第三方 API 是逐次计费的，本地部署无所谓，接了第三方就承受不起。启动那次结论同时落缓存，
+  所以紧跟着的第一次 `/health` 不会为同一个答案付两次钱。
 
 ### Changed
 

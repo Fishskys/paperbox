@@ -32,11 +32,16 @@ import os
 #   explicitly (``tests/test_mcp_*.py``), so pin it off here.
 # * ``AUTH_ENABLED=true`` would make anonymous requests 401; the suite asserts
 #   anonymous behaviour and the auth fixtures set the switch themselves.
+# * ``HEALTH_PROBE_ON_STARTUP=true`` would make every ``TestClient`` startup probe
+#   the live PostgreSQL/OpenSearch/MinIO stack (and a third-party embedding API if
+#   one is configured) -- exactly the "unit tests touch real services" the header
+#   above forbids. The startup-probe tests turn it on explicitly.
 #
 # Real environment variables take priority over ``.env`` in pydantic-settings, and
 # conftest is imported before any test module, so this pins the whole run.
 os.environ["MCP_ENABLED"] = "false"
 os.environ["AUTH_ENABLED"] = "false"
+os.environ["HEALTH_PROBE_ON_STARTUP"] = "false"
 
 import pytest
 import sqlalchemy

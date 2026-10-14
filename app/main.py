@@ -38,6 +38,7 @@ from app.core.logging import (
 from app.db.session import SessionLocal
 from app.services import api_key_service
 from app.services import embedding_service
+from app.services import health_service
 from app.services.api_key_service import AuthIdentity
 from app.workers import housekeeping
 from mcp.server import MCPServer
@@ -86,6 +87,17 @@ async def lifespan(_: FastAPI):
     # Unreachable dependencies only warn here (the app may start before its
     # containers); a *measured* mismatch raises and stops the process.
     embedding_service.check_dimension_consistency()
+    # Dependency probes are **on demand only** (2026-10-14): once here, then
+    # whenever /health is called. Nothing schedules them -- a periodic probe would
+    # bill a third-party dependency on every tick. This line exists so the log
+    # answers "were the dependencies up when this process started?"; a failing
+    # dependency is logged, never fatal (the app may outlive its containers, and
+    # the dimension check above is the one that must stop it).
+    if settings.health_probe_on_startup:
+        try:
+            await health_service.log_startup_report()
+        except Exception as exc:  # noqa: BLE001 - a probe must not block boot
+            logger.warning("startup health probe could not run: %s", exc)
     # The ingestion queue owns every pipeline run: start the workers, then
     # reconcile whatever a previous process left behind (re-queue jobs that never
     # started, fail the ones that were mid-pipeline with INTERRUPTED).
