@@ -104,3 +104,18 @@ def test_the_embedding_health_mode_defaults_to_the_container(
 
     monkeypatch.delenv("EMBEDDING_HEALTH_MODE", raising=False)
     assert Settings(_env_file=None).embedding_health_mode == "container"
+
+
+def test_the_embedding_batch_default_matches_the_deployed_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """默认值必须与 .env / .env.example 一致，并且低于提供方的单请求上限。
+
+    ``.env`` 与模板早就是 16，只有代码默认值还停在 32 —— 而 32 会直接撞上第三方
+    embedding API（实测上限 25 条/请求）。
+    """
+    from app.core.config import Settings
+
+    monkeypatch.delenv("EMBEDDING_BATCH_SIZE", raising=False)
+
+    assert Settings(_env_file=None).embedding_batch_size == 16

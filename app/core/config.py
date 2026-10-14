@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     embedding_url: str = Field(default="http://127.0.0.1:8090", alias="EMBEDDING_URL")
     embedding_model: str = Field(default="BAAI/bge-m3", alias="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=1024, alias="EMBEDDING_DIMENSION")
-    embedding_batch_size: int = Field(default=32, alias="EMBEDDING_BATCH_SIZE")
+    embedding_batch_size: int = Field(default=16, alias="EMBEDDING_BATCH_SIZE")
     #: Per-batch HTTP timeout. The embedding container serializes inference
     #: behind a FIFO queue (T7.3), so a request can legitimately wait for the
     #: ones ahead of it: the timeout must exceed the worst-case queue wait,
