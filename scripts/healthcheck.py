@@ -3,131 +3,116 @@
 
     uv run python scripts/healthcheck.py
 
-Exits non-zero when a required dependency is unreachable. Prints one line per
-service plus a summary line.
+The probes are the same ones ``GET /health`` runs (``app.services.health_service``):
+one registry, one set of success criteria, no second implementation to drift. This
+script adds what only an operator wants -- the API process itself, the indexed
+document count and a search-pipeline drift check -- and turns the verdict into an
+exit code: non-zero when a *required* dependency is not answering as expected.
+Optional ones (rerank, and docling on a pypdf-only deployment) are reported and
+warned about, but do not fail the run.
 """
 from __future__ import annotations
 
-import re
-import socket
+import asyncio
 import sys
-import time
 from pathlib import Path
-
-import httpx
+from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV = ROOT / ".env"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.core.config import settings  # noqa: E402
+from app.services import health_service  # noqa: E402
 
 
-def load_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        values[key.strip()] = value.strip()
-    return values
+def api_spec() -> health_service.ProbeSpec:
+    """The API process itself -- the one dependency the registry cannot probe.
+
+    Deliberately outside the registry: ``/health`` cannot report on its own
+    process, while this script runs in a different one.
+    """
+    port = settings.paper_api_port
+    return health_service.ProbeSpec(
+        name="api",
+        kind=health_service.KIND_HTTP,
+        target=lambda: f"http://127.0.0.1:{port}",
+        path="/health",
+        ok_status=(200,),
+        retries=0,
+        detail=f"GET /health on port {port}",
+    )
 
 
-def host_port(url: str) -> tuple[str, int]:
-    match = re.match(r"^(?:https?://)?\[?([^\]/:]+)\]?(?::(\d+))?", url)
-    if match is None:
-        raise ValueError(f"cannot parse host from {url!r}")
-    host = match.group(1)
-    port = int(match.group(2) or 80)
-    return host, port
+def report(results: Sequence[health_service.ProbeResult]) -> None:
+    for result in results:
+        latency = f"{result.latency_ms:.0f} ms" if result.latency_ms is not None else "-"
+        tag = "" if result.required else " (optional)"
+        print(
+            f"  {result.status:<8} {result.name:<10} {latency:>9}  "
+            f"{result.detail}{tag}"
+        )
+        if result.reason:
+            print(f"           {result.reason}")
+        if result.cached:
+            print(f"           (cached verdict, measured {result.checked_at})")
 
 
-def check_tcp(name: str, host: str, port: int, timeout: float = 5.0) -> bool:
-    started = time.perf_counter()
+def extras() -> None:
+    """Deployment-state details a probe cannot express; warn-only."""
+    import httpx
+
+    index = settings.opensearch_alias
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            pass
-    except OSError as exc:
-        print(f"  FAIL {name:<12} {host}:{port}  {exc}")
-        return False
-    took = (time.perf_counter() - started) * 1000
-    print(f"  ok   {name:<12} {host}:{port}  ({took:.0f} ms)")
-    return True
-
-
-def check_http(name: str, url: str, path: str = "", timeout: float = 10.0) -> bool:
-    target = f"{url.rstrip('/')}{path}"
-    started = time.perf_counter()
-    try:
-        response = httpx.get(target, timeout=timeout)
+        response = httpx.get(
+            f"{settings.opensearch_url.rstrip('/')}/{index}/_count", timeout=10
+        )
+        print(f"  info     {index} documents: {response.json().get('count')}")
     except Exception as exc:  # noqa: BLE001 - report and continue
-        print(f"  FAIL {name:<12} {target}  {exc}")
-        return False
-    took = (time.perf_counter() - started) * 1000
-    if response.status_code >= 400:
-        print(f"  FAIL {name:<12} {target}  HTTP {response.status_code}")
-        return False
-    print(f"  ok   {name:<12} {target}  HTTP {response.status_code} ({took:.0f} ms)")
-    return True
+        print(f"  warn     could not count {index}: {exc}")
 
-
-def main() -> int:
-    env = load_env(ENV)
-    if not env:
-        print(f"WARN: {ENV} not found - falling back to localhost defaults")
-
-    pg_host, pg_port = host_port(env.get("POSTGRES_DSN", "postgres://...@localhost:5432/paperbox").split("@")[-1])
-    os_url = env.get("OPENSEARCH_URL", "http://localhost:9200")
-    minio = env.get("MINIO_ENDPOINT", "localhost:9000")
-    minio_host, minio_port = host_port(minio if "://" in minio else f"http://{minio}")
-    emb_url = env.get("EMBEDDING_URL", "http://localhost:8090")
-    # 解析后端可能不在本机（本项目部署在 NAS 上，见 infra/docling/fnos/），所以只探 HTTP；
-    # DOCLING_URL 为空表示这套部署只用 pypdf 解析 —— 那不是故障，跳过并说明。
-    docling_url = env.get("DOCLING_URL", "").strip()
-    app_port = env.get("PAPER_API_PORT", "8077")
-    index = env.get("OPENSEARCH_ALIAS", "paper_chunks_current")
-
-    print("paperbox healthcheck")
-    print(f"  config {ENV}")
-    ok = True
-    ok &= check_tcp("postgres", pg_host, pg_port)
-    ok &= check_http("opensearch", os_url, "/_cluster/health")
-    ok &= check_http("minio", f"http://{minio_host}:{minio_port}", "/minio/health/live")
-    ok &= check_http("embedding", emb_url, "/health")
-    if docling_url:
-        ok &= check_http("docling", docling_url, "/health")
-    else:
-        print("  skip docling      DOCLING_URL 未配置（解析后端不是 docling）")
-    ok &= check_http("api", f"http://127.0.0.1:{app_port}", "/health")
-
+    # The native hybrid backend needs its search pipelines in the cluster, and a
+    # drifted body would silently change how a hybrid query is fused. Warn-only:
+    # the default backend does not read them, so a missing pipeline must not fail
+    # a healthcheck of a working deployment.
     try:
-        count = httpx.get(f"{os_url.rstrip('/')}/{index}/_count", timeout=10).json().get("count")
-        print(f"  info {index} documents: {count}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  warn could not count {index}: {exc}")
-
-    # Deployment-state objects: the native hybrid backend needs ``paperbox-rrf60``
-    # in the cluster, and a drifted body would silently change how a hybrid query
-    # is fused. Warn-only: the default ``python`` backend does not read them, so a
-    # missing pipeline must not fail a healthcheck of a working deployment.
-    try:
-        sys.path.insert(0, str(ROOT))
         from app.search.native import ensure_pipelines
 
-        report = ensure_pipelines(dry_run=True)
-        drifted = [item["name"] for item in report if item["changed"]]
+        rows = ensure_pipelines(dry_run=True)
+        drifted = [item["name"] for item in rows if item["changed"]]
         if drifted:
             print(
-                f"  warn search pipelines drifted: {', '.join(drifted)} "
+                f"  warn     search pipelines drifted: {', '.join(drifted)} "
                 "(run scripts/ensure_search_pipelines.py)"
             )
         else:
-            print(f"  info search pipelines: {len(report)} present, in sync")
+            print(f"  info     search pipelines: {len(rows)} present, in sync")
     except Exception as exc:  # noqa: BLE001
-        print(f"  warn could not check search pipelines: {exc}")
+        print(f"  warn     could not check search pipelines: {exc}")
 
-    print("RESULT:", "all dependencies reachable" if ok else "one or more dependencies failed")
-    return 0 if ok else 1
+
+def main(
+    specs: Sequence[health_service.ProbeSpec] | None = None,
+    *,
+    with_extras: bool = True,
+) -> int:
+    chosen = (
+        tuple(specs) if specs is not None else (*health_service.health_specs(), api_spec())
+    )
+    print("paperbox healthcheck")
+    results = asyncio.run(health_service.probe_all(chosen))
+    report(results)
+
+    if with_extras:
+        extras()
+
+    degraded = [item for item in results if item.required and not item.healthy]
+    if degraded:
+        names = ", ".join(f"{item.name}={item.status}" for item in degraded)
+        print("RESULT: degraded -", names)
+        return 1
+    print("RESULT: all required dependencies ok")
+    return 0
 
 
 if __name__ == "__main__":
