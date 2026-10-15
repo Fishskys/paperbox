@@ -325,7 +325,7 @@ Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO �
 | `RERANK_MODEL_FILE` | 非内置模型的 ONNX 文件 | `model.onnx` | 内置档（jina / ms-marco）请注释掉 |
 | `RERANK_MAX_BATCH` | 精排单次候选上限 | `4` | 内存随候选数增长；轻量英文档可回 `16` |
 | `MAX_BATCH` | `/embed` 单次文本数上限 | `16` | **必须与根 `.env` 的 `EMBEDDING_BATCH_SIZE` 相同** |
-| `ORT_THREADS` | 推理线程数 | `4` | 调大会和同机其他服务抢 CPU，并可能触发 OOM |
+| `ORT_THREADS` | 推理线程数（embedding 与 rerank 两个 ONNX 会话都按它设） | `4` | 调大会和同机其他服务抢 CPU，并可能触发 OOM；**留空/删掉这个键**会让 ONNX Runtime 按容器可见核数自己选（12 核机器 = 12 条），不是“恢复默认的 4” |
 | `INFERENCE_WORKERS` | 推理队列工作线程数 | `1` | 保持 1：并发不再抢内存，削峰交给队列 |
 | `INFERENCE_QUEUE_DEPTH` | 推理队列深度 | `512` | 队满**立即** `503 + Retry-After`；定值规矩见 [#3.4](#34-响应里的空值符号) |
 

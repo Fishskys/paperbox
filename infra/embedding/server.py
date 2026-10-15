@@ -54,9 +54,12 @@ RERANK_MAX_BATCH = int(os.environ.get("RERANK_MAX_BATCH", str(MAX_BATCH)))
 # temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8 的 model.onnx），
 # 那时把 RERANK_MODEL_FILE 设成 model.onnx 即可 —— 不必改代码。
 RERANK_MODEL_FILE = os.environ.get("RERANK_MODEL_FILE", "onnx/model.onnx")
-THREADS = int(os.environ.get("ORT_THREADS", "2"))
-# 一个容器里同时跑几次 ONNX 推理。ONNX Runtime 自己就有 ORT_THREADS 条 lane，
-# 再叠上 N 个并发请求，CPU 只会互相抢（本机 6 vCPU；精排模型单次峰值已 2.4GB）。
+# ONNX Runtime 每个会话的 intra/inter 线程数。**embedding 与 rerank 两个会话都显式用它**
+# （fastembed 只在 `threads is not None` 时才写进 SessionOptions；不传就等于让 ORT 自己按
+# 容器可见核数选 —— 12 核机器上精排曾因此各占 12 条线程，比这里的 4 多出 8 条）。
+THREADS = int(os.environ.get("ORT_THREADS", "4"))
+# 一个容器里同时跑几次 ONNX 推理。ONNX Runtime 每个会话自己有 ORT_THREADS 条 lane，
+# 再叠上 N 个并发请求，CPU 只会互相抢（本机 12 逻辑核 / 6 物理核；精排单次峰值 2.4GB）。
 INFERENCE_WORKERS = max(1, int(os.environ.get("INFERENCE_WORKERS", "1")))
 # 允许排队等待的请求数上限（不含正在跑的）。满了就 503，让客户端退避重试——
 # 无界排队只会把等待时间推到客户端超时之后，那时两边都拿不到可用的错误。
@@ -209,6 +212,7 @@ def get_reranker() -> TextCrossEncoder:
         _reranker = TextCrossEncoder(
             model_name=RERANK_MODEL,
             cache_dir=os.environ.get("FASTEMBED_CACHE_PATH", "~/.cache/fastembed"),
+            threads=THREADS,
         )
     return _reranker
 
