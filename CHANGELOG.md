@@ -4,6 +4,22 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.6.1] - 2026-10-15
+
+### Fixed
+
+- **精排会话漏传 `ORT_THREADS`，ONNX Runtime 按容器可见核数自建线程池**（2026-10-14）：
+  `get_model()` 给嵌入会话传了 `threads=ORT_THREADS`，`get_reranker()` 却什么都没传 ——
+  fastembed 只在 `threads is not None` 时才写 `SessionOptions.intra_op_num_threads / inter_op_num_threads`，
+  留空等于让 ORT 自己选，而它选的是**容器可见的 CPU 数**（本机 12 逻辑核、容器无 cgroup 限额）。
+  实测：嵌入会话 +3 条 OS 线程、精排会话 +11 条，容器线程总数 41 条里精排独占最大一份。
+  现在两个会话都显式用 `ORT_THREADS`，代码默认 2→4（与 compose 的 `${ORT_THREADS:-4}` 对齐），
+  容器重建后 41 → **34** 条，逐项账目闭环（见 `docs/architecture/04-embedding.md` 第 12/12b 行）。
+  顺带修掉三处过期文档说法：「embedding 与 rerank 共用一个 ORT 线程池」（实际两个会话各有各的池，
+  都由 `ORT_THREADS` 设定）、「本机 6 vCPU」（现机器 12 逻辑核 / 6 物理核）、
+  以及新增对两条**不受 `ORT_THREADS` 管**的核数级池的说明
+  （numpy/OpenBLAS 与 HF tokenizers 的 rayon，压它们的键是 `OPENBLAS_NUM_THREADS` 与 `RAYON_NUM_THREADS`）。
+
 ## [0.6.0] - 2026-10-14
 
 ### Added
