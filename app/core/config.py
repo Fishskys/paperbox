@@ -335,8 +335,8 @@ class Settings(BaseSettings):
 
     # --- docling-serve (plan section 1.3 mapping table; every value below is measured,
     #     not guessed -- see the plan's section 0.5/0.6/0.7/0.8 notes) ---
-    #: Base URL of docling-serve. Since 2026-09-29 it runs on the fnOS NAS
-    #: (``http://<nas-ip>:8091``); the local WSL container is the rollback.
+    #: Base URL of docling-serve. May point at a NAS or any other host; the
+    #: local container is the rollback.
     #: **Empty disables the backend**: the client raises ``DoclingUnavailable``
     #: without dialing, so "no docling configured" degrades instead of timing out.
     #: Empty (the default) = the docling backend is off and parses fall back to

@@ -7,7 +7,7 @@
 的 `max` 计数 7179、`oom_kill 0`（不是被杀，是在上限处反复回收/分配失败），断连后 worker
 还继续烧 ~5 分钟 CPU。详见 `.hermes/plans/2026-09-28_160551-docling-parser-backend.md` [#0.7](../../../.hermes/plans/2026-09-28_160551-docling-parser-backend.md#07-t2c公式实测2026-09-29自建镜像成功但公式在密集论文上翻车)（T2c）。
 
-fnOS：`<user>@<nas-ip>:65422`，8 核 / 15.6GB 内存，`/vol1` 剩 ~39GB。给 docling 8GB 硬盘内存，
+fnOS NAS（下文记作 `<user>@<nas-ip>`，SSH 端口 `<port>`）：8 核 / 15.6GB 内存，`/vol1` 剩 ~39GB。给 docling 8GB 硬盘内存，
 就不会顶到上限。
 
 ## 为什么是「离线自建镜像」而不是 `docker build`（下载模型）
@@ -30,15 +30,15 @@ fnOS：`<user>@<nas-ip>:65422`，8 核 / 15.6GB 内存，`/vol1` 剩 ~39GB。给
 # ── 1) 本机（WSL）抽出公式模型并传过去 ────────────────────────────────
 cid=$(docker create paperbox-docling-cpu:v1.35.0-formula)
 docker cp $cid:/opt/app-root/src/.cache/docling/models/docling-project--CodeFormulaV2 \
-  /mnt/c/Users/<user>/Desktop/hermes/paperbox-data/docling/stage/
+  <本机 paperbox-data>/docling/stage/
 docker rm $cid
 # 传输（WSL 里已装好 fnOS 的免密 key：install -m600 ~/.ssh/id_ed25519 /root/.ssh/）
-cd /mnt/c/Users/<user>/Desktop/hermes/paperbox-data/docling/stage
-tar cf - docling-project--CodeFormulaV2 | ssh -p 65422 <user>@<nas-ip> \
+cd <本机 paperbox-data>/docling/stage
+tar cf - docling-project--CodeFormulaV2 | ssh -p <port> <user>@<nas-ip> \
   'mkdir -p /vol1/docker/docling-build && tar xf - -C /vol1/docker/docling-build'
 
 # ── 2) fnOS：拉基础镜像 + 落文件 ─────────────────────────────────────
-ssh -p 65422 <user>@<nas-ip>
+ssh -p <port> <user>@<nas-ip>
 docker pull quay.io/docling-project/docling-serve-cpu:v1.35.0
 cd /vol1/docker/docling-build
 # 把本仓库的 infra/docling/Dockerfile.offline 与 infra/docling/fnos/docker-compose.yml 放到这里
@@ -47,7 +47,7 @@ docker compose up -d
 docker compose ps
 
 # ── 3) 从本机（Windows）验证 ─────────────────────────────────────────
-cd C:\Users\<user>\Desktop\hermes\paperbox
+cd <本机 paperbox 仓库>
 uv run python scripts/probe_docling_markdown.py logs/eval/docling/corpus/2404.05260.pdf `
   --formula --formats md --out logs/eval/docling/probe-fnos --document-timeout 280
 ```

@@ -68,7 +68,7 @@ def test_a_public_address_is_allowed(monkeypatch) -> None:
         "http://127.1.2.3/paper.pdf",          # whole 127/8
         "http://10.0.0.5/paper.pdf",           # private
         "http://172.16.9.9/paper.pdf",         # private
-        "http://<nas-ip>/paper.pdf",      # private (the NAS)
+        "http://<lan-host>/paper.pdf",      # private
         "http://169.254.169.254/latest/meta-data/",  # link-local / cloud metadata
         "http://0.0.0.0/paper.pdf",            # unspecified
         "http://224.0.0.1/paper.pdf",          # multicast
@@ -114,24 +114,24 @@ def test_address_classification_covers_the_special_ranges() -> None:
 # --------------------------------------------------------------------------- #
 def test_the_allowlist_accepts_a_host_name(monkeypatch) -> None:
     monkeypatch.setattr(settings, "ingest_allow_private_hosts", "nas.local")
-    monkeypatch.setattr(socket, "getaddrinfo", fake_dns("<nas-ip>"))
+    monkeypatch.setattr(socket, "getaddrinfo", fake_dns("<lan-host>"))
     assert net_guard.check_url("http://nas.local/paper.pdf")
 
 
 def test_the_allowlist_accepts_a_cidr(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "ingest_allow_private_hosts", "<lan-cidr>")
-    assert net_guard.check_url("http://<nas-ip>/paper.pdf")
+    monkeypatch.setattr(settings, "ingest_allow_private_hosts", "192.168.0.0/24")
+    assert net_guard.check_url("http://192.168.0.20/paper.pdf")
 
 
 def test_the_allowlist_parses_names_and_networks() -> None:
-    parsed = net_guard.allowlist(" nas.local , <lan-cidr> , bad-cidr/33 , 10.0.0.7 ")
+    parsed = net_guard.allowlist(" nas.local , 192.168.0.0/24 , bad-cidr/33 , 10.0.0.7 ")
     assert "nas.local" in parsed.names
     assert "bad-cidr/33" in parsed.names  # unparsable entries are treated as names
     import ipaddress
 
     assert parsed.allows_ip(ipaddress.ip_address("10.0.0.7"))
-    assert parsed.allows_ip(ipaddress.ip_address("<lan-host>"))
-    assert not parsed.allows_ip(ipaddress.ip_address("192.168.32.5"))
+    assert parsed.allows_ip(ipaddress.ip_address("192.168.0.5"))
+    assert not parsed.allows_ip(ipaddress.ip_address("192.168.1.5"))
 
 
 def test_a_whitelisted_public_target_still_works(monkeypatch) -> None:

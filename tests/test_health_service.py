@@ -356,8 +356,10 @@ def test_a_payload_keeps_only_the_fields_that_mean_something() -> None:
 
 
 def test_redaction_covers_a_dsn_and_an_echoed_key() -> None:
-    assert "secret" not in hs.redact("postgresql://postgres:secret@127.0.0.1/db")
-    assert hs.redact("postgresql://postgres:secret@127.0.0.1/db").startswith(
+    # 凭据段用无尖括号的假值：redact 的正则按 user:pw@host 形态匹配，
+    # 占位尖括号（<user>:<password>@）会绕过它——占位形态交给 iyp 的 db_url 组描述处理。
+    assert "secret" not in hs.redact("postgresql://postgres:pw@127.0.0.1/db")
+    assert hs.redact("postgresql://postgres:pw@127.0.0.1/db").startswith(
         "postgresql://***@"
     )
     assert "pw" not in hs.redact("key user:pw@host rejected")

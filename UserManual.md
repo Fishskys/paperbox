@@ -419,7 +419,7 @@ paperbox 自带一个 **MCP（Model Context Protocol）端点**，让 codex / Cl
 ```bash
 # .env 里加上：
 #   MCP_ENABLED=true
-#   MCP_ALLOWED_HOSTS=127.0.0.1,127.0.0.1:*,192.168.1.20,192.168.1.20:*,my-host,my-host:*
+#   MCP_ALLOWED_HOSTS=127.0.0.1,127.0.0.1:*,192.168.0.20,192.168.0.20:*,my-host,my-host:*
 #   PAPER_API_KEYS=hermes:<key1>;codex:<key2>
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 # 启动日志会打印生效白名单（排查 421 的第一手材料）

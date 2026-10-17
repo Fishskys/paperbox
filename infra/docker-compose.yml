@@ -1,20 +1,8 @@
-# paperbox 依赖的基础设施 (PostgreSQL / OpenSearch / MinIO / Embedding Server)
-# 说明: paperbox 应用本身不在这里运行, 本文件只负责它依赖的四个服务。
-# 启动: cd <repo>/infra && docker compose up -d --build
-#
-# 数据持久化: 默认落到本目录下的 ./data/<service>（相对本 compose 文件）。
-#   迁移到服务器时给下面四个变量设绝对路径即可，例如：
-#     POSTGRES_DATA_DIR=/srv/paperbox/data/postgres
-#     OPENSEARCH_DATA_DIR=/srv/paperbox/data/opensearch
-#     MINIO_DATA_DIR=/srv/paperbox/data/minio
-#     EMBEDDING_MODELS_DIR=/srv/paperbox/data/embedding-models
-#   （写在同目录的 .env 里；./data 已在 .gitignore/.dockerignore 中）
-# 时区: 五个服务统一 TZ=Asia/Shanghai（2026-10-10）。TZ 的来源是 shell 或 infra/.env；
-#   不设也有默认值兜底（`${TZ:-Asia/Shanghai}`）。PostgreSQL 另设 PGTZ 给容器内客户端兜底，
-#   这样 `docker exec ... psql` 看到的时间与本地一致（此前是 UTC，容易被误读成"时间不对"）。
-#   注意：`timestamptz` 存的是绝对时刻，改 TZ 不改任何已存数据，只改渲染口径。
-# 端口绑定: 默认 0.0.0.0（随 PAPERBOX_BIND_IP 可改）。服务器上若只想让本机应用访问依赖，
-#   在 infra/.env 设 PAPERBOX_BIND_IP=127.0.0.1 即可（API 仍由应用自身的端口对外）。
+# paperbox 依赖的基础设施 (PostgreSQL / OpenSearch / MinIO / Embedding / 可选 Docling)。
+# paperbox 应用本身不在这里运行。启动: cd <repo>/infra && docker compose up -d --build
+# 数据默认落 ./data/<service>；服务器上在 infra/.env 里给 *_DATA_DIR 设绝对路径。
+# 端口绑定默认 0.0.0.0，可用 PAPERBOX_BIND_IP 收敛；时区统一 TZ=Asia/Shanghai（可覆盖）。
+# 配置项逐条说明见 infra/docker-compose.local.yml（本机参考副本，不入库）。
 name: paperbox
 services:
   postgres:
@@ -30,11 +18,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: paperbox
-      # 时区（2026-10-10）：全栈统一 Asia/Shanghai，见本文件头部说明。
-      #   `TZ` 决定服务端 `timezone` GUC 的默认值 —— `timestamptz` 里存的仍是**绝对时刻**，
-      #   改的只是"怎么解释/渲染"（此前容器是 UTC，于是 `psql` 直连看到的比本地早 8 小时，
-      #   曾被当成"数据写错了时间"排查过一轮）。
-      #   `PGTZ` 给容器内的 libpq 客户端兜底，免得漏设 TZ 的会话又退回 UTC。
       TZ: ${TZ:-Asia/Shanghai}
       PGTZ: ${TZ:-Asia/Shanghai}
     ports:
@@ -62,11 +45,8 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
       - plugins.security.disabled=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
-      # 安全插件关闭时该密码不参与校验；仍做成变量以免敏感值进仓库。
-      # 若将来启用 plugins.security，务必在 .env 里设一个强口令覆盖它。
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:-ChangeMe-Initial-Admin-2026!}
       - DISABLE_TELEMETRY=true
-      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）
       - TZ=${TZ:-Asia/Shanghai}
     ulimits:
       memlock: { soft: -1, hard: -1 }
@@ -75,10 +55,7 @@ services:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:9200:9200"
     volumes:
       - ${OPENSEARCH_DATA_DIR:-./data/opensearch}:/usr/share/opensearch/data
-      # 快照仓库（`_snapshot`）的落点；必须与 `path.repo` 一致，见 PAPERBOX_BACKUP_DIR 说明。
       - ${OPENSEARCH_BACKUP_DIR:-./data/opensearch-backups}:/mnt/backups
-    # `path.repo` 只能靠 `-E` 传（该镜像不读任意环境变量当 settings），
-    # 且改了 `path.repo` 必须重建容器 —— 只 `restart` 不生效。
     command: ["opensearch", "-Epath.repo=/mnt/backups"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
@@ -99,17 +76,12 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）。
-      # 这个镜像里**没有 tzdata**，只给 TZ 会打印成 `13:53 Asia`（名字认了、偏移仍是 0），
-      # 所以把宿主的时区文件只读挂进来 —— 比在镜像里装 tzdata 轻，也不会被镜像升级冲掉。
       TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:9000:9000"
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:9001:9001"
     volumes:
       - ${MINIO_DATA_DIR:-./data/minio}:/data
-      # glibc 在有 `TZ` 时会去 `/usr/share/zoneinfo/<区域>` 取规则，而该镜像里没有这个目录；
-      # 所以两处都挂：`/etc/localtime` 给忽略 TZ 的工具，zoneinfo 路径给认 TZ 的工具。
       - /usr/share/zoneinfo/${TZ:-Asia/Shanghai}:/etc/localtime:ro
       - /usr/share/zoneinfo/${TZ:-Asia/Shanghai}:/usr/share/zoneinfo/${TZ:-Asia/Shanghai}:ro
     healthcheck:
@@ -131,35 +103,16 @@ services:
     environment:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
       RERANK_MODEL: ${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
-      # 不在 fastembed 内置清单里的精排模型要指出仓库内的 ONNX 文件：多数导出是
-      # onnx/model.onnx，动态 int8 量化导出常在仓库根（model.onnx）—— 见
-      # docs/architecture/06-rerank-rewrite.md section 6
       RERANK_MODEL_FILE: ${RERANK_MODEL_FILE:-onnx/model.onnx}
       HF_ENDPOINT: "https://hf-mirror.com"
       HF_HUB_DISABLE_XET: "1"
       FASTEMBED_CACHE_PATH: /models
-      # 精排单独限批：激活内存随 (token × batch) 增长——多语言 jina-reranker-v2
-      # (1.1GB) 本机需要 4（实测 16 条候选峰值 5.1GB vs 4 条 2.4GB）；embedding
-      # 仍走 MAX_BATCH，两者共用一个旋钮会把精排撑爆或让正常导入吃 422。
       RERANK_MAX_BATCH: ${RERANK_MAX_BATCH:-16}
-      # 本机 WSL 已提到 9GB（.wslconfig memory=9GB，2026-09-13）：8 线程 + 大 batch
-      # 仍会触发全局 OOM（曾实测 uvicorn 被 oom-killer 杀掉，RSS 5.7GB）。
-      # 4 线程 + embed batch 16 是安全点；精排用 RERANK_MAX_BATCH=4。
       ORT_THREADS: ${ORT_THREADS:-4}
       MAX_BATCH: ${MAX_BATCH:-16}
-      # 服务端排队（T7.3）：所有推理经过一个 FIFO 队列，由 INFERENCE_WORKERS 个
-      # 线程串行跑。并发请求不再各自抢 CPU/内存（精排单次峰值 2.4GB，历史上
-      # uvicorn 被 oom-killer 杀过）。积压超过 INFERENCE_QUEUE_DEPTH 直接
-      # 503+Retry-After，客户端退避重试；因此应用侧 EMBEDDING_TIMEOUT 要大于
-      # 最坏排队时间（默认 300s）。
-      # 定 depth 的规矩：depth × 单次推理耗时 ≤ EMBEDDING_TIMEOUT/2。原值 32 是
-      # 按"单次搜索"定的，2026-10-01 跑 SRW 参数扫描（一次几百个并发神经检索）
-      # 时把队列打满，变体 90% 报 `inference queue full (depth=32, workers=1)`：
-      # 远端连接池加多大都没用，瓶颈在这里。512 × 0.1~0.3s ≈ 51~154s < 300s。
       INFERENCE_WORKERS: ${INFERENCE_WORKERS:-1}
       INFERENCE_QUEUE_DEPTH: ${INFERENCE_QUEUE_DEPTH:-512}
       PORT: 8090
-      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）
       TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:8090:8090"
@@ -171,23 +124,7 @@ services:
       timeout: 10s
       retries: 30
 
-  # ── Docling 解析服务（2026-09-28，见 .hermes/plans/2026-09-28_160551-docling-parser-backend.md）──
-  # 用途: 第二个（主）PDF 解析后端，替换 pypdf 处理双栏论文；pypdf 保留为降级后端。
-  # 镜像: CPU 版 4.4GB，模型烤在镜像里（不需要联网下载）。**tag 必须写死**（解析结果要可追溯，
-  #       也避免 latest 漂移后同一份 PDF 解析出不同结果）。本机无 NVIDIA 卡（Ryzen 5 5600U/15.4GB），
-  #       所以只能 CPU 版；有卡时换 quay.io/docling-project/docling-serve-cu128:<tag>（注意 CUDA 镜像没有 latest 标签）。
-  # 端口: 宿主 8091 → 容器 5001。**新增容器后必须在 WSL 里放行**: ufw allow 8091/tcp（AGENTS.md 第 3.2 节）。
-  # 内存: WSL 上限 9GB，实测 embedding 容器已占 4.3GB + OpenSearch 1.3GB，只剩 ~1.7GB 余量。
-  #       这里**故意设上限**：宁可 docling 被 OOM-kill（app 侧会降级回 pypdf），也不要连累
-  #       embedding/精排容器（它们没有降级路径，历史上被 OOM-killer 杀过）。
-  #       T1 实测峰值后可以再调这个数。
   docling:
-    # 本地自建镜像（不是上游原镜像）：上游 quay 镜像里**没有**公式模型 CodeFormulaV2，
-    # 而 `do_formula_enrichment=true` 缺它就直接 404。自建镜像把它烤进去，运行期容器
-    # 依旧离线（容器没有外网）。见 infra/docling/Dockerfile。
-    # 重建（改了 Dockerfile 或上游版本时）：`cd infra && docker compose build docling`
-    #   - 下载走宿主代理：`infra/.env` 的 BUILD_HTTP(S)_PROXY（本机 = http://127.0.0.1:7890）
-    #   - `build.network: host` 让构建容器能用宿主 127.0.0.1 的代理（bridge 里够不着）
     image: paperbox-docling-cpu:v1.35.0-formula
     build:
       context: ./docling
@@ -195,10 +132,6 @@ services:
       args:
         HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
-    # 2026-09-29：docling 已搬到 fnOS NAS 上（见 infra/docling/fnos/README.md），本机这份
-    # 保留为**回滚**用。打完 profile 后，不带 --profile 的 `docker compose up -d` 不会再把它
-    # 拉起来（免得白占 WSL 那 ~1.7GiB 余量，也正是当初公式密集论文翻车的原因）。
-    #   要用本机这份：cd infra && docker compose --profile local-docling up -d docling
     profiles: ["local-docling"]
     container_name: paperbox-docling
     restart: unless-stopped
@@ -210,44 +143,18 @@ services:
     environment:
       UVICORN_WORKERS: "1"
       DOCLING_SERVE_LOG_LEVEL: "WARNING"
-      # 时区：只影响日志时间戳（2026-10-10 全栈统一 Asia/Shanghai）
       TZ: ${TZ:-Asia/Shanghai}
-      # ── 资源与超时（2026-09-28 T1/T2 实测后的取值，依据官方 configuration.md）──
-      # LOAD_MODELS_AT_BOOT 默认 true：开机就把 layout+tableformer+RapidOCR 全加载，
-      #   实测容器在 2200m 上限下 OOM 自杀并重启了一次（重启窗口里请求全 502）。
-      #   本机要和 embedding(4.3GB 暖) 抢内存，改成懒加载：冷请求付一次模型加载，
-      #   平时只占几百 MB，被 OOM-kill 也只影响 docling 自己。
       DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "false"
-      # 每个 options 组合一个 DocumentConverter（含其模型），默认缓存 2 份 → 内存翻倍。只留 1 份。
       DOCLING_SERVE_OPTIONS_CACHE_SIZE: "1"
-      # 同步端点默认只等 120s 就返回 504（首次实测就是这么超时的）。留足冷启动+解析时间。
-      # 真正兜底的是请求级 document_timeout=150（app 会带），不是这个值。
       DOCLING_SERVE_MAX_SYNC_WAIT: "300"
-      # 打开内存统计端点（默认 false 会 403）：GET /v1/memory/stats、/v1/memory/counts
       DOCLING_SERVE_ENABLE_MANAGEMENT_ENDPOINTS: "true"
-      # docling 内部的 CPU 线程数（torch/onnxruntime）。不设会按 12 线程跑满整机，
-      # 把同 VM 的 PG/OpenSearch/embedding 一起饿死（2026-09-28 实测：整机假死 17 分钟）。
       DOCLING_NUM_THREADS: "4"
       DOCLING_DEVICE: "cpu"
-      # 本地引擎默认起 2 个 worker 进程：模型会被加载两遍（日志里 "Worker 0/1"），
-      # 白吃一份内存（本机只剩 ~1.7GiB 余量）。只留 1 个。
       DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
-      # ── 开启 OCR（默认关闭，见决策 1）────────────────────────────────────────
-      # 现状: 语料是电子版 PDF（有文本层），OCR 纯属浪费（官方参考：带 OCR 吞吐掉一半以上）。
-      # 开启方式 a) 按请求开（推荐，也是本项目的开关）: POST /v1/convert/file 带 do_ocr=true，
-      #            即 app 侧 DOCLING_OCR=true；脚本里用 probe_docling_markdown.py --ocr。
-      # 开启方式 b) 按服务开（全局默认）: 容器 /docs 与官方 configuration.md 没有“默认 do_ocr”
-      #            的服务级开关，只有 DOCLING_SERVE_OCR_BATCH_SIZE 等调优项；默认值 do_ocr=true
-      #            是**请求级**字段的默认，所以本项目必须显式传 do_ocr=false。
-      # 另外 force_ocr=false（不要用 OCR 结果覆盖已有文本层）。
     ports:
       - "${PAPERBOX_BIND_IP:-0.0.0.0}:8091:5001"
     mem_limit: ${DOCLING_MEM_LIMIT:-3000m}
-    # memswap_limit == mem_limit：禁止容器用 swap。2026-09-28 实测教训——不设时
-    # 一次 CPU 解析把整个 WSL VM 拖到 8+ 核满载 17 分钟，连 `wsl.exe` 都开不出新会话
-    # （宿主的其他服务一起假死）。宁可容器被 OOM-kill（app 侧降级 pypdf），也不许拖垮 VM。
     memswap_limit: ${DOCLING_MEM_LIMIT:-3000m}
-    # 只给 4 线程：本机 6 核 12 线程，全给 docling 会让同 VM 的 PG/OpenSearch/embedding 饿死。
     cpus: ${DOCLING_CPUS:-4}
     volumes:
       - ${DOCLING_DATA_DIR:-./data/docling}:/var/lib/docling

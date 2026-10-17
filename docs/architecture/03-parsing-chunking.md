@@ -396,7 +396,7 @@ docling 侧（语义与部署值见 `.env.example` 的 docling 块与 `README.md
 
 | 键 | 默认值 | 作用 | 出处 |
 |---|---|---|---|
-| `DOCLING_URL` | `http://127.0.0.1:8091` | docling-serve 地址（本机部署在 **fnOS NAS**，`.env` 写 `http://<nas-ip>:8091`；缺这个键会回落到死端口 → 100% 降级） | `config.py` |
+| `DOCLING_URL` | `http://127.0.0.1:8091` | docling-serve 地址（可部署在 NAS 等其它主机，`.env` 写对应地址；缺这个键会回落到死端口 → 100% 降级） | `config.py` |
 | `DOCLING_TIMEOUT` | 660.0 | 客户端读超时，**必须大于** `DOCLING_DOCUMENT_TIMEOUT`（否则会把快要跑完的解析扔掉） | `config.py` |
 | `DOCLING_DOCUMENT_TIMEOUT` | 600.0 | 服务端 `document_timeout`（默认无期限会把 5 页论文烧 17 分钟；600 s 覆盖实测最差 252 s / 最慢 371 s） | `config.py` |
 | `DOCLING_MAX_RETRIES` | 1 | 只作用于「去公式」那次：最坏请求数 `1+(1+retries)`（第 5.26 节） | `config.py` |

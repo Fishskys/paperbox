@@ -159,7 +159,7 @@ class MemWatch:
 
     The docling container may live in WSL (``--mem-ssh`` unset) or on another
     host -- the NAS deployment is reached over SSH, e.g.
-    ``--mem-ssh <user>@<nas-host>:65422``.
+    ``--mem-ssh <user>@<nas-host>:<port>``.
     """
 
     def __init__(
@@ -498,7 +498,7 @@ def main() -> int:
         "--mem-ssh",
         default=os.environ.get("DOCLING_MEM_SSH"),
         help="user@host[:port] of the docker host running docling (default: local WSL; "
-        "the NAS deployment needs <user>@<host>:65422)",
+        "the NAS deployment needs <user>@<host>:<port>)",
     )
     parser.add_argument(
         "--no-consistency", action="store_true", help="skip the before/after store totals"
