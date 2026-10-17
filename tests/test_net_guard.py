@@ -68,7 +68,7 @@ def test_a_public_address_is_allowed(monkeypatch) -> None:
         "http://127.1.2.3/paper.pdf",          # whole 127/8
         "http://10.0.0.5/paper.pdf",           # private
         "http://172.16.9.9/paper.pdf",         # private
-        "http://<lan-host>/paper.pdf",      # private
+        "http://203.0.113.5/paper.pdf",      # TEST-NET-3, refused as non-global
         "http://169.254.169.254/latest/meta-data/",  # link-local / cloud metadata
         "http://0.0.0.0/paper.pdf",            # unspecified
         "http://224.0.0.1/paper.pdf",          # multicast
@@ -114,7 +114,7 @@ def test_address_classification_covers_the_special_ranges() -> None:
 # --------------------------------------------------------------------------- #
 def test_the_allowlist_accepts_a_host_name(monkeypatch) -> None:
     monkeypatch.setattr(settings, "ingest_allow_private_hosts", "nas.local")
-    monkeypatch.setattr(socket, "getaddrinfo", fake_dns("<lan-host>"))
+    monkeypatch.setattr(socket, "getaddrinfo", fake_dns("203.0.113.5"))
     assert net_guard.check_url("http://nas.local/paper.pdf")
 
 
