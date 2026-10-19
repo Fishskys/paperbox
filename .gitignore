@@ -62,7 +62,7 @@ desktop.ini
 /tmp/
 
 # init_your_proj 隐私检测工具（本地副本，不入库）
-init_your_proj/
+init_your_proj.toml
 
 # 本机实际配置用的 compose 副本（一式两份中的本机份，不入库）
 docker-compose.local.yml
