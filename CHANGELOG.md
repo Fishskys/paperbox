@@ -4,6 +4,27 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.6.2] - 2026-10-19
+
+### Changed
+
+- **检索默认排除参考文献**：`POST /api/search` 现在默认把 `References` /
+  `Bibliography` section 的切块从结果中排除（新增 `filters.include_references`
+  开关，默认 `false`；引文类查询可设 `true` 放行）。文献条目充满作者名、期刊名
+  与关键词，对普通查询虚高命中；`Abstract` 不受影响。`total` 论文计数与结果
+  同步排除，native 与 python 两条融合路径行为一致。
+- **docling 改用官方镜像**：compose 里 docling 服务从自建
+  `paperbox-docling-cpu` 镜像改为官方
+  `quay.io/docling-project/docling-serve-cpu`，clone 即可用；`infra/docling/`
+  构建目录删除；需要公式/代码识别时按 compose 内注释挂载 CodeFormulaV2 模型
+  （任何官方镜像都不自带该模型）。compose 头部不再引用不入库的
+  `docker-compose.local.yml`，配置说明以文件内注释为准。
+
+### Fixed
+
+- `tests/test_net_guard.py` 的私网示例不再与真实部署网段同段
+  （改用 RFC 5737 TEST-NET-3 地址）。
+
 ## [0.6.1] - 2026-10-15
 
 ### Fixed

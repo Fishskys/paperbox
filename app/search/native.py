@@ -63,6 +63,7 @@ from app.search.hybrid import (
     SearchError,
     _hit_from_source,
     build_filters,
+    build_reference_exclusion,
 )
 from app.search.opensearch import ALIAS, get_client
 from app.services.embedding_service import EmbeddingError, embed_text
@@ -139,6 +140,7 @@ def build_hybrid_clause(
     filters: Mapping[str, Any] | None = None,
     *,
     pagination_depth: int,
+    include_references: bool | None = None,
 ) -> dict[str, Any]:
     """One ``hybrid`` clause: BM25 leg + kNN leg + the shared filter block.
 
@@ -167,8 +169,20 @@ def build_hybrid_clause(
         ],
     }
     clauses = build_filters(filters)
+    if include_references is False:
+        exclusion: list[dict[str, Any]] = []
+    else:
+        exclusion = build_reference_exclusion(filters)
+    inner: dict[str, Any] = {}
     if clauses:
-        clause["filter"] = {"bool": {"filter": clauses}}
+        inner["filter"] = clauses
+    if exclusion:
+        # Splice the inner clauses directly: nesting a second ``bool.must_not``
+        # inside ``hybrid.filter`` parses fine but the engine silently ignores
+        # it (measured on the live cluster).
+        inner["must_not"] = exclusion
+    if inner:
+        clause["filter"] = {"bool": inner}
     return {"hybrid": clause}
 
 
@@ -180,6 +194,7 @@ def build_native_body(
     size: int,
     pagination_depth: int | None = None,
     inner_hits: int = DEFAULT_INNER_HITS,
+    include_references: bool | None = None,
 ) -> dict[str, Any]:
     """Full search body for the native path (no pipeline, which is a request param).
 
@@ -188,12 +203,17 @@ def build_native_body(
     therefore how many distinct papers there are to collapse at all. ``None``
     means ``size * CANDIDATE_MULTIPLIER`` -- the same window the Python path
     over-fetches (``top_k * 5`` per leg), which is what makes the two paths
-    comparable rather than merely similar.
+    comparable rather than merely similar. ``include_references=None`` keeps the
+    default (bibliography excluded); ``False`` is only meaningful for callers
+    that want the *absence* of the exclusion clause asserted.
     """
     depth = int(pagination_depth) if pagination_depth else int(size) * CANDIDATE_MULTIPLIER
     body: dict[str, Any] = {
         "size": int(size),
-        "query": build_hybrid_clause(query, vector, filters, pagination_depth=depth),
+        "query": build_hybrid_clause(
+            query, vector, filters, pagination_depth=depth,
+            include_references=include_references,
+        ),
         "_source": _SOURCE_FILTER,
     }
     if inner_hits > 0:
@@ -277,6 +297,7 @@ def native_search(
     pagination_depth: int | None = None,
     pipeline: str = PIPELINE_RRF,
     query_vector: list[float] | None = None,
+    include_references: bool | None = None,
 ) -> list[ChunkHit]:
     """Run one native hybrid request and return its collapsed chunks.
 
@@ -300,6 +321,7 @@ def native_search(
         size=size,
         pagination_depth=pagination_depth,
         inner_hits=inner_hits,
+        include_references=include_references,
     )
     client = client or get_client()
     try:

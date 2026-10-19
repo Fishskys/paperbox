@@ -140,12 +140,20 @@ def test_unknown_filter_keys_are_ignored() -> None:
 
 def test_keyword_query_shape_without_filters() -> None:
     query = build_keyword_query("layer normalization")
-    assert query == {
-        "multi_match": {
-            "query": "layer normalization",
-            "fields": ["title^2", "text"],
-            "type": "best_fields",
+    # The default bibliography exclusion wraps the free-text leg in a bool.
+    assert query["bool"]["must"] == [
+        {
+            "multi_match": {
+                "query": "layer normalization",
+                "fields": ["title^2", "text"],
+                "type": "best_fields",
+            }
         }
+    ]
+    must_not = query["bool"]["must_not"]
+    assert {t for c in must_not for t in c["terms"]["section"]} == {
+        "references", "REFERENCES", "References",
+        "bibliography", "BIBLIOGRAPHY", "Bibliography",
     }
 
 
@@ -168,12 +176,22 @@ def test_semantic_query_pushes_filters_inside_the_knn_clause() -> None:
     knn = query["knn"]["embedding"]
     assert knn["vector"] == [0.5, 0.25]
     assert knn["k"] == 5
-    assert knn["filter"] == {"bool": {"filter": [{"terms": {"venue": ["ISCA"]}}]}}
+    inner = knn["filter"]["bool"]
+    assert inner["filter"] == [{"terms": {"venue": ["ISCA"]}}]
+    assert {t for c in inner["must_not"] for t in c["terms"]["section"]} == {
+        "references", "REFERENCES", "References",
+        "bibliography", "BIBLIOGRAPHY", "Bibliography",
+    }
 
 
-def test_semantic_query_without_filters_has_no_filter_key() -> None:
+def test_semantic_query_without_filters_still_excludes_references() -> None:
+    """No user filters, yet the bibliography exclusion is in the clause."""
     query = build_semantic_query([0.1, 0.2], None, k=3)
-    assert "filter" not in query["knn"]["embedding"]
+    inner = query["knn"]["embedding"]["filter"]["bool"]
+    assert {t for c in inner["must_not"] for t in c["terms"]["section"]} == {
+        "references", "REFERENCES", "References",
+        "bibliography", "BIBLIOGRAPHY", "Bibliography",
+    }
 
 
 def test_semantic_query_rejects_non_numeric_vectors() -> None:

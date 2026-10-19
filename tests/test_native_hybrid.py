@@ -157,12 +157,31 @@ def test_filters_are_attached_to_the_clause_not_to_each_leg() -> None:
     )["query"]["hybrid"]
 
     assert clause["filter"] == {
-        "bool": {"filter": [{"range": {"year": {"gte": 2020, "lte": 2024}}}]}
+        "bool": {
+            "filter": [{"range": {"year": {"gte": 2020, "lte": 2024}}}],
+            # The default bibliography exclusion rides in the same block.
+            "must_not": [
+                {
+                    "terms": {
+                        "section": [
+                            "references",
+                            "REFERENCES",
+                            "References",
+                            "bibliography",
+                            "BIBLIOGRAPHY",
+                            "Bibliography",
+                        ]
+                    }
+                }
+            ],
+        }
     }
 
 
 def test_without_filters_there_is_no_filter_key() -> None:
-    clause = native.build_native_body("q", VECTOR, None, size=5)["query"]["hybrid"]
+    clause = native.build_native_body(
+        "q", VECTOR, None, size=5, include_references=False
+    )["query"]["hybrid"]
 
     assert "filter" not in clause
 

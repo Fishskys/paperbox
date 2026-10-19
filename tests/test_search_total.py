@@ -65,8 +65,18 @@ def test_the_count_body_counts_the_union_of_both_legs(no_embed) -> None:
 
     assert body["query"]["bool"]["minimum_should_match"] == 1
     assert len(should) == 2
-    assert "multi_match" in should[0]
+    # Each leg carries the default bibliography exclusion in its own bool.
+    assert "multi_match" in should[0]["bool"]["must"][0]
     assert "knn" in should[1]
+    knn_filter = should[1]["knn"]["embedding"].get("filter", {})
+    assert any(
+        "section" in clause.get("terms", {})
+        for clause in knn_filter.get("bool", {}).get("must_not", [])
+    )
+    assert any(
+        "section" in clause.get("terms", {})
+        for clause in should[0]["bool"].get("must_not", [])
+    )
 
 
 def test_the_count_body_uses_the_knn_leg_alone_for_semantic_mode(no_embed) -> None:

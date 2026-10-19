@@ -289,18 +289,74 @@ def build_filters(filters: Mapping[str, Any] | None = None) -> list[dict[str, An
     return clauses
 
 
+#: Section titles that hold bibliography entries. Matching is case-insensitive
+#: (the corpus carries both ``References`` and ``REFERENCES`` -- heading
+#: normalisation keeps the source casing). ``Abstract`` is deliberately NOT
+#: here: an abstract hit is usually the paper's core content.
+REFERENCE_SECTIONS: frozenset[str] = frozenset({"references", "bibliography"})
+
+
+def _as_bool(value: Any) -> bool:
+    """Coerce a filter flag; only a genuine ``True`` turns the flag on."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
+
+
+def build_reference_exclusion(
+    filters: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """``must_not`` clauses keeping bibliography chunks out of the results.
+
+    On by default: reference entries are dense in author names, venues and
+    keywords, so they score deceptively well against ordinary queries while
+    being useless as reading material. ``filters["include_references"]`` (the
+    ``SearchFilters.include_references`` flag) turns the exclusion off for
+    callers that genuinely want citation hits.
+
+    Returns an empty list when the exclusion is off, so callers can treat the
+    result like any other optional clause group.
+    """
+    if filters and _as_bool(filters.get("include_references")):
+        return []
+    # ``section`` is a plain keyword (no lowercase normalizer), so the clause
+    # matches the casings the corpus actually carries. New headings go through
+    # ``structure.canonicalize`` which only produces cased variants of these
+    # two spellings; a ``wildcard`` would be slower and looser than listing
+    # them, and a mapping change (normalizer) would force a reindex.
+    # Return the *inner* clause list -- callers splice it into their own
+    # ``bool.must_not``. Wrapping it in another ``bool.must_not`` here produced
+    # a doubly-negated clause that the engine parsed fine but silently ignored
+    # (measured: References still hit every leg on the live cluster).
+    return [
+        {
+            "terms": {
+                "section": [
+                    title
+                    for name in REFERENCE_SECTIONS
+                    for title in (name, name.upper(), name.title())
+                ]
+            }
+        }
+    ]
+
+
 def _with_filters(
-    clauses: Sequence[dict[str, Any]], query: dict[str, Any]
+    clauses: Sequence[dict[str, Any]],
+    query: dict[str, Any],
+    must_not: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """Wrap a query in a bool clause carrying the non-scoring filters."""
-    if not clauses:
+    if not clauses and not must_not:
         return query
-    return {
-        "bool": {
-            "must": [query],
-            "filter": list(clauses),
-        }
-    }
+    body: dict[str, Any] = {"must": [query]}
+    if clauses:
+        body["filter"] = list(clauses)
+    if must_not:
+        body["must_not"] = list(must_not)
+    return {"bool": body}
 
 
 # --------------------------------------------------------------------------- #
@@ -319,7 +375,11 @@ def build_keyword_query(
             "type": "best_fields",
         }
     }
-    return _with_filters(build_filters(filters), multi_match)
+    return _with_filters(
+        build_filters(filters),
+        multi_match,
+        build_reference_exclusion(filters),
+    )
 
 
 def build_semantic_query(
@@ -330,8 +390,14 @@ def build_semantic_query(
     """kNN clause on ``embedding`` with the filters pushed inside the clause."""
     knn: dict[str, Any] = {"vector": [float(value) for value in embedding], "k": int(k)}
     clauses = build_filters(filters)
+    exclusion = build_reference_exclusion(filters)
+    inner: dict[str, Any] = {}
     if clauses:
-        knn["filter"] = {"bool": {"filter": clauses}}
+        inner["filter"] = clauses
+    if exclusion:
+        inner["must_not"] = exclusion
+    if inner:
+        knn["filter"] = {"bool": inner}
     return {"knn": {"embedding": knn}}
 
 
@@ -477,15 +543,30 @@ def build_count_body(
     elif normalized_mode == "semantic":
         clause = _semantic_clause(query, filters, k, query_vector=query_vector)
     elif normalized_mode == "hybrid":
-        clause = {
-            "bool": {
-                "should": [
-                    build_keyword_query(query, filters),
-                    _semantic_clause(query, filters, k, query_vector=query_vector),
-                ],
-                "minimum_should_match": 1,
+        # The bibliography exclusion lives on the outer bool, not inside each
+        # leg: the legs are ``should`` alternatives, and the count must answer
+        # "what would the search return" -- which excludes References by
+        # default, exactly like the result pages do.
+        inner = [
+            build_keyword_query(query, filters),
+            _semantic_clause(query, filters, k, query_vector=query_vector),
+        ]
+        exclusion = build_reference_exclusion(filters)
+        if exclusion:
+            clause = {
+                "bool": {
+                    "should": inner,
+                    "minimum_should_match": 1,
+                    "must_not": exclusion,
+                }
             }
-        }
+        else:
+            clause = {
+                "bool": {
+                    "should": inner,
+                    "minimum_should_match": 1,
+                }
+            }
     else:
         raise ValueError(f"unsupported search mode: {mode!r}")
     return {
@@ -1081,6 +1162,7 @@ __all__ = [
     "TITLE_BOOST",
     "build_filters",
     "build_keyword_query",
+    "build_reference_exclusion",
     "build_semantic_query",
     "rank_hits",
     "search_chunks",

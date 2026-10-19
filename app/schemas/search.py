@@ -109,6 +109,11 @@ class SearchFilters(BaseModel):
     author_terms: list[str] | None = None
     dynamic_index_terms: list[str] | None = None
     source_tags: list[str] | None = None
+    #: Bibliography sections (``References``/``Bibliography``) are excluded from
+    #: every search by default -- their author/venue/keyword density makes them
+    #: score deceptively well against ordinary queries. Set ``true`` to let
+    #: citation-type queries see them again.
+    include_references: bool = False
 
     @field_validator(*_SCALAR_FRIENDLY, mode="before")
     @classmethod

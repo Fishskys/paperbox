@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.6.1**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.6.2**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.6.1 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
+| 6) 启动 | 日志出现 `paperbox 0.6.2 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
 
 一键自检（推荐）：
 
@@ -553,6 +553,7 @@ curl -X POST http://127.0.0.1:8077/api/papers/ingest/files \
 | `identifier` | string[] | `<scheme>:<值>`，如 `doi:10.1109/...`；未知 scheme 直接 422 |
 | `tag` | string[] | 标签（四个来源的并集） |
 | `ieee_terms` / `author_terms` / `dynamic_index_terms` / `source_tags` | string[] | 按来源分类的索引词，可分别过滤 |
+| `include_references` | bool（默认 `false`） | 默认把参考文献 section（`References`/`Bibliography`）从检索中**排除**——文献条目充满作者名/期刊名/关键词，对普通查询虚高命中；引文类查询设 `true` 放行 |
 
 `POST /api/search` 响应体：
 
