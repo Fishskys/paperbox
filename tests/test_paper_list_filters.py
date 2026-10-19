@@ -99,6 +99,52 @@ def listed_ids(session_factory, **kwargs) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
+def test_title_query_matches_words_in_any_order(factory) -> None:  # noqa: F811
+    """IEEE-style: every word must appear in the title, order-independent.
+
+    The old single-substring match missed ``test search for`` against the title
+    ``test context search for`` even though all three words are present.
+    """
+    add_paper(factory, title="Test Context Search for Papers")
+    add_paper(factory, title="Unrelated Work")
+
+    # Words scattered across the title, in a different order.
+    assert listed_ids(factory, query="test search for") != []
+    # Hyphen and whitespace are equivalent separators.
+    assert listed_ids(factory, query="test-search for") != []
+    assert listed_ids(factory, query="search\t test FOR") != []
+    # A missing word excludes.
+    assert listed_ids(factory, query="test missing") == []
+    # Case-insensitive preserved.
+    assert listed_ids(factory, query="TEST CONTEXT") != []
+
+
+def test_title_query_escapes_ilike_wildcards(factory) -> None:  # noqa: F811
+    """A literal ``%``/``_`` in the query must not act as a wildcard."""
+    add_paper(factory, title="100% Accurate_Method")
+    add_paper(factory, title="100 Percent Accurate Method")
+
+    # ``100% a`` with a literal percent does NOT match ``100 Percent ...``.
+    assert listed_ids(factory, query="100% a") != []
+    assert "100 Percent Accurate Method" not in [
+        row.title for row in _rows(factory, query="100% a")
+    ]
+    # An underscore matches only the literal underscore title.
+    rows = _rows(factory, query="accurate_method")
+    assert [row.title for row in rows] == ["100% Accurate_Method"]
+
+
+def _rows(factory, **kwargs):
+    from app.services import paper_service as _ps
+
+    session = factory()
+    try:
+        rows, _total = _ps.list_papers(session, **kwargs)
+        return rows
+    finally:
+        session.close()
+
+
 def test_venue_filter_matches_the_normalized_name(factory) -> None:  # noqa: F811
     isscc = add_paper(factory, venue="ISSCC")
     add_paper(factory, venue="VLSI")

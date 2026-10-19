@@ -440,7 +440,20 @@ def list_papers(
     if status:
         statement = statement.where(Paper.status == status.strip().upper())
     if query and query.strip():
-        statement = statement.where(Paper.title.ilike(f"%{query.strip()}%"))
+        # IEEE-style title matching: split the query into words (whitespace and
+        # hyphens both act as separators -- users type ``test-search`` the way
+        # they say it), then require every word to appear somewhere in the
+        # title, order-independent. ILIKE keeps it case-insensitive. A pure
+        # substring match (the old behaviour) missed ``test search for`` against
+        # the title ``test context search for`` -- all three words are there.
+        # ``%``/``_`` are escaped so a literal query cannot turn into a
+        # wildcard.
+        words = [word for word in re.split(r"[\s\-]+", query.strip()) if word]
+        for word in words:
+            escaped = word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            statement = statement.where(
+                Paper.title.ilike(f"%{escaped}%", escape="\\")
+            )
     venue_keys = [
         venue_service.normalize_venue_name(name)
         for name in (venue or [])

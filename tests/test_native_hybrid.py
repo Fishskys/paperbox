@@ -156,25 +156,14 @@ def test_filters_are_attached_to_the_clause_not_to_each_leg() -> None:
         "q", VECTOR, {"year_from": 2020, "year_to": 2024}, size=5
     )["query"]["hybrid"]
 
-    assert clause["filter"] == {
-        "bool": {
-            "filter": [{"range": {"year": {"gte": 2020, "lte": 2024}}}],
-            # The default bibliography exclusion rides in the same block.
-            "must_not": [
-                {
-                    "terms": {
-                        "section": [
-                            "references",
-                            "REFERENCES",
-                            "References",
-                            "bibliography",
-                            "BIBLIOGRAPHY",
-                            "Bibliography",
-                        ]
-                    }
-                }
-            ],
-        }
+    inner = clause["filter"]["bool"]
+    assert inner["filter"] == [{"range": {"year": {"gte": 2020, "lte": 2024}}}]
+    # The default bibliography exclusion rides in the same block (order of the
+    # section terms is a frozenset iteration artefact -- compare as a set).
+    assert len(inner["must_not"]) == 1
+    assert set(inner["must_not"][0]["terms"]["section"]) == {
+        "references", "REFERENCES", "References",
+        "bibliography", "BIBLIOGRAPHY", "Bibliography",
     }
 
 
