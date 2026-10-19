@@ -21,7 +21,7 @@ docs/*
 !docs/architecture/
 evals/README.md
 evals/report-*.md
-# （组件级文件名 README.md，如 infra/docling/fnos/README.md，**继续跟踪** —— 随各自组件进版）
+# （组件级文件名 README.md，如 infra/embedding/README.md，**继续跟踪** —— 随各自组件进版）
 # 评测/导入产物：体积大（3.2MB）且含本机绝对路径，可由 scripts/eval.py 复现。
 # 只跟踪**输入集**：evals/queries-spec.json · queries*.jsonl · labels.jsonl · arxiv_ids*.txt
 #   + 主人清单冻结副本 evals/corpus30.txt 与旧语料定标集归档 evals/archive/*-old-corpus.json*（2026-09-30）

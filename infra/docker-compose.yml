@@ -2,7 +2,7 @@
 # paperbox 应用本身不在这里运行。启动: cd <repo>/infra && docker compose up -d --build
 # 数据默认落 ./data/<service>；服务器上在 infra/.env 里给 *_DATA_DIR 设绝对路径。
 # 端口绑定默认 0.0.0.0，可用 PAPERBOX_BIND_IP 收敛；时区统一 TZ=Asia/Shanghai（可覆盖）。
-# 配置项逐条说明见 infra/docker-compose.local.yml（本机参考副本，不入库）。
+# 各配置项的逐条说明以本文件内注释为准；infra/.env.example 是全部变量的清单与默认值。
 name: paperbox
 services:
   postgres:
@@ -124,14 +124,17 @@ services:
       timeout: 10s
       retries: 30
 
+  # ── Docling 解析服务（可选，默认不启动）─────────────────────────────────
+  # 用途: 第二个（主）PDF 解析后端；pypdf 保留为降级后端。放 profile 后面：
+  #   要启用: cd infra && docker compose --profile local-docling up -d docling
+  #
+  # 官方镜像选择（docling-project 官方发布，quay.io / ghcr.io 双源，tag 用版本号勿用 latest）：
+  #   docling-serve-cpu   CPU-only，本模块默认用这个，~4.4GB，linux/amd64+arm64
+  #   docling-serve       完整版（PyPI 全量，含 CUDA 依赖包），~8.7GB，amd64+arm64
+  #   docling-serve-cu128 CUDA 12.8，有 NVIDIA GPU 时用，~11.4GB，仅 amd64
+  #   docling-serve-cu130 CUDA 13.0，较新 GPU，amd64+arm64
   docling:
-    image: paperbox-docling-cpu:v1.35.0-formula
-    build:
-      context: ./docling
-      network: host
-      args:
-        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
-        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+    image: quay.io/docling-project/docling-serve-cpu:v1.35.0
     profiles: ["local-docling"]
     container_name: paperbox-docling
     restart: unless-stopped
@@ -158,6 +161,10 @@ services:
     cpus: ${DOCLING_CPUS:-4}
     volumes:
       - ${DOCLING_DATA_DIR:-./data/docling}:/var/lib/docling
+      # 公式/代码识别模型挂载点（不需要公式解析就保持注释状态）：
+      # 目录名必须是 `docling-project--CodeFormulaV2`（HF 仓库名的 `--` 变体）。
+      # 取好模型目录后取消下一行注释，把宿主目录挂进容器缓存路径；
+      # - ./models/docling-project--CodeFormulaV2:/your/path/models/docling-project--CodeFormulaV2:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:5001/health', timeout=5).status==200 else sys.exit(1)\""]
       interval: 30s

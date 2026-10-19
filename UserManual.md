@@ -172,7 +172,7 @@ uv run python scripts/healthcheck.py
 | `DOCLING_FORMULA_ENRICHMENT` | 公式转 LaTeX | `false` | 最贵的一项（数倍耗时）；开启需同时配 preset 且镜像含公式模型；**该值属于解析缓存身份** |
 | `DOCLING_FORMULA_PRESET` | 公式模型预设名 | `codeformulav2` | 公式开启时必填，否则服务端 404 |
 | `DOCLING_PAGE_BREAK` | 页分隔标记字面量 | `<!-- page-break -->` | 两侧使用的同一份方言，数量恒为「页数 − 1」 |
-| `DOCLING_IMAGE_TAG` | 镜像 tag 兜底版本 | `paperbox-docling-cpu:v1.35.0-formula` | 取不到服务端版本时写进产物元数据 |
+| `DOCLING_IMAGE_TAG` | 镜像 tag 兜底版本 | 空（取不到服务端版本时元数据记空） | 仅当 docling 端点不暴露 `/version` 时才需要设 |
 
 #### 1.3.6 分块
 
@@ -287,7 +287,7 @@ docker exec paperbox-postgres psql -U postgres -d paperbox -tAc "show timezone; 
 | `paperbox-opensearch` | `opensearchproject/opensearch:3.6.0` | `9200` | `OPENSEARCH_DATA_DIR` + `OPENSEARCH_BACKUP_DIR` | `_cluster/health` | 内存不足；改了 `path.repo` 未重建容器 |
 | `paperbox-minio` | `minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1` | `9000`（API）、`9001`（控制台） | `MINIO_DATA_DIR` | `/minio/health/live` | `MINIO_ROOT_USER/PASSWORD` 未设（必填） |
 | `paperbox-embedding` | 本地构建 `infra/embedding`（`paperbox/embedding-server:0.1`） | `8090` | `EMBEDDING_MODELS_DIR` | `/health` | 首次启动要下载模型（慢）；批次/线程配置过大会 OOM |
-| `paperbox-docling`（可选） | 本地构建 `infra/docling`（`paperbox-docling-cpu:v1.35.0-formula`） | `8091→5001` | `DOCLING_DATA_DIR` | `/health` | 只带 `--profile local-docling` 才启动；内存上限给小了会被 OOM-kill |
+| `paperbox-docling`（可选） | 官方 `quay.io/docling-project/docling-serve-cpu`（tag 见 compose 注释） | `8091→5001` | `DOCLING_DATA_DIR` | `/health` | 只带 `--profile local-docling` 才启动；内存上限给小了会被 OOM-kill |
 
 **时区**：五个服务统一 `TZ=${TZ:-Asia/Shanghai}`（缺省即 `Asia/Shanghai`，见 [#1.3.6](#136-分块)）。
 Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO 镜像里没有 tzdata**，只给 `TZ` 会打印成 `13:53 Asia`（名字认了、偏移仍是 0）—— 所以它的 compose 里把宿主的
@@ -335,7 +335,7 @@ Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO �
 |---|---|---|---|
 | `DOCLING_MEM_LIMIT` | 容器内存上限 | `3000m` | 同时作为 swap 上限（禁止用 swap，防止拖垮整机） |
 | `DOCLING_CPUS` | CPU 配额 | `4` | 给太多会让同机其他容器饿死 |
-| `BUILD_HTTP_PROXY` / `BUILD_HTTPS_PROXY` | 构建期下载公式模型用的代理 | 空 | 仅 `docker compose build docling` 时生效；能直连外网则留空 |
+| `DOCLING_DATA_DIR` | docling 缓存目录 | `./data/docling` | 挂 `/var/lib/docling`，只放缓存 |
 
 启动本机 docling（默认**不启动**，只在需要时按 profile 起）：
 
@@ -343,6 +343,10 @@ Postgres 额外设 `PGTZ`，容器内的 `psql` 才不会退回 UTC。**MinIO �
 cd infra && docker compose --profile local-docling up -d docling
 # 然后在根 .env 里把 DOCLING_URL 指过去，并重启应用
 ```
+
+镜像用官方 `docling-serve-cpu`，开箱即用（无公式识别）。**需要公式/代码识别**时，
+把 CodeFormulaV2 模型目录挂进容器（官方镜像一律不自带该模型），取法与挂载点见
+`infra/docker-compose.yml` 的 docling 段注释。
 
 ### 1.5 部署到服务器
 

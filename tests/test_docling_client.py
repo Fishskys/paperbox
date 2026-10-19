@@ -288,11 +288,11 @@ def test_convert_returns_markdown_page_count_and_version() -> None:
 
 def test_convert_falls_back_to_the_image_tag_for_provenance() -> None:
     server = _Server(_success_response(), version=None)
-    settings.docling_image_tag = "paperbox-docling-cpu:v1.35.0-formula"
+    settings.docling_image_tag = "quay.io/docling-project/docling-serve-cpu:v1.35.0"
     result = dc.convert_markdown(
         b"%PDF-1.4 fake", filename="paper.pdf", client=server.client()
     )
-    assert result.parser_version == "docling-serve (paperbox-docling-cpu:v1.35.0-formula)"
+    assert result.parser_version == "docling-serve (quay.io/docling-project/docling-serve-cpu:v1.35.0)"
 
 
 def test_convert_honours_explicit_options_and_page_range() -> None:

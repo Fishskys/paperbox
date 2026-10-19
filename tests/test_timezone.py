@@ -18,7 +18,6 @@ import app.core.config  # noqa: F401  -- 导入期设定进程时区，测的就
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = REPO_ROOT / "infra" / "docker-compose.yml"
-NAS_COMPOSE = REPO_ROOT / "infra" / "docling" / "fnos" / "docker-compose.yml"
 
 
 def test_the_process_timezone_defaults_to_shanghai() -> None:
@@ -60,8 +59,3 @@ def test_every_compose_service_declares_the_timezone() -> None:
     pg = services["postgres"]["environment"]
     assert "PGTZ" in pg, "postgres 少了 PGTZ，docker exec psql 会看到 UTC"
 
-
-def test_the_nas_compose_declares_it_too() -> None:
-    """NAS 上那份 docling compose 别被漏掉（同一套口径）。"""
-    text = NAS_COMPOSE.read_text(encoding="utf-8")
-    assert "TZ" in text
