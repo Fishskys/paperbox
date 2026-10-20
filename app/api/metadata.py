@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import get_logger
-from app.core.security import require_read, require_write
+from app.core.security import require_admin, require_read, require_write
 from app.db.session import get_db
 from app.schemas.metadata import (
     ApplyIn,
@@ -28,11 +28,14 @@ from app.schemas.metadata import (
     AttachIn,
     AttachOut,
     ImportReportOut,
+    ReextractIn,
+    ReextractOut,
     ReviewOut,
 )
 from app.services import metadata_import as importer
 from app.services import metadata_matcher as matcher
 from app.services import metadata_merge as merge
+from app.services import metadata_reextract
 from app.services import metadata_sources as sources
 from app.services import paper_service, provenance_service
 
@@ -295,6 +298,41 @@ def _patch_key(field: str) -> str | None:
         "identifier:arxiv": "arxiv_id",
     }
     return mapping.get(field)
+
+
+@router.post(
+    "/reextract", response_model=ReextractOut, dependencies=[Depends(require_admin)]
+)
+async def reextract_metadata_endpoint(
+    body: ReextractIn,
+    session: Session = Depends(get_db),
+) -> ReextractOut:
+    """Re-run the metadata discovery over already-stored PDFs and merge the gaps.
+
+    The batch behind ``scripts/reextract_metadata.py``: for each live paper it
+    re-reads the PDF's Info/XMP, the first two pages and the file name, then merges
+    the result through rule R2 (fill a blank, never overwrite). It does **not**
+    re-parse the body, re-chunk or re-embed; with ``refresh_index`` (default) it
+    also rewrites the affected papers' index-metadata snapshot.
+
+    ``dry_run`` defaults to **true**: report what would change and write nothing.
+    It is admin-gated because it walks the whole library and calls the parser.
+    """
+    summary = await run_in_threadpool(
+        metadata_reextract.reextract_library,
+        session,
+        paper_id=body.paper_id,
+        limit=body.limit,
+        apply=not body.dry_run,
+        refresh_index=body.refresh_index,
+        detail=body.detail,
+    )
+    note = (
+        "试运行：没有写入。确认后带 dry_run=false 再调一次。"
+        if body.dry_run
+        else f"已写入；受影响论文 {summary.changed_papers} 篇。"
+    )
+    return ReextractOut.model_validate(summary.as_api_dict(note=note))
 
 
 __all__ = ["router"]

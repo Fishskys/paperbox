@@ -51,12 +51,14 @@
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张（裁决「采纳被拒值」） | write | — | `app/api/papers.py` 的 `delete_paper()` |
 | POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把该分歧标为已裁决 | write | — | `app/api/papers.py` 的 `delete_paper()` |
 | DELETE | `/api/papers/{paper_id}` | 删除（204） | write | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
+| POST | `/api/papers/{paper_id}/metadata/reextract` | 单篇重跑元数据提取并合并缺口（默认 `dry_run=true`） | write | — | `app/api/papers.py` |
 | POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | admin | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
 | POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | write | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
 | POST | `/api/metadata/import` | 外部元数据导入 | write | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py` |
 | GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | read | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | write | — | `app/api/metadata.py` |
 | POST | `/api/metadata/apply` | 按报告批量应用人工决定 | write | — | `app/api/metadata.py` |
+| POST | `/api/metadata/reextract` | **全库**重跑元数据提取并合并缺口（默认 `dry_run=true`） | admin | `paper_id`、`limit`、`dry_run`、`refresh_index`、`detail` | `app/api/metadata.py` |
 | POST | `/api/search` | 论文级混合检索 | read | — | `app/api/search.py` 的 `search()` |
 | GET | `/api/search-logs` | 检索日志（只读） | read | `limit`、`since`、`mode` | `app/api/search_logs.py` |
 
@@ -71,8 +73,8 @@
 |---|---|---|
 | `public` | `GET /health`、`GET /`、`/docs`、`/redoc`、`/openapi.json`；**读门为 `public` 时的 13 个业务读** | 框架/运维端点恒为 public；读端点由 `AUTH_READ_ACCESS` 决定 |
 | `read` | 13 个业务读端点（[#2.1](#21-端点总表) 里 `Bearer=read` 的行） | 仅当 `AUTH_READ_ACCESS=key` |
-| `write` | 全部增删改：5 个 `ingest*`、`jobs/{job_id}/retry`、单篇 `papers/{paper_id}/reindex`、`PATCH papers/{paper_id}/metadata`、`metadata/rollback`、`metadata/conflicts/dismiss`、`metadata/import`、`metadata/sources/{source_id}/attach`、`metadata/apply`、**`DELETE papers/{paper_id}`** | `AUTH_ENABLED=true` |
-| `admin` | **只有** `POST /api/papers/reindex`（批量/整库重建：小时级、打满 embedding） | `AUTH_ENABLED=true` |
+| `write` | 全部增删改：5 个 `ingest*`、`jobs/{job_id}/retry`、单篇 `papers/{paper_id}/reindex`、`PATCH papers/{paper_id}/metadata`、`metadata/rollback`、`metadata/conflicts/dismiss`、`DELETE papers/{paper_id}`、单篇 `papers/{paper_id}/metadata/reextract`、`metadata/import`、`metadata/sources/{source_id}/attach`、`metadata/apply` | `AUTH_ENABLED=true` |
+| `admin` | **两个全库/批量操作**：`POST /api/papers/reindex`（整库重建：小时级、打满 embedding）与 `POST /api/metadata/reextract`（整库重跑元数据提取，会读全库 PDF） | `AUTH_ENABLED=true` |
 
 **两个开关，互不越界**：
 

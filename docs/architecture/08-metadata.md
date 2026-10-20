@@ -306,7 +306,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 - 采纳：PDF 到达且匹配到壳 → `adopt_paper`：改 `paper_files.paper_id` 与 MinIO 键、`is_primary=false`、补 `source_id`；**先把 `ingestion_jobs` 改指到壳论文再删临时论文行**（否则 `cascade="all, delete-orphan"` 会把作业一起删掉），最后把壳置 `PENDING` 走正常流水线——**复用同一个 `paper_id`**。
 - 长期无 PDF：可按 `status=AWAITING_FILE` 查（`GET /api/papers?status=AWAITING_FILE`），**不自动删除**。
 
-### 4.7 HTTP 端点（7 个 + 1 个配套）
+### 4.7 HTTP 端点（9 个 + 1 个配套）
 
 | 端点 | 作用 | 出处 |
 |---|---|---|
@@ -314,10 +314,14 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `GET /api/metadata/review` | 复核清单（`pending` / `ambiguous` 来源 + 真冲突） | |
 | `POST /api/metadata/sources/{source_id}/attach` | 人工把来源挂到某篇论文并重放合并 | |
 | `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | |
+| `POST /api/metadata/reextract` | **全库**对已存 PDF 重跑元数据提取并合并缺口，**默认 dry_run**，admin | |
+| `POST /api/papers/{id}/metadata/reextract` | **单篇**重跑元数据提取并合并缺口，**默认 dry_run**，write | `api/papers.py` |
 | `GET /api/papers/{id}/metadata` | 当前值 + 字段账本视图 | `api/papers.py` 的 `get_paper_metadata()` |
 | `PATCH /api/papers/{id}/metadata` | 人工编辑（未知键进 `rejected`；改 `doi`/`arxiv_id` 会升级指纹） | |
 | `POST /api/papers/{id}/metadata/rollback` | 把某字段回滚到历史声明 | `patch_paper_metadata()` |
 | `POST /api/papers/{id}/reindex` | 让元数据改动进入检索过滤（配套，不是元数据端点） | |
+
+单篇与全库的 reextract 共用 `app/services/metadata_reextract.py` 的实现（同一份三层发现 + R2 合并），只是作用范围与权限不同（对齐 `papers/{id}/reindex`(write) vs `papers/reindex`(admin) 的惯例）。两者都**不重解析正文、不重切块、不重嵌入**，`refresh_index`（默认 true）只重写受影响论文的索引元数据快照。
 
 契约：请求体既不是 multipart 也不是 JSON → 415（`_payload_from_request`）；`source_type` 非法 → 422；同一记录重复导入计入 `unchanged`，不产生第二行来源。
 
@@ -326,6 +330,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 脚本 | 作用 |
 |---|---|
 | `scripts/backfill_metadata.py` | 给历史论文补来源行 / 声明 / 标识符 / 主版本标记，**幂等**，`--dry-run` / `--limit`；从不改 `papers.fingerprint` |
+| `scripts/reextract_metadata.py` | 对已存 PDF **重跑元数据提取**并合并缺口（不重解析正文/不重嵌入），`--dry-run`（默认）/`--apply`/`--paper-id`/`--limit`/`--no-index`；先 dry-run 出清单再 apply |
 | `scripts/import_metadata.py` | CLI 导入（`--apply` / `--limit` / `--source-type` / `--report`） |
 | `scripts/acceptance_metadata.py` | 真机验收 7 项：回填数字、IEEE 按 DOI 命中并 apply、无 DOI 记录进复核、手动改+回滚+指纹升级、venue 检索（需 reindex）、元数据先 PDF 后、索引一致性。**只在自己的壳论文上造数据**，`--cleanup` 删掉本次造的行 |
 

@@ -198,6 +198,18 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
+def _same_identifier(scheme: str, current: Any, incoming: Any) -> bool:
+    """Two identifier values are the same when they normalize to the same string."""
+    if current is None or incoming is None:
+        return False
+    try:
+        left = prov.identifiers.normalize_identifier(scheme, str(current))
+        right = prov.identifiers.normalize_identifier(scheme, str(incoming))
+    except Exception:  # noqa: BLE001 - a weird scheme/value is simply "not compared"
+        return False
+    return bool(left) and left == right
+
+
 def _special_winner(field_name: str, current: Any, incoming: Any) -> bool:
     """Whether a field-specific rule prefers the incoming value on a conflict.
 
@@ -233,6 +245,12 @@ def decide(
 
     current_claim = prov.current_claim(session, paper.id, field_name)
     current_value = prov.read_field(paper, field_name)
+    if _is_blank(current_value) and current_claim is not None and not _is_blank(current_claim.value):
+        # ``read_field`` only knows the DOI/arXiv mirror columns; for an
+        # ``identifier:<other>`` scheme (e.g. ``ieee_article_number``) it returns
+        # None even though the claim exists. Fall back to the claim's own value so
+        # an existing identifier is not re-claimed as "blank" on every import.
+        current_value = current_claim.value
     if _is_blank(current_value):
         return MergeDecision(
             field=field_name,
@@ -249,6 +267,19 @@ def decide(
             action=ACTION_UNCHANGED,
             kept=current_value,
             reason="same value",
+            source_type=incoming_type,
+        )
+
+    # Identifiers are compared on their normalized form: ``10.1109/ISCAS...`` and
+    # ``10.1109/iscas...`` are the same DOI, so a re-extraction or a re-import must
+    # not report a case-only difference as a change (or overwrite the mirror).
+    scheme = prov.scheme_of_identifier_field(field_name)
+    if scheme and _same_identifier(scheme, current_value, value):
+        return MergeDecision(
+            field=field_name,
+            action=ACTION_UNCHANGED,
+            kept=current_value,
+            reason="same identifier",
             source_type=incoming_type,
         )
 

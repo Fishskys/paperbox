@@ -38,6 +38,8 @@ from app.schemas.metadata import (
     MetadataRollbackIn,
     MetadataRollbackOut,
     PaperMetadataOut,
+    ReextractIn,
+    ReextractOut,
 )
 from app.search import opensearch
 from app.search.opensearch import SearchIndexError
@@ -46,6 +48,7 @@ from app.services import degradation_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_clear
 from app.services import metadata_manual
+from app.services import metadata_reextract
 from app.services import object_storage
 from app.services import paper_service as papers
 from app.services import reindex_service
@@ -294,6 +297,42 @@ def clear_paper_metadata(
         return MetadataClearPreviewOut.model_validate(preview.__dict__)
     outcome = metadata_clear.clear_metadata(session, paper)
     return MetadataClearOut.model_validate(outcome.__dict__)
+
+
+@router.post(
+    "/{paper_id}/metadata/reextract",
+    response_model=ReextractOut,
+    dependencies=[Depends(require_write)],
+)
+def reextract_paper_metadata_endpoint(
+    paper_id: str,
+    body: ReextractIn,
+    session: Session = Depends(get_db),
+) -> ReextractOut:
+    """Re-extract **one** paper's metadata from its stored PDF and merge the gaps.
+
+    The single-paper twin of ``POST /api/metadata/reextract`` (whole library,
+    admin): same discovery layers and the same rule-R2 merge (fill a blank, never
+    overwrite). It does not re-parse the body, re-chunk or re-embed; with
+    ``refresh_index`` (default) it rewrites this paper's index-metadata snapshot.
+
+    ``dry_run`` defaults to **true**. The paper id comes from the path; a
+    ``paper_id`` in the body is ignored.
+    """
+    paper = _load_paper(session, paper_id)
+    summary = metadata_reextract.reextract_one(
+        session,
+        paper,
+        apply=not body.dry_run,
+        refresh_index=body.refresh_index,
+        detail=True,
+    )
+    note = (
+        "试运行：没有写入。确认后带 dry_run=false 再调一次。"
+        if body.dry_run
+        else "已写入。"
+    )
+    return ReextractOut.model_validate(summary.as_api_dict(note=note))
 
 
 @router.patch("/{paper_id}/metadata", response_model=MetadataPatchOut, dependencies=[Depends(require_write)])

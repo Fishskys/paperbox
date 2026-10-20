@@ -277,6 +277,49 @@ class MetadataClearPreviewOut(BaseModel):
     tag_links: int = 0
 
 
+class ReextractIn(BaseModel):
+    """``POST /api/metadata/reextract`` body (re-extract stored papers' metadata)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: One paper only; omit to walk the whole live library.
+    paper_id: str | None = None
+    #: At most N papers (after the oldest-first order); omit for no cap.
+    limit: int | None = Field(default=None, ge=1)
+    #: Default true: report what would change and write nothing.
+    dry_run: bool = True
+    #: Rewrite the affected papers' index-metadata snapshot (default true, apply only).
+    refresh_index: bool = True
+    #: Include the per-paper list of changes in the response.
+    detail: bool = False
+
+
+class ReextractChangeOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    paper_id: str
+    field: str
+    old: Any = None
+    new: Any = None
+    action: str
+
+
+class ReextractOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    dry_run: bool
+    papers: int = 0
+    changed_papers: int = 0
+    skipped_no_file: int = 0
+    failed: int = 0
+    added_fields: dict[str, int] = Field(default_factory=dict)
+    added_identifiers: dict[str, int] = Field(default_factory=dict)
+    index_documents: int = 0
+    changes: list[ReextractChangeOut] = Field(default_factory=list)
+    errors: list[dict[str, str]] = Field(default_factory=list)
+    note: str = ""
+
+
 __all__ = [
     "ApplyEntryIn",
     "ApplyIn",
@@ -294,6 +337,8 @@ __all__ = [
     "MetadataRollbackOut",
     "PaperMetadataOut",
     "ProvenanceEntry",
+    "ReextractIn",
+    "ReextractOut",
     "ReviewOut",
     "SourceOut",
 ]

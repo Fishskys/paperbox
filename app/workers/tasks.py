@@ -32,19 +32,17 @@ from app.core.logging import get_logger
 from app.db.models import IngestionJob, Paper, PaperChunk, PaperFile, new_uuid
 from app.db.session import SessionLocal
 from app.parsing.chunking import CHUNK_MODE_SEMANTIC, chunk_markdown
-from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata, extract_pages
+from app.parsing.pdf import extract_embedded_metadata, extract_pages
 from app.search import mappings, opensearch, snapshot
 from app.services import degradation_service, embedding_service
 from app.services import ingestion_service as ingest
-from app.services import metadata_identifiers, metadata_matcher, metadata_merge
-from app.services import metadata_service, metadata_shell, metadata_sources
+from app.services import metadata_matcher
+from app.services import metadata_reextract, metadata_service, metadata_shell, metadata_sources
+from app.services.metadata_reextract import FILENAME_MATCH_CONFIDENCE
 from app.services import object_storage, paper_service, parser_service, provenance_service
 
 logger = get_logger(__name__)
 
-#: A file name is a hint about identity, weaker than the first-page heuristics
-#: (0.5) and far weaker than the PDF's own metadata (1.0).
-FILENAME_MATCH_CONFIDENCE = 0.4
 
 #: Test/observability hook, fired right after each stage commit (None in production).
 stage_commit_hook: Callable[[str, str, float], None] | None = None
@@ -974,97 +972,24 @@ def _backfill_metadata(
 ) -> None:
     """Fill the paper's metadata from the PDF, layers 1 to 3.
 
-    Three sources are recorded, in this order:
-
-    1. ``pdf_embedded`` -- the Info dictionary / XMP packet (no network, no
-       guessing). Structured, so it may correct a weak value.
-    2. ``pdf_heuristic`` -- the first-page heuristics that have always run. They
-       only fill what is still blank (rule R2).
-    3. ``filename`` -- the weakest layer, and the last to speak: a dropped-in file
-       is often named ``<arxiv_id>__<topic>.pdf``. Only the identifier is taken
-       from the name, and only while nothing else has claimed one -- a PDF with no
-       arXiv stamp whose ``/Info`` title is Word/LaTeX garbage otherwise ends up
-       with no identifier at all (7 of the 30 corpus papers on 2026-09-30, fixed by
-       hand back then).
-
-    Every value goes through the merge engine and lands in
+    The three discovery layers (``pdf_embedded`` → ``pdf_heuristic`` →
+    ``filename``) and their merge live in :mod:`app.services.metadata_reextract`,
+    so the ingest pipeline and the re-extraction batch
+    (``scripts/reextract_metadata.py`` / ``POST /api/papers/metadata/reextract``)
+    run one implementation. Every value goes through the merge engine and lands in
     ``paper_field_provenance``, so ``GET /api/papers/{id}/metadata`` can say where
     each field came from.
     """
-    embedded = extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={})
-    embedded_values = metadata_service.embedded_claim_values(embedded)
-    if embedded_values:
-        source = metadata_sources.upsert_source(
-            session,
-            source_type=metadata_sources.SOURCE_TYPE_PDF_EMBEDDED,
-            source_ref=metadata_sources.paper_embedded_ref(paper.id),
-            raw=embedded.raw or {},
-            paper_id=paper.id,
-            match_status=metadata_sources.MATCH_STATUS_MATCHED,
-            match_method="embedded",
-            match_confidence=1.0,
-            importer="pipeline",
-        )
-        metadata_merge.merge_values(
-            session,
-            paper,
-            embedded_values,
-            source_type=metadata_sources.SOURCE_TYPE_PDF_EMBEDDED,
-            source_id=source.id,
-            confidence=1.0,
-        )
-
-    heuristics = metadata_service.extract_metadata(
-        pages, url=paper.url, pdf_bytes=pdf_bytes
+    metadata_reextract.reextract_paper_metadata(
+        session,
+        paper,
+        pages=pages,
+        pdf_bytes=pdf_bytes,
+        filename=filename,
+        dry_run=False,
+        collect_changes=False,
+        importer="pipeline",
     )
-    values = metadata_service.heuristic_claim_values(heuristics)
-    if values:
-        source = metadata_sources.upsert_source(
-            session,
-            source_type=metadata_sources.SOURCE_TYPE_PDF_HEURISTIC,
-            source_ref=metadata_sources.paper_heuristic_ref(paper.id),
-            raw=dict(heuristics),
-            paper_id=paper.id,
-            match_status=metadata_sources.MATCH_STATUS_MATCHED,
-            match_method="heuristic",
-            match_confidence=0.5,
-            importer="pipeline",
-        )
-        metadata_merge.merge_values(
-            session,
-            paper,
-            values,
-            source_type=metadata_sources.SOURCE_TYPE_PDF_HEURISTIC,
-            source_id=source.id,
-            confidence=0.5,
-        )
-
-    if filename:
-        filename_values = metadata_service.filename_claim_values(filename)
-        guessed = str(filename_values.get("identifier:arxiv") or "")
-        if guessed and _may_offer_arxiv_id(session, paper, guessed):
-            source = metadata_sources.upsert_source(
-                session,
-                source_type=metadata_sources.SOURCE_TYPE_FILENAME,
-                source_ref=metadata_sources.paper_filename_ref(paper.id),
-                raw={"filename": filename, **filename_values},
-                paper_id=paper.id,
-                match_status=metadata_sources.MATCH_STATUS_MATCHED,
-                match_method="filename",
-                match_confidence=FILENAME_MATCH_CONFIDENCE,
-                importer="pipeline",
-            )
-            metadata_merge.merge_values(
-                session,
-                paper,
-                filename_values,
-                source_type=metadata_sources.SOURCE_TYPE_FILENAME,
-                source_id=source.id,
-                confidence=FILENAME_MATCH_CONFIDENCE,
-            )
-
-    metadata_identifiers.mirror_legacy_columns(session, paper)
-    session.flush()
 
 
 def _source_filename(
@@ -1082,33 +1007,6 @@ def _source_filename(
     payload = job.payload or {}
     name = payload.get("filename")
     return name if isinstance(name, str) and name.strip() else None
-
-
-def _may_offer_arxiv_id(session: Session, paper: Paper, arxiv_id: str) -> bool:
-    """Whether layer 3 may offer the arXiv id its file name carries.
-
-    Two ways the answer is no:
-
-    * the paper already knows an arXiv id (checked as a claim *and* as the mirror
-      column, since rows written before the provenance layer carry the column
-      only) -- a name must never second-guess a document or a human;
-    * the id already belongs to some other paper. The identifier table would
-      refuse the row anyway (``uq`` on scheme+value), but the provenance claim
-      would still be written, leaving a paper whose *current claim* is an id it
-      does not hold -- and rolling that claim back writes the value straight onto
-      ``papers.arxiv_id``. A name that contradicts the library's identity map is
-      a duplicate-detection signal for the matcher, not a metadata hint.
-    """
-    if provenance_service.current_claim(session, paper.id, "identifier:arxiv"):
-        return False
-    if (paper.arxiv_id or "").strip():
-        return False
-    return (
-        metadata_identifiers.find_identifier(
-            session, metadata_identifiers.SCHEME_ARXIV, arxiv_id
-        )
-        is None
-    )
 
 
 def _replace_chunks(session: Session, paper: Paper, chunks) -> list[PaperChunk]:

@@ -54,8 +54,8 @@ READS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
-#: Everything that changes state: 14 mutations and the deletion (both ``write``),
-#: plus the one bulk/whole-library reindex (``admin``, plan D8).
+#: Everything that changes state: the mutations (``write``) plus the two
+#: whole-library operations (``admin``: rebuild index, re-extract metadata).
 WRITES: dict[tuple[str, str], str] = {
     ("DELETE", "/api/papers/{paper_id}"): "write",
     ("POST", "/api/jobs/{job_id}/retry"): "write",
@@ -70,9 +70,11 @@ WRITES: dict[tuple[str, str], str] = {
     ("POST", "/api/papers/{paper_id}/reindex"): "write",
     ("PATCH", "/api/papers/{paper_id}/metadata"): "write",
     ("DELETE", "/api/papers/{paper_id}/metadata"): "write",
+    ("POST", "/api/papers/{paper_id}/metadata/reextract"): "write",
     ("POST", "/api/papers/{paper_id}/metadata/conflicts/dismiss"): "write",
     ("POST", "/api/papers/{paper_id}/metadata/rollback"): "write",
     ("POST", "/api/papers/reindex"): "admin",
+    ("POST", "/api/metadata/reextract"): "admin",
 }
 
 MODULES = (
@@ -141,7 +143,8 @@ def test_no_route_is_ungated(table) -> None:
 def test_admin_gates_the_bulk_reindex_only(table) -> None:
     """Plan D8: deletion dropped to ``write``; the whole-library rebuild kept admin."""
     assert {key for key in table if _highest(table[key]) == "admin"} == {
-        ("POST", "/api/papers/reindex")
+        ("POST", "/api/papers/reindex"),
+        ("POST", "/api/metadata/reextract"),
     }
 
 

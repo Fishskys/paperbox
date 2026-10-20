@@ -498,3 +498,20 @@ def test_pdf_embedded_still_fills_a_blank_title(db_session) -> None:
     )
     assert report.decisions[0].action == merge.ACTION_FILLED
     assert prov.read_field(paper, "title") == "Real Title"
+
+
+def test_a_case_only_doi_difference_is_not_a_change(db_session) -> None:
+    """``10.1109/ISCAS...`` and ``10.1109/iscas...`` are the same DOI -- a
+    re-extraction must see it as unchanged, not as a change that overwrites the
+    mirror column and inflates every batch run."""
+    paper = make_paper(db_session, doi="10.1109/ISCAS56072.2025.11043957")
+    seed(db_session, paper, "identifier:doi", "10.1109/ISCAS56072.2025.11043957",
+         "import_file")
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {"identifier:doi": "10.1109/iscas56072.2025.11043957"},
+        source_type="pdf_heuristic",
+        dry_run=True,
+    )
+    assert report.decisions[0].action == merge.ACTION_UNCHANGED
