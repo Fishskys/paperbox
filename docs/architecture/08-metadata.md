@@ -277,7 +277,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 1 | `paper_identifiers`，按 `doi > arxiv > ieee_article_number > issn` 顺序探测（`_MATCH_SCHEMES`） | 1.0 | `matched`，method 同名（`METHOD_*`） |
 | 2 | `paper_files.sha256` | 1.0 | `matched`，`sha256` |
 | 3 | 规范化标题 + 首作者 + 年份三者全中 | 0.8 | `matched`，`title_year_author` |
-| 4 | 仅标题命中（候选列表，最多 200 个，`_TITLE_CANDIDATE_LIMIT`） | 0.5 | **`ambiguous`**，不自动挂 |
+| 4 | 仅标题命中（候选 = 规范化标题的**每个词**都 AND 命中，再 Python 精确等值；不设 200 上限/最长词截断） | 0.5 | **`ambiguous`**，不自动挂 |
 | 5 | 文件名归一化相等 | 0.5 | `ambiguous` |
 | — | 都没有 | — | `unmatched` → 导入侧建壳 |
 

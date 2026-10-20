@@ -72,8 +72,11 @@ _MATCH_SCHEMES: tuple[tuple[str, str], ...] = (
     (ids.SCHEME_ISSN, METHOD_ISSN),
 )
 
-#: How many title candidates to pull before comparing normalized titles.
-_TITLE_CANDIDATE_LIMIT = 200
+#: Max number of ``paper_id IN (...)`` values per exact-title lookup (kept small so
+#: the follow-up ``SELECT`` never builds an oversized ``IN`` list). The candidate
+#: prefilter is already "titles containing every query word", so the ids that reach
+#: the exact comparison are few; the batching exists only as a defensive bound.
+_TITLE_ID_BATCH = 500
 
 
 @dataclass(frozen=True)
@@ -177,27 +180,47 @@ def find_by_sha256(session: Session, sha256: str | None) -> Paper | None:
 def title_candidates(session: Session, title: str | None) -> list[Paper]:
     """Live papers whose normalized title equals the incoming one.
 
-    The SQL prefilter is a single *word* of the normalized title (the longest one,
-    hence the most selective): normalized titles have no punctuation, so a
-    multi-word pattern would miss "Low-Power SRAM: Leakage Reduction". The
-    decisive comparison is the normalized equality below, done in Python.
+    The SQL prefilter requires **every** significant word of the normalized title
+    to appear in the stored title (AND of ``LIKE``s), then Python confirms exact
+    normalized equality. A single "longest word" prefilter was wrong twice over:
+    the longest word is usually a generic one (``microscaling``) that pulls in many
+    candidates, and if it exceeded 40 characters the old ``[:40]`` truncation made
+    the prefilter miss the true match entirely (a false negative that Python could
+    then never rescue). Requiring all words is both more selective (fewer
+    candidates survive) and safe (a true match contains every word).
+
+    ``normalize_text`` keeps only ``[0-9a-z\\u4e00-\\u9fff]``, so a word never
+    contains ``%``/``_`` -- no LIKE-escaping is needed. Only ``(id, title)`` is
+    selected (the exact comparison needs nothing else), and there is no ``LIMIT``
+    here: the row set is already "titles that contain every query word", and the
+    decisive comparison below (normalized equality) is what actually narrows it --
+    a pre-comparison LIMIT could drop the true match once the corpus grew.
     """
     normalized = paper_service.normalize_text(title)
     if not normalized:
         return []
     words = [word for word in normalized.split() if len(word) >= 3] or normalized.split()
-    fragment = max(words, key=len)[:40]
-    statement = (
-        select(Paper)
-        .where(Paper.deleted_at.is_(None), func.lower(Paper.title).like(f"%{fragment}%"))
-        # Deterministic order (review 2026-10-05, P2-15): the LIMIT used to cut
-        # an arbitrary row set, so the true match could fall outside it. Newest
-        # first -- a re-uploaded PDF usually matches a recently created paper.
-        .order_by(Paper.created_at.desc())
-        .limit(_TITLE_CANDIDATE_LIMIT)
-    )
-    rows = session.execute(statement).scalars().all()
-    return [paper for paper in rows if paper_service.normalize_text(paper.title) == normalized]
+    statement = select(Paper.id, Paper.title).where(Paper.deleted_at.is_(None))
+    for word in words:
+        statement = statement.where(func.lower(Paper.title).like(f"%{word}%"))
+    # Deterministic order for stable tests; the exact filter below decides the set.
+    statement = statement.order_by(Paper.created_at.desc())
+    rows = session.execute(statement).all()
+    matching_ids = [
+        str(row[0])
+        for row in rows
+        if paper_service.normalize_text(row[1]) == normalized
+    ]
+    if not matching_ids:
+        return []
+    by_id: dict[str, Paper] = {}
+    for start in range(0, len(matching_ids), _TITLE_ID_BATCH):
+        batch = matching_ids[start : start + _TITLE_ID_BATCH]
+        for paper in session.execute(
+            select(Paper).where(Paper.id.in_(batch))
+        ).scalars():
+            by_id[paper.id] = paper
+    return [by_id[paper_id] for paper_id in matching_ids if paper_id in by_id]
 
 
 def find_by_title(

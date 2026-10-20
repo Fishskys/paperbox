@@ -283,3 +283,62 @@ def test_soft_deleted_papers_are_never_candidates(db_session) -> None:
     )
 
     assert matcher.title_candidates(db_session, "Low Power SRAM Leakage Reduction") == []
+
+# --------------------------------------------------------------------------- #
+# title_candidates: all-words AND prefilter (no longest-word, no 40-char truncation)
+# --------------------------------------------------------------------------- #
+def test_prefilter_uses_every_word_not_just_the_longest(db_session) -> None:
+    """A generic longest word (``microscaling``) shared by many titles must not be
+    the only prefilter: the *other* words decide, and only the exact title matches.
+    """
+    target = make_paper(
+        db_session, title="MX-SAFE: Versatile Microscaling Inference Accelerator"
+    )
+    # Same long word, different rest -- must not be returned.
+    make_paper(db_session, title="A Totally Different Microscaling Datapath Study")
+    make_paper(db_session, title="Microscaling Formats for Edge Devices")
+
+    found = matcher.title_candidates(
+        db_session, "mx-safe versatile microscaling inference accelerator"
+    )
+
+    assert [item.id for item in found] == [target.id]
+
+
+def test_a_word_longer_than_40_chars_does_not_break_the_match(db_session) -> None:
+    """The old ``max(words)[:40]`` truncated a >40-char word and could miss the real
+    match entirely. The full word must be used."""
+    long_word = "pneumonoultramicroscopicsilicovolcanoconiosis"  # 45 chars
+    assert len(long_word) > 40
+    target = make_paper(db_session, title=f"Study of {long_word} in Alloys")
+
+    found = matcher.title_candidates(db_session, f"study of {long_word} in alloys")
+
+    assert [item.id for item in found] == [target.id]
+
+
+def test_the_exact_match_is_found_even_past_the_old_200_candidate_cap(db_session) -> None:
+    """Many titles share one query word; the single exact match must still be found.
+
+    The old code ordered newest-first and ``LIMIT 200`` *before* the Python
+    comparison, so with >200 distractors the true (older) match fell off the list.
+    """
+    # 250 distractors that share the word "search" but differ otherwise.
+    for index in range(250):
+        make_paper(db_session, title=f"Search Distractor Number {index} Study")
+    # The real match, created first (oldest) so a newest-first LIMIT would drop it.
+    target = make_paper(db_session, title="Search For The Exact Title")
+
+    found = matcher.title_candidates(db_session, "search for the exact title")
+
+    assert [item.id for item in found] == [target.id]
+
+
+def test_short_single_word_title_matches_exactly(db_session) -> None:
+    exact = make_paper(db_session, title="BERT")
+    make_paper(db_session, title="RoBERTa Pretraining")
+    make_paper(db_session, title="ALBERT Lite")
+
+    found = matcher.title_candidates(db_session, "bert")
+
+    assert [item.id for item in found] == [exact.id]
