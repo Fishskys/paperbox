@@ -94,12 +94,18 @@ def list_papers(
         description="journal | conference | preprint | early_access | standard (repeatable)",
     ),
     tag: list[str] | None = Query(default=None, description="tag name, any kind (repeatable)"),
+    author: list[str] | None = Query(
+        default=None,
+        description="author name, matched on the normalized name (repeatable; ANDed)",
+    ),
     session: Session = Depends(get_db),
 ) -> PaperListOut:
-    """List papers newest first (for browsing UIs and bulk maintenance).
+    """List papers (for browsing UIs and bulk maintenance).
 
-    The metadata filters read PostgreSQL directly, so unlike the search filters
-    they see a metadata change immediately (no reindex needed).
+    With a title ``q`` the result is ordered by relevance (title full-text rank);
+    without one it is newest-first. The metadata filters read PostgreSQL directly,
+    so unlike the search filters they see a metadata change immediately (no
+    reindex needed).
     """
     rows, total = papers.list_papers(
         session,
@@ -112,6 +118,7 @@ def list_papers(
         year_to=year_to,
         paper_type=paper_type,
         tag=tag,
+        author=author,
     )
     return PaperListOut(
         total=total,

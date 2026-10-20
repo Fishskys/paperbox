@@ -280,3 +280,93 @@ def test_serialize_paper_carries_the_citation_fields(factory) -> None:  # noqa: 
     assert payload["issue"] is None
     assert payload["pages"] == "412-419"
     assert payload["publication_date"] is None
+
+# --------------------------------------------------------------------------- #
+# author filter (AND over normalized_name)
+# --------------------------------------------------------------------------- #
+def add_author(session_factory, paper_id: str, *names: str) -> None:
+    """Attach authors (in order) to a paper, creating the Author rows."""
+    from app.db.models import Author, PaperAuthor
+
+    session = session_factory()
+    try:
+        for order, name in enumerate(names):
+            key = paper_service.normalize_text(name) or name.casefold()
+            author = session.query(Author).filter(Author.normalized_name == key).one_or_none()
+            if author is None:
+                author = Author(id=new_uuid(), name=name, normalized_name=key)
+                session.add(author)
+                session.flush()
+            session.add(
+                PaperAuthor(
+                    id=new_uuid(), paper_id=paper_id, author_id=author.id, author_order=order
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_author_filter_matches_one_author(factory) -> None:  # noqa: F811
+    a = add_paper(factory, title="Paper A")
+    b = add_paper(factory, title="Paper B")
+    add_author(factory, a, "Alice Smith", "Bob Jones")
+    add_author(factory, b, "Carol White")
+
+    assert listed_ids(factory, author=["Alice Smith"]) == [a]
+    assert set(listed_ids(factory, author=["alice  SMITH"])) == {a}  # normalized/case-insensitive
+
+
+def test_author_filter_ands_multiple_names(factory) -> None:  # noqa: F811
+    both = add_paper(factory, title="Joint work")
+    only_alice = add_paper(factory, title="Solo")
+    add_author(factory, both, "Alice Smith", "Bob Jones")
+    add_author(factory, only_alice, "Alice Smith", "Zoe Kim")
+
+    # Both names must be present -> only the joint paper.
+    assert listed_ids(factory, author=["Alice Smith", "Bob Jones"]) == [both]
+
+
+def test_author_filter_combines_with_title_query(factory) -> None:  # noqa: F811
+    hit = add_paper(factory, title="Attention Is All You Need")
+    other = add_paper(factory, title="Attention Is All You Need")
+    add_author(factory, hit, "Ashish Vaswani")
+    add_author(factory, other, "Someone Else")
+
+    assert listed_ids(factory, query="attention need", author=["Ashish Vaswani"]) == [hit]
+
+
+# --------------------------------------------------------------------------- #
+# relevance ordering (title ts_rank_cd when a query is present)
+# --------------------------------------------------------------------------- #
+def test_title_query_orders_by_relevance_not_recency(factory) -> None:  # noqa: F811
+    """A title that matches the query in its rankable terms comes first, even if
+    it is older than a newer, weaker match."""
+    import time
+
+    weak = add_paper(factory, title="Deep Learning for Search Systems")  # newer, partial
+    time.sleep(0.01)
+    strong = add_paper(factory, title="Search Search Search")  # older, dense in 'search'
+
+    ids = listed_ids(factory, query="search")
+    assert ids[0] == strong, ids
+    assert set(ids) == {weak, strong}
+
+
+def test_no_query_keeps_newest_first(factory) -> None:  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+
+    older = add_paper(factory, title="Older Paper")
+    newer = add_paper(factory, title="Newer Paper")
+    # SQLite's created_at has only second resolution; set distinct values so the
+    # ordering assertion is meaningful (PostgreSQL stores microseconds already).
+    session = factory()
+    try:
+        session.query(Paper).filter(Paper.id == older).update(
+            {Paper.created_at: datetime.now(timezone.utc) - timedelta(hours=1)}
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    assert listed_ids(factory) == [newer, older]

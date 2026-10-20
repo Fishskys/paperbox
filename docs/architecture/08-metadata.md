@@ -341,10 +341,11 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 - **索引快照**：`app/search/snapshot.py::paper_metadata_snapshot`（`Checker.check()`）把当前值写成 chunk 文档上的可过滤字段（`venue`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers`/四个 tag kind），INDEXING 阶段由
  `_index_rows`（`tasks.py`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`（重算向量，≈1 chunk/s），要么 `uv run python scripts/refresh_index_metadata.py`（只改快照、秒级；真机 2883 文档全部更新、0 失败）。
 - **读接口**：`PaperOut`直接输出当前值列 `volume/issue/pages/publication_date/
- paper_type/venue_edition_id/venue_year`；`GET /api/papers` 支持 `venue`/`year_from`/`year_to`/`paper_type`/`tag`
- 过滤（**读 PG 当前值**，与检索读快照是两条路）。
+ paper_type/venue_edition_id/venue_year`；`GET /api/papers` 支持 `venue`/`year_from`/`year_to`/`paper_type`/`tag`/`author`
+ 过滤（**读 PG 当前值**，与检索读快照是两条路）。`author` 按 `authors.normalized_name` 匹配、多人 AND；
+ 有 `q` 时结果按标题词频相关度排序，无 `q` 时最新优先。
 - **一致性**：`GET /api/consistency` 核对三端（元数据本身不参与，它只在 PG）。
-- **测试落点**：`tests/test_index_snapshot.py`（9）、`tests/test_refresh_index_metadata.py`（13）、`tests/test_paper_list_filters.py`（10）、`tests/test_consistency.py`（22）、`tests/test_author_links.py`（5）。
+- **测试落点**：`tests/test_index_snapshot.py`（9）、`tests/test_refresh_index_metadata.py`（13）、`tests/test_paper_list_filters.py`（17）、`tests/test_consistency.py`（22）、`tests/test_author_links.py`（5）。
 
 ## 5. 配置项
 

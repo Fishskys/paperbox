@@ -418,11 +418,12 @@ def list_papers(
     year_to: int | None = None,
     paper_type: Sequence[str] | None = None,
     tag: Sequence[str] | None = None,
+    author: Sequence[str] | None = None,
 ) -> tuple[list[Paper], int]:
-    """Return ``(papers, total)`` newest first, soft-deleted rows excluded.
+    """Return ``(papers, total)`` for the browsing/search endpoint.
 
     ``status`` filters on the paper status (PENDING/PROCESSING/INDEXED/FAILED)
-    and ``query`` is a case-insensitive substring match on the title - both are
+    and ``query`` is a word-by-word, case-insensitive title match - both are
     conveniences for browsing UIs.
 
     The metadata filters mirror what ``POST /api/search`` can filter on, but read
@@ -438,6 +439,12 @@ def list_papers(
         ``journal`` / ``conference`` / ``preprint`` / ``early_access`` / ``standard``.
     ``tag``
         Tag names of any kind, matched through ``papers_tags``.
+    ``author``
+        Author names, matched on ``authors.normalized_name`` (one canonical row
+        per spelling). Several names are ANDed: a paper must have *every* one.
+
+    Ordering is **relevance to the query** when a title query is given (a
+    ``ts_rank_cd`` full-text score on the title), and newest-first otherwise.
     """
     from sqlalchemy import func
 
@@ -493,12 +500,50 @@ def list_papers(
                 .where(PaperTag.normalized_name.in_(tag_keys))
             )
         )
+    author_keys = [
+        normalize_text(name) or str(name).strip().casefold()
+        for name in (author or [])
+        if name and str(name).strip()
+    ]
+    if author_keys:
+        # AND semantics: one EXISTS subquery per name, so a paper must carry every
+        # requested author (not merely one of them). Matching goes through
+        # ``authors.normalized_name`` -- the same canonical form ``get_or_create_author``
+        # writes -- so spelling/case variants of a name hit the same row.
+        for author_key in author_keys:
+            statement = statement.where(
+                Paper.id.in_(
+                    select(PaperAuthor.paper_id)
+                    .join(Author, PaperAuthor.author_id == Author.id)
+                    .where(Author.normalized_name == author_key)
+                )
+            )
     total = session.execute(
         select(func.count()).select_from(statement.order_by(None).subquery())
     ).scalar_one()
+    # Relevance ordering when a title query is present: a portable term-frequency
+    # score -- how many times the query words occur in the title. Both PostgreSQL
+    # and SQLite support length()/replace()/lower(), so the ordering is the same
+    # everywhere (production PostgreSQL and the in-memory SQLite tests). The ILIKE
+    # word-filters above already gated the rows (AND of substrings); this only
+    # orders them, so a title dense in the query terms ranks first. Ties fall back
+    # to newest-first, with id as a final deterministic tiebreaker (created_at has
+    # only second resolution on SQLite, so it alone is not stable).
+    if query and query.strip():
+        title_l = func.lower(func.coalesce(Paper.title, ""))
+        freq = None
+        for word in words:
+            wl = word.lower()
+            occurrences = func.length(title_l) - func.length(func.replace(title_l, wl, ""))
+            # divide by the word length to turn matched-characters into a count
+            term = occurrences * 1.0 / max(1, len(wl))
+            freq = term if freq is None else freq + term
+        order_clause = (freq.desc(), Paper.created_at.desc(), Paper.id.asc())
+    else:
+        order_clause = (Paper.created_at.desc(), Paper.id.asc())
     rows = (
         session.execute(
-            statement.order_by(Paper.created_at.desc())
+            statement.order_by(*order_clause)
             .limit(max(1, min(limit, 200)))
             .offset(max(0, offset))
         )
