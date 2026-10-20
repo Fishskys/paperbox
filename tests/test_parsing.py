@@ -312,3 +312,43 @@ def test_strip_control_chars_is_the_shared_policy() -> None:
     # idempotent, like every other normalization in the dialect
     once = strip_control_chars(dirty)
     assert strip_control_chars(once) == once
+
+
+# --------------------------------------------------------------------------- #
+# detect_doi: first two pages, page 1 first
+# --------------------------------------------------------------------------- #
+def test_detect_doi_reads_the_first_page() -> None:
+    from app.services.metadata_service import detect_doi
+
+    pages = [page(1, "A title", "doi: 10.1109/ABC.2026.1234567"), page(2, "body")]
+
+    assert detect_doi(pages) == "10.1109/ABC.2026.1234567"
+
+
+def test_detect_doi_falls_back_to_the_second_page() -> None:
+    """A DOI only on page 2 (a journal footer) is still found."""
+    from app.services.metadata_service import detect_doi
+
+    pages = [page(1, "A title with no identifier"), page(2, "footer 10.1109/XYZ.2026.7654321")]
+
+    assert detect_doi(pages) == "10.1109/XYZ.2026.7654321"
+
+
+def test_detect_doi_page_one_wins_over_page_two() -> None:
+    """When both carry a token, page 1 is preferred (it sits next to the title)."""
+    from app.services.metadata_service import detect_doi
+
+    pages = [
+        page(1, "title 10.1109/FIRST.2026.1"),
+        page(2, "footer 10.1109/SECOND.2026.2"),
+    ]
+
+    assert detect_doi(pages) == "10.1109/FIRST.2026.1"
+
+
+def test_detect_doi_stops_after_two_pages() -> None:
+    from app.services.metadata_service import detect_doi
+
+    pages = [page(1, "nothing"), page(2, "still nothing"), page(3, "10.1109/LATE.2026.9")]
+
+    assert detect_doi(pages) is None

@@ -115,7 +115,7 @@
 | `detect_authors` / `_names_from_line` / `_plausible_author` | 标题行之后的作者块；无分隔符时按两词一组切分 |
 | `detect_abstract` | `Abstract` 起，遇 `_SECTION_MARKER`/空行结束；扫描前 2 页 |
 | `detect_year` / `_year_from_arxiv_id` | arXiv 优先；否则首页 2 页最高频年份（同频取大年份） |
-| `detect_doi` | 首页首个 DOI 形态 token，去尾 `.;` |
+| `detect_doi` | 前 2 页内首个 DOI 形态 token（第 1 页优先），去尾 `.;` |
 | `heuristic_claim_values` / `embedded_claim_values` | 转成合并引擎吃的 `{provenance field: value}` |
 | `_backfill_metadata` | 层 1 → 层 2 顺序写 claim |
 | `_placeholder_title` / `_reset_placeholder_title` / `_restore_placeholder_title` | 文件名占位标题的清除与兜底 |
