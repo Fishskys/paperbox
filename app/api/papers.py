@@ -31,6 +31,8 @@ from app.schemas.paper import (
 from app.schemas.metadata import (
     ConflictDismissIn,
     ConflictDismissOut,
+    MetadataClearOut,
+    MetadataClearPreviewOut,
     MetadataPatch,
     MetadataPatchOut,
     MetadataRollbackIn,
@@ -42,6 +44,7 @@ from app.search.opensearch import SearchIndexError
 from app.services import chunk_service
 from app.services import degradation_service
 from app.services import ingestion_service as ingest
+from app.services import metadata_clear
 from app.services import metadata_manual
 from app.services import object_storage
 from app.services import paper_service as papers
@@ -261,6 +264,36 @@ def get_paper_metadata(
     """
     paper = _load_paper(session, paper_id)
     return PaperMetadataOut.model_validate(metadata_manual.metadata_view(session, paper))
+
+
+@router.delete(
+    "/{paper_id}/metadata",
+    response_model=MetadataClearOut,
+    dependencies=[Depends(require_write)],
+)
+def clear_paper_metadata(
+    paper_id: str,
+    dry_run: bool = False,
+    session: Session = Depends(get_db),
+) -> MetadataClearOut | MetadataClearPreviewOut:
+    """Clear one paper's metadata, keeping the paper and its content.
+
+    Removes every field claim (``paper_field_provenance``), every source record
+    (``paper_sources``), every identifier (``paper_identifiers`` -- so the DOI is
+    released and the fingerprint falls back to title/content), the author and tag
+    links, and blanks the metadata columns on ``papers``. Chunks, index documents
+    and the stored PDF are untouched: this is "forget the bibliography, keep the
+    document", not a delete. ``dry_run=true`` only reports what would go.
+
+    ``title`` is NOT NULL, so it becomes the empty string until metadata is
+    imported again.
+    """
+    paper = _load_paper(session, paper_id)
+    if dry_run:
+        preview = metadata_clear.preview_clear(session, paper)
+        return MetadataClearPreviewOut.model_validate(preview.__dict__)
+    outcome = metadata_clear.clear_metadata(session, paper)
+    return MetadataClearOut.model_validate(outcome.__dict__)
 
 
 @router.patch("/{paper_id}/metadata", response_model=MetadataPatchOut, dependencies=[Depends(require_write)])

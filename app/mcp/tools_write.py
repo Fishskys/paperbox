@@ -36,6 +36,7 @@ from app.mcp.models import (
     Envelope,
     ImportPreviewData,
     JobRefData,
+    MetadataClearData,
     MetadataPatchData,
     ReindexPreviewData,
     ToolMeta,
@@ -45,6 +46,7 @@ from app.services import (
     chunk_service,
     ingestion_service,
     local_scan,
+    metadata_clear,
     metadata_manual,
     net_guard,
     paper_service,
@@ -536,6 +538,76 @@ def register(server: MCPServer) -> None:
             return Envelope[MetadataPatchData](
                 data=data,
                 meta=_meta("paper_update_metadata", took_ms),
+                warnings=warnings,
+                citations=[],
+            )
+
+        @server.tool(
+            name="paper_clear_metadata",
+            title="Clear one paper's metadata",
+            description=(
+                "Forget a paper's bibliography while keeping the paper and its full "
+                "text: drops every field claim, source record, identifier (DOI/arXiv), "
+                "author and tag link, and blanks the metadata columns. Chunks, index "
+                "text and the stored PDF are untouched, so this is NOT a delete -- "
+                "re-import the metadata afterwards to refill it. The title becomes "
+                "empty (it is a required field). It defaults to dry_run=true and only "
+                "reports what would go; pass dry_run=false to actually clear. "
+                'Example: paper_clear_metadata(paper_id="...", dry_run=true)'
+            ),
+            meta={"toolset": settings.mcp_toolset},
+        )
+        async def paper_clear_metadata(
+            paper_id: str, dry_run: bool = True
+        ) -> Envelope[MetadataClearData]:
+            started = time.perf_counter()
+            require(ALLOW_METADATA, "paper_clear_metadata")
+            # Clearing rewrites the record, not the corpus: same tier as an edit.
+            require_role("paper_clear_metadata", ROLE_WRITE)
+            with _Session() as session:
+                paper = _load_live_paper(session, paper_id)
+                if dry_run:
+                    preview = metadata_clear.preview_clear(session, paper)
+                    data = MetadataClearData(
+                        paper_id=paper_id,
+                        title=preview.title,
+                        provenance_rows=preview.provenance_rows,
+                        source_rows=preview.source_rows,
+                        identifier_rows=preview.identifier_rows,
+                        author_links=preview.author_links,
+                        tag_links=preview.tag_links,
+                    )
+                else:
+                    outcome = metadata_clear.clear_metadata(session, paper)
+                    data = MetadataClearData(
+                        paper_id=paper_id,
+                        title="",
+                        cleared=True,
+                        provenance_rows=outcome.provenance_rows,
+                        source_rows=outcome.source_rows,
+                        identifier_rows=outcome.identifier_rows,
+                        author_links=outcome.author_links,
+                        tag_links=outcome.tag_links,
+                        index_documents=outcome.index_documents,
+                        fingerprint=outcome.fingerprint,
+                        cleared_fields=outcome.cleared_fields,
+                    )
+
+            took_ms = int((time.perf_counter() - started) * 1000)
+            warnings: list[str] = []
+            if dry_run:
+                warnings.append("dry run: nothing was cleared")
+            log_call(
+                tool="paper_clear_metadata",
+                agent=auth.agent_name(),
+                arguments={"paper_id": paper_id, "dry_run": dry_run},
+                outcome="ok",
+                affected={"cleared": data.cleared, "sources": data.source_rows},
+                took_ms=took_ms,
+            )
+            return Envelope[MetadataClearData](
+                data=data,
+                meta=_meta("paper_clear_metadata", took_ms),
                 warnings=warnings,
                 citations=[],
             )

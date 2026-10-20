@@ -247,6 +247,36 @@ class ApplyOut(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MetadataClearOut(BaseModel):
+    """Result of ``DELETE /api/papers/{id}/metadata``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    paper_id: str
+    provenance_rows: int = 0
+    source_rows: int = 0
+    identifier_rows: int = 0
+    author_links: int = 0
+    tag_links: int = 0
+    fingerprint: str = ""
+    cleared_fields: list[str] = Field(default_factory=list)
+    index_documents: int = 0
+
+
+class MetadataClearPreviewOut(BaseModel):
+    """What a clear would remove (``dry_run=true``)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    paper_id: str
+    title: str = ""
+    provenance_rows: int = 0
+    source_rows: int = 0
+    identifier_rows: int = 0
+    author_links: int = 0
+    tag_links: int = 0
+
+
 __all__ = [
     "ApplyEntryIn",
     "ApplyIn",
@@ -256,6 +286,8 @@ __all__ = [
     "ConflictOut",
     "IdentifierOut",
     "ImportReportOut",
+    "MetadataClearOut",
+    "MetadataClearPreviewOut",
     "MetadataPatch",
     "MetadataPatchOut",
     "MetadataRollbackIn",

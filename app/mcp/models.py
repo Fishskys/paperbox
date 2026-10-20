@@ -289,3 +289,23 @@ class MetadataPatchData(BaseModel):
     fingerprint: str | None = None
     #: Where to undo it (contract section 5.2: rollback stays on REST).
     rollback: str | None = None
+
+
+class MetadataClearData(BaseModel):
+    """``paper_clear_metadata``: what was (or would be) removed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str
+    title: str = ""
+    #: ``False`` on a dry run; ``True`` once the metadata was actually cleared.
+    cleared: bool = False
+    provenance_rows: int = 0
+    source_rows: int = 0
+    identifier_rows: int = 0
+    author_links: int = 0
+    tag_links: int = 0
+    #: Index documents whose ``title`` was blanked (0 for an unindexed paper).
+    index_documents: int = 0
+    fingerprint: str = ""
+    cleared_fields: list[str] = Field(default_factory=list)

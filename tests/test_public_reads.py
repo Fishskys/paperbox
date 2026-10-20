@@ -69,6 +69,7 @@ WRITES: dict[tuple[str, str], str] = {
     ("POST", "/api/papers/ingest/files"): "write",
     ("POST", "/api/papers/{paper_id}/reindex"): "write",
     ("PATCH", "/api/papers/{paper_id}/metadata"): "write",
+    ("DELETE", "/api/papers/{paper_id}/metadata"): "write",
     ("POST", "/api/papers/{paper_id}/metadata/conflicts/dismiss"): "write",
     ("POST", "/api/papers/{paper_id}/metadata/rollback"): "write",
     ("POST", "/api/papers/reindex"): "admin",

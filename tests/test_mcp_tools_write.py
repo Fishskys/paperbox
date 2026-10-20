@@ -35,7 +35,13 @@ INITIALIZE_PARAMS = {
     "capabilities": {},
     "clientInfo": {"name": "pytest", "version": "0"},
 }
-WRITE_TOOLS = {"paper_import", "paper_reindex", "paper_delete", "paper_update_metadata"}
+WRITE_TOOLS = {
+    "paper_import",
+    "paper_reindex",
+    "paper_delete",
+    "paper_update_metadata",
+    "paper_clear_metadata",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -192,7 +198,11 @@ def test_each_switch_adds_exactly_its_own_tool() -> None:
         assert WRITE_TOOLS & listing(client) == {"paper_import", "paper_reindex"}
 
     with mounted(write=True, metadata=True) as client:
-        assert WRITE_TOOLS & listing(client) == {"paper_import", "paper_update_metadata"}
+        assert WRITE_TOOLS & listing(client) == {
+            "paper_import",
+            "paper_update_metadata",
+            "paper_clear_metadata",
+        }
 
     with mounted(write=True, delete=True, reindex=True, metadata=True) as client:
         assert WRITE_TOOLS & listing(client) == WRITE_TOOLS
@@ -464,3 +474,38 @@ def test_metadata_requires_at_least_one_field(mcp_session) -> None:
             client, "paper_update_metadata", {"paper_id": mcp_session["paper_id"], "fields": {}}
         )
     assert error["error"]["code"] == "INVALID_ARGUMENT"
+
+
+# --------------------------------------------------------------------------- #
+# paper_clear_metadata
+# --------------------------------------------------------------------------- #
+def test_clear_metadata_defaults_to_dry_run(mcp_session, monkeypatch) -> None:
+    monkeypatch.setattr(tools_write.metadata_clear, "clear_metadata", _boom)
+    with mounted(write=True, metadata=True) as client:
+        envelope = call(
+            client,
+            "paper_clear_metadata",
+            {"paper_id": mcp_session["paper_id"]},
+        )
+    data = envelope["data"]
+    assert data["cleared"] is False
+    assert data["title"] == "Original title"
+    assert any("dry run" in item for item in envelope["warnings"])
+
+
+def test_clear_metadata_really_clears(mcp_session) -> None:
+    with mounted(write=True, metadata=True) as client:
+        envelope = call(
+            client,
+            "paper_clear_metadata",
+            {"paper_id": mcp_session["paper_id"], "dry_run": False},
+        )
+    data = envelope["data"]
+    assert data["cleared"] is True
+    assert "title" in data["cleared_fields"]
+    assert data["fingerprint"]
+
+
+def test_clear_metadata_is_gated_by_the_metadata_switch() -> None:
+    with mounted(write=True) as client:
+        assert "paper_clear_metadata" not in listing(client)
