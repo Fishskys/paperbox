@@ -415,6 +415,40 @@ def _first_match(pattern: re.Pattern[str], *texts: str | None) -> str | None:
     return None
 
 
+#: URL/``doi:`` prefixes stripped from a segment before it is tested for "is
+#: this whole segment a DOI?" -- IEEE writes the DOI bare, but the arXiv style
+#: is ``https://doi.org/10.48550/...``.
+_DOI_VALUE_PREFIX = re.compile(
+    r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.IGNORECASE
+)
+
+
+def _doi_from_segments(pattern: re.Pattern[str], *texts: str | None) -> str | None:
+    """A DOI that is the **whole value of one ``;``-separated segment**.
+
+    This is how IEEE stamps its identity: ``/Subject`` (mirrored into the XMP
+    ``description``) is a ``;``-joined list like
+    ``IEEE Journal of Solid-State Circuits;2026;61;9;10.1109/JSSC.2026.3693653``,
+    where the DOI is the last segment. Requiring the segment to be *entirely* the
+    DOI keeps the 2026-10-05 guarantee (review P1-10): a DOI merely cited inside
+    prose -- an abstract or reference sentence -- never lines up as a whole
+    segment, so it is not claimed. The last matching segment wins, since a DOI is
+    conventionally written last.
+    """
+    for text in texts:
+        if not text:
+            continue
+        found: str | None = None
+        for segment in re.split(r"[;]", text):
+            candidate = _DOI_VALUE_PREFIX.sub("", segment.strip()).rstrip(".,;")
+            match = pattern.fullmatch(candidate)
+            if match is not None:
+                found = candidate
+        if found is not None:
+            return found
+    return None
+
+
 def _year_from_date(value: str | None) -> int | None:
     if not value:
         return None
@@ -564,6 +598,11 @@ def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
         # corpus evidence (30 papers, 2026-10-06): no real stamp ever appeared
         # as free text (arXiv stamps live on the page text, which the heuristic
         # layer reads). ISSN scanning of free text stays (journal-level harm).
+        #
+        # IEEE stamps its DOI as the *last segment* of a ``;``-joined /Subject
+        # (also mirrored to the XMP description): ``<venue>;2026;61;9;<doi>``.
+        # The whole-segment check below reads exactly that, and still refuses a
+        # DOI that only appears inside a sentence (it would not fill a segment).
         doi=_first_match(
             _DOI_IN_TEXT,
             xmp_text("doi"),
@@ -571,6 +610,9 @@ def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
         )
         or _declared_match(
             _DOI_IN_TEXT, *(str(v) for v in list(info.values()) + list(xmp_fields.values()) if v)
+        )
+        or _doi_from_segments(
+            _DOI_IN_TEXT, _text(info.get("/Subject")), xmp_text("description")
         ),
         arxiv_id=_strip_version(
             _first_match(_ARXIV_IN_TEXT, xmp_text("arxiv_id"))

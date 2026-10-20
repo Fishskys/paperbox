@@ -290,3 +290,57 @@ def test_ieee_article_id_becomes_a_claim() -> None:
     values = embedded_claim_values(extract_embedded_metadata(data))
 
     assert values["identifier:ieee_article_number"] == "11617481"
+
+
+# --------------------------------------------------------------------------- #
+# DOI from the ``;``-joined /Subject (IEEE stamp)
+# --------------------------------------------------------------------------- #
+def test_doi_from_the_last_subject_segment_is_read() -> None:
+    """IEEE writes ``<venue>;year;vol;issue;<doi>`` into /Subject. The DOI is the
+    last whole segment and must be claimed."""
+    data = build_pdf(
+        {
+            "/Title": "A journal article",
+            "/Subject": "IEEE Journal of Solid-State Circuits;2026;61;9;10.1109/JSSC.2026.3693653",
+        }
+    )
+
+    metadata = extract_embedded_metadata(data)
+
+    assert metadata.doi == "10.1109/JSSC.2026.3693653"
+
+
+def test_subject_doi_with_empty_segments_is_read() -> None:
+    """The IEEE conference form leaves volume/issue blank: ``venue;2026; ; ;<doi>``."""
+    data = build_pdf(
+        {
+            "/Title": "A conference paper",
+            "/Subject": "2025 IEEE ISCAS;2025; ; ;10.1109/ISCAS56072.2025.11043957",
+        }
+    )
+
+    assert extract_embedded_metadata(data).doi == "10.1109/ISCAS56072.2025.11043957"
+
+
+def test_a_doi_inside_a_subject_sentence_is_not_claimed() -> None:
+    """A DOI merely cited in prose must NOT be claimed (it does not fill a segment).
+
+    This is the 2026-10-05 (P1-10) guarantee: reference/abstract DOIs are never
+    mistaken for this paper's identity.
+    """
+    data = build_pdf(
+        {
+            "/Title": "T",
+            "/Subject": "A study building on prior work (see 10.1109/OTHER.2019.9999).",
+        }
+    )
+
+    assert extract_embedded_metadata(data).doi is None
+
+
+def test_subject_segment_doi_accepts_a_url_prefix() -> None:
+    data = build_pdf(
+        {"/Title": "T", "/Subject": "Some venue;2026;1;1;https://doi.org/10.1145/3586183.3606763"}
+    )
+
+    assert extract_embedded_metadata(data).doi == "10.1145/3586183.3606763"
