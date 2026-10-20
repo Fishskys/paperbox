@@ -20,9 +20,11 @@ What is compared, per paper:
   straddle two models, and a model switch that only reached part of the
   library shows up in the census.
 
-A store that cannot be reached is reported in ``errors`` and that side is marked
-missing rather than raising: an unreachable MinIO must not make the endpoint
-useless for the other two. This mirrors the rule ``/health`` follows.
+A store that cannot be reached is reported in ``errors`` and that side is treated
+as *unknown* rather than raising: an unreachable MinIO must not make the endpoint
+useless for the other two, and a failed OpenSearch read must not be mistaken for an
+empty index (which would falsely report every paper as missing from it). This
+mirrors the rule ``/health`` follows.
 """
 
 from __future__ import annotations
@@ -340,34 +342,100 @@ def _load_objects(storage: Any) -> tuple[dict[str, list[str]], int]:
     return per_paper, staging
 
 
+def _aggregatable_field(client: Any, index: str, field: str) -> str | None:
+    """The field name usable in a ``terms`` aggregation, or ``None``.
+
+    A ``text`` field cannot be aggregated (OpenSearch answers 400: "Text fields
+    are not optimised for ... aggregations ... use a keyword field instead"). The
+    mapping is the only authority for which form to use, and it differs by index
+    generation: the current mapping declares these fields as plain ``keyword``,
+    while an older index (dynamic mapping from before the field was declared) may
+    hold them as ``text`` with an auto ``.keyword`` sub-field. Aggregating a bare
+    ``keyword`` field *or* a ``field.keyword`` sub-field both work; aggregating a
+    bare ``text`` field does not -- and a ``.keyword`` sub-field that is not there
+    would silently aggregate to zero buckets. So read the mapping and pick:
+
+    * ``keyword`` -> the bare field,
+    * ``text`` with a ``keyword`` sub-field -> ``field.keyword``,
+    * anything else -> ``None`` (skip the sub-aggregation instead of 400-ing the
+      whole report -- a wrong-but-quiet zero would be worse than no census).
+
+    Any failure to read the mapping (an old client without ``indices.get_mapping``
+    in a unit test, a transient error) falls back to the bare field: that is the
+    pre-existing behaviour, so nothing that worked before breaks.
+    """
+    try:
+        mapping = client.indices.get_mapping(index=index)
+    except Exception:  # noqa: BLE001 - mapping unreadable: keep the old bare field
+        logger.debug("consistency: could not read mapping for %s", index, exc_info=True)
+        return field
+    merged: dict[str, Any] = {}
+    if isinstance(mapping, Mapping):
+        for body in mapping.values():
+            if not isinstance(body, Mapping):
+                continue
+            props = body.get("mappings", {})
+            if isinstance(props, Mapping):
+                merged.update(props.get("properties") or {})
+    spec = merged.get(field)
+    if not isinstance(spec, Mapping):
+        return None
+    kind = spec.get("type")
+    if kind == "keyword":
+        return field
+    fields = spec.get("fields")
+    if isinstance(fields, Mapping):
+        sub = fields.get("keyword")
+        if isinstance(sub, Mapping) and sub.get("type") == "keyword":
+            return f"{field}.keyword"
+    return None
+
+
 def _load_documents(
     client: Any, alias: str
-) -> tuple[dict[str, int], dict[str, dict[str, int]], dict[str, dict[str, int]], bool, bool]:
+) -> tuple[
+    dict[str, int], dict[str, dict[str, int]], dict[str, dict[str, int]], bool, bool, bool
+]:
     """OpenSearch side: documents per ``paper_id``, split by parser backend and
     by the embedding model the documents carry.
 
-    Returns ``(counts, backends, models, index_exists, truncated)``. One
-    ``terms`` aggregation with two sub-aggregations is enough for the whole
-    corpus, so this stays a single round trip. A paper whose documents predate
-    a stamp comes back with an empty mapping -- "no backend / no model", not
-    "unknown of a known kind".
+    Returns ``(counts, backends, models, index_exists, truncated, index_ok)``.
+    ``index_ok`` is ``False`` only when the request *failed* (raised): the caller
+    must then treat the OpenSearch side as *unknown*, not as "zero documents
+    everywhere" -- a failed read must never be mistaken for a real empty index,
+    or every paper is falsely reported as missing from it. A non-existent index
+    is a definitive empty (``index_ok`` stays ``True``): a paper with chunk rows
+    then genuinely is missing from the index.
+
+    One ``terms`` aggregation with two sub-aggregations is enough for the whole
+    corpus, so this stays a single round trip. A paper whose documents predate a
+    stamp comes back with an empty mapping -- "no backend / no model", not
+    "unknown of a known kind". The ``parser_backend``/``embedding_model`` sub-aggs
+    are built from the mapping (:func:`_aggregatable_field`) so a ``text`` field in
+    an older index does not 400 the whole request.
     """
     exists = opensearch.index_exists(client, alias)
     if not exists:
-        return {}, {}, {}, False, False
+        # A missing index is a definitive "no documents", not an unknown read: a
+        # paper with chunk rows then genuinely shows up as missing from the index.
+        return {}, {}, {}, False, False, True
     client = client or opensearch.get_client()
+    backend_field = _aggregatable_field(client, alias, "parser_backend")
+    model_field = _aggregatable_field(client, alias, "embedding_model")
+    sub_aggs: dict[str, Any] = {}
+    if backend_field:
+        sub_aggs["by_backend"] = {"terms": {"field": backend_field}}
+    if model_field:
+        sub_aggs["by_model"] = {"terms": {"field": model_field}}
+    by_paper: dict[str, Any] = {"terms": {"field": "paper_id", "size": AGG_SIZE}}
+    if sub_aggs:
+        by_paper["aggs"] = sub_aggs
     response = client.search(
         index=alias,
         body={
             "size": 0,
             "aggs": {
-                "by_paper": {
-                    "terms": {"field": "paper_id", "size": AGG_SIZE},
-                    "aggs": {
-                        "by_backend": {"terms": {"field": "parser_backend"}},
-                        "by_model": {"terms": {"field": "embedding_model"}},
-                    },
-                }
+                "by_paper": by_paper,
             },
         },
     )
@@ -385,7 +453,7 @@ def _load_documents(
                 for entry in sub
                 if str(entry["key"])
             }
-    return counts, backends, models, True, len(buckets) >= AGG_SIZE
+    return counts, backends, models, True, len(buckets) >= AGG_SIZE, True
 
 
 # --------------------------------------------------------------------------- #
@@ -463,8 +531,16 @@ def _compare_paper(
     index_backends: Mapping[str, int] | None = None,
     chunk_models: Mapping[str | None, int] | None = None,
     index_models: Mapping[str, int] | None = None,
+    index_ok: bool = True,
 ) -> PaperConsistency | None:
-    """Compare one paper across the three stores; ``None`` when it agrees."""
+    """Compare one paper across the three stores; ``None`` when it agrees.
+
+    ``index_ok=False`` means OpenSearch could not be read at all: the ``chunks_os``
+    and everything derived from the index are then *unknown*, not zero, so every
+    comparison on that side is skipped. Reporting "missing from the index" for a
+    whole library because the index query failed would be a false alarm, and the
+    caller already records the read failure in ``errors``.
+    """
     expected = set(file_keys)
     all_objects = set(objects)
     # Parse artifacts (``papers/<id>/extracted/...``) are the parse cache, not
@@ -522,21 +598,28 @@ def _compare_paper(
     if orphan_objects:
         issues.append(ISSUE_ORPHAN_OBJECT)
 
-    if chunks_pg and not chunks_os:
-        issues.append(ISSUE_MISSING_INDEX)
-    elif chunks_pg and chunks_os != chunks_pg:
-        issues.append(ISSUE_CHUNK_MISMATCH)
-    elif not chunks_pg and chunks_os:
-        issues.append(ISSUE_ORPHAN_INDEX)
+    if index_ok:
+        if chunks_pg and not chunks_os:
+            issues.append(ISSUE_MISSING_INDEX)
+        elif chunks_pg and chunks_os != chunks_pg:
+            issues.append(ISSUE_CHUNK_MISMATCH)
+        elif not chunks_pg and chunks_os:
+            issues.append(ISSUE_ORPHAN_INDEX)
+        elif not chunks_pg and row.status == INDEXED_STATUS:
+            issues.append(ISSUE_MISSING_CHUNKS)
     elif not chunks_pg and row.status == INDEXED_STATUS:
+        # Index unreadable, but PostgreSQL alone proves the paper has no chunk
+        # rows at all -- an INDEXED paper with zero rows is drift regardless of
+        # what the index would say.
         issues.append(ISSUE_MISSING_CHUNKS)
 
     # The parser stamp: PostgreSQL is the truth about what produced the chunks,
     # the documents carry what actually did. Both unknown (a paper indexed before
-    # the stamp existed) is agreement, not drift.
+    # the stamp existed) is agreement, not drift. Skipped when the index is
+    # unreadable (``chunks_os``/``index_backends`` are unknown, not empty).
     index_stamped = sorted(index_backends or {})
     expected_backends = [row.parser_backend] if row.parser_backend else []
-    if chunks_os and index_stamped != expected_backends:
+    if index_ok and chunks_os and index_stamped != expected_backends:
         issues.append(ISSUE_PARSER_STAMP_MISMATCH)
 
     if len(known_models) >= 2:
@@ -608,10 +691,16 @@ def check_consistency(
     document_models: dict[str, dict[str, int]] = {}
     index_exists = False
     truncated = False
+    index_ok = False
     try:
-        documents, document_backends, document_models, index_exists, truncated = (
-            _load_documents(client, alias)
-        )
+        (
+            documents,
+            document_backends,
+            document_models,
+            index_exists,
+            truncated,
+            index_ok,
+        ) = _load_documents(client, alias)
     except Exception as exc:  # noqa: BLE001
         logger.warning("consistency: could not read OpenSearch: %s", exc)
         errors.append(f"opensearch: {type(exc).__name__}: {exc}")
@@ -632,6 +721,7 @@ def check_consistency(
             index_backends=document_backends.get(paper_id, {}),
             chunk_models=chunk_models.get(paper_id, {}),
             index_models=document_models.get(paper_id, {}),
+            index_ok=index_ok,
         )
         if problem is not None:
             problems.append(problem)

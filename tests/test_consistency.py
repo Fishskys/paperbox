@@ -123,11 +123,20 @@ class BrokenStorage:
 
 
 class FakeIndices:
-    def __init__(self, exists: bool = True) -> None:
+    def __init__(self, exists: bool = True, mapping: dict | None = None) -> None:
         self._exists = exists
+        #: Optional ``{index: {"mappings": {"properties": {...}}}}``. When unset,
+        #: ``get_mapping`` raises ``AttributeError``-like behaviour only if called,
+        #: so a client without a mapping keeps the old bare-field fallback.
+        self._mapping = mapping
 
     def exists(self, index: str) -> bool:
         return self._exists
+
+    def get_mapping(self, index: str) -> dict:
+        if self._mapping is None:
+            raise RuntimeError("no mapping configured in this fake")
+        return self._mapping
 
 
 class FakeClient:
@@ -145,11 +154,12 @@ class FakeClient:
         exists: bool = True,
         backends: dict[str, dict[str, int]] | None = None,
         models: dict[str, dict[str, int]] | None = None,
+        mapping: dict | None = None,
     ) -> None:
         self.counts = dict(counts or {})
         self.backends = {key: dict(value) for key, value in (backends or {}).items()}
         self.models = {key: dict(value) for key, value in (models or {}).items()}
-        self.indices = FakeIndices(exists)
+        self.indices = FakeIndices(exists, mapping)
         self.requests: list[dict] = []
 
     def search(self, index=None, body=None):
@@ -389,7 +399,7 @@ def test_the_check_resolves_the_module_client_when_none_is_passed(monkeypatch) -
     """A live run passes ``client=None``; that must not become ``None.search``."""
     sentinel = FakeClient({"paper-1": 4})
     monkeypatch.setattr(consistency_service.opensearch, "get_client", lambda: sentinel)
-    counts, backends, models, exists, truncated = consistency_service._load_documents(
+    counts, backends, models, exists, truncated, index_ok = consistency_service._load_documents(
         None, "an-alias"
     )
     assert counts == {"paper-1": 4}
@@ -399,6 +409,7 @@ def test_the_check_resolves_the_module_client_when_none_is_passed(monkeypatch) -
     assert models == {"paper-1": {}}
     assert exists is True
     assert truncated is False
+    assert index_ok is True
 
 
 def test_a_broken_store_is_reported_and_the_others_still_answer(factory) -> None:  # noqa: F811
@@ -797,3 +808,104 @@ def test_documents_of_another_model_alone_do_not_flag_a_paper(factory) -> None: 
     assert report.problems_total == 0
     assert report.problems == []
     assert report.as_dict()["embedding_models"]["documents"] == {MODEL_A: 2}
+
+
+# --------------------------------------------------------------------------- #
+# aggregatable fields follow the mapping (text vs keyword), never a bare text
+# --------------------------------------------------------------------------- #
+
+def _sub_aggs(client) -> dict:
+    return client.requests[0]["body"]["aggs"]["by_paper"]["aggs"]
+
+
+def test_a_text_field_with_a_keyword_subfield_aggregates_the_subfield() -> None:
+    """An older index (dynamic mapping from before the field was declared) holds
+    ``parser_backend`` as ``text`` with an auto ``.keyword``. A bare ``text``
+    aggregation 400s, so the ``.keyword`` sub-field must be used."""
+    mapping = {
+        "paper_chunks_v2": {
+            "mappings": {
+                "properties": {
+                    "paper_id": {"type": "keyword"},
+                    "parser_backend": {
+                        "type": "text",
+                        "fields": {"keyword": {"type": "keyword"}},
+                    },
+                    "embedding_model": {
+                        "type": "text",
+                        "fields": {"keyword": {"type": "keyword"}},
+                    },
+                }
+            }
+        }
+    }
+    client = FakeClient({"p": 2}, mapping=mapping)
+    _load_documents = consistency_service._load_documents
+    counts, *_ = _load_documents(client, "paper_chunks_current")
+    assert counts == {"p": 2}
+    sub = _sub_aggs(client)
+    assert sub["by_backend"]["terms"]["field"] == "parser_backend.keyword"
+    assert sub["by_model"]["terms"]["field"] == "embedding_model.keyword"
+
+
+def test_a_keyword_field_aggregates_the_bare_field() -> None:
+    """The current index declares the fields as plain ``keyword`` -- the bare
+    field is aggregatable and there is no ``.keyword`` sub-field to use."""
+    mapping = {
+        "paper_chunks_v3": {
+            "mappings": {
+                "properties": {
+                    "paper_id": {"type": "keyword"},
+                    "parser_backend": {"type": "keyword"},
+                    "embedding_model": {"type": "keyword"},
+                }
+            }
+        }
+    }
+    client = FakeClient({"p": 2}, mapping=mapping)
+    consistency_service._load_documents(client, "paper_chunks_current")
+    sub = _sub_aggs(client)
+    assert sub["by_backend"]["terms"]["field"] == "parser_backend"
+    assert sub["by_model"]["terms"]["field"] == "embedding_model"
+
+
+def test_a_text_field_without_a_keyword_subfield_omits_that_sub_aggregation() -> None:
+    """No aggregatable form exists -> skip the sub-agg instead of 400-ing the
+    whole report (and never silently aggregate to a misleading zero)."""
+    mapping = {
+        "paper_chunks": {
+            "mappings": {
+                "properties": {
+                    "paper_id": {"type": "keyword"},
+                    "parser_backend": {"type": "text"},
+                    "embedding_model": {"type": "text"},
+                }
+            }
+        }
+    }
+    client = FakeClient({"p": 2}, mapping=mapping)
+    consistency_service._load_documents(client, "paper_chunks_current")
+    assert "aggs" not in client.requests[0]["body"]["aggs"]["by_paper"]
+
+
+def test_an_unreadable_mapping_falls_back_to_the_bare_field() -> None:
+    """A client whose mapping cannot be read keeps the pre-fix bare field (so a
+    unit-test fake, or a transient mapping error, does not change behaviour)."""
+    client = FakeClient({"p": 2})  # FakeIndices has no mapping -> get_mapping raises
+    consistency_service._load_documents(client, "paper_chunks_current")
+    sub = _sub_aggs(client)
+    assert sub["by_backend"]["terms"]["field"] == "parser_backend"
+    assert sub["by_model"]["terms"]["field"] == "embedding_model"
+
+
+def test_a_failed_index_read_does_not_fake_a_library_wide_missing_index(factory) -> None:  # noqa: F811
+    """The original symptom: a 400 from the aggregation was swallowed and the
+    index treated as empty, so every paper was reported missing from the index.
+    A failed read must be *unknown*: the paper (consistent in PG/MinIO) is not
+    reported, and the failure is carried in ``errors`` only."""
+    paper_id = add_paper(factory, chunks=2, parser_backend="docling")
+    report = run(factory, FakeStorage([object_key(paper_id)]), BrokenClient())
+    assert any(error.startswith("opensearch:") for error in report.errors)
+    assert report.documents_os == 0
+    assert report.problems_total == 0
+    assert report.consistent is False
