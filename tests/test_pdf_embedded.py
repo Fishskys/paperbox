@@ -247,3 +247,46 @@ def test_pages_fall_back_to_the_start_page_alone() -> None:
 
 def test_module_exposes_the_public_helper() -> None:
     assert pdf_module.extract_embedded_metadata is extract_embedded_metadata
+
+# --------------------------------------------------------------------------- #
+# IEEE article number (Info ``/IEEE Article ID``)
+# --------------------------------------------------------------------------- #
+def test_ieee_article_id_is_read_from_the_info_dictionary() -> None:
+    """IEEE PDFs stamp ``/IEEE Article ID``; it is an identity, not decoration."""
+    data = build_pdf(
+        {
+            "/Title": "A 28nm Accelerator",
+            "/IEEE Article ID": "11617481",
+        }
+    )
+
+    metadata = extract_embedded_metadata(data)
+
+    assert metadata.ieee_article_number == "11617481"
+    assert metadata.as_dict()["ieee_article_number"] == "11617481"
+    assert metadata.is_empty is False
+
+
+def test_ieee_article_id_is_normalised_to_digits() -> None:
+    data = build_pdf({"/Title": "T", "/IEEE Article ID": "Article ID (11043957)"})
+
+    assert extract_embedded_metadata(data).ieee_article_number == "11043957"
+
+
+def test_no_ieee_article_id_is_none_not_an_error() -> None:
+    data = build_pdf({"/Title": "An ACM paper", "/DOI": "https://doi.org/10.1145/1"})
+
+    metadata = extract_embedded_metadata(data)
+
+    assert metadata.ieee_article_number is None
+    assert "ieee_article_number" not in metadata.as_dict()
+
+
+def test_ieee_article_id_becomes_a_claim() -> None:
+    from app.services.metadata_service import embedded_claim_values
+
+    data = build_pdf({"/Title": "T", "/IEEE Article ID": "11617481"})
+
+    values = embedded_claim_values(extract_embedded_metadata(data))
+
+    assert values["identifier:ieee_article_number"] == "11617481"

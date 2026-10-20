@@ -194,6 +194,9 @@ class EmbeddedMetadata:
     abstract: str | None = None
     doi: str | None = None
     arxiv_id: str | None = None
+    #: IEEE stamp: ``/IEEE Article ID`` in the Info dictionary (e.g. ``11617481``).
+    #: A publisher declaration, so it is an identity of the same weight as a DOI.
+    ieee_article_number: str | None = None
     venue: str | None = None
     volume: str | None = None
     issue: str | None = None
@@ -214,6 +217,7 @@ class EmbeddedMetadata:
                 ("abstract", self.abstract),
                 ("doi", self.doi),
                 ("arxiv_id", self.arxiv_id),
+                ("ieee_article_number", self.ieee_article_number),
                 ("venue", self.venue),
                 ("volume", self.volume),
                 ("issue", self.issue),
@@ -239,6 +243,7 @@ class EmbeddedMetadata:
                 self.abstract,
                 self.doi,
                 self.arxiv_id,
+                self.ieee_article_number,
                 self.venue,
                 self.volume,
                 self.issue,
@@ -426,6 +431,34 @@ def _strip_version(arxiv_id: str | None) -> str | None:
     return re.sub(r"v\d+$", "", arxiv_id.strip(), flags=re.IGNORECASE) or None
 
 
+#: Info keys that carry an IEEE article number (``11617481``).
+_IEEE_ARTICLE_KEYS: tuple[str, ...] = ("/IEEE Article ID", "IEEE Article ID")
+
+
+def _ieee_article_number(
+    info: dict[str, object], xmp_fields: dict[str, object]
+) -> str | None:
+    """The IEEE article number a publisher stamped on the PDF, or ``None``.
+
+    Only an explicit declaration is accepted: the Info dictionary's
+    ``/IEEE Article ID`` (how IEEE PDFs stamp it). Unlike the free-text DOI scan,
+    this never looks inside abstracts or reference lists -- an 8-digit number
+    buried in the body is not an article number, and a wrong identity is worse
+    than a missing one. The value is normalised to digits so
+    ``/IEEE Article ID (11043957)`` and ``11043957`` collide.
+
+    ``xmp_fields`` is accepted for signature symmetry with the other extractors;
+    pypdf surfaces only whitelisted XMP locals plus ``custom:*`` properties, and
+    no publisher in the corpus stamps the article number there -- the Info key is
+    the one that is actually present.
+    """
+    for key in _IEEE_ARTICLE_KEYS:
+        digits = re.sub(r"[^0-9]", "", _text(info.get(key)) or "")
+        if digits:
+            return digits
+    return None
+
+
 def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
     """Read the Info dictionary and the XMP packet of a PDF (discovery layer 1).
 
@@ -513,11 +546,13 @@ def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
     issns = _ISSN_IN_TEXT.findall(searchable)
     if xmp_text("issn"):
         issns.extend(_ISSN_IN_TEXT.findall(str(xmp_text("issn"))))
+    ieee_article_number = _ieee_article_number(info, xmp_fields)
 
     metadata = EmbeddedMetadata(
         title=title,
         authors=authors,
         abstract=abstract,
+        ieee_article_number=ieee_article_number,
         # Identity fields are read from structured XMP fields plus *declared*
         # values only (review 2026-10-05, P1-10). The old fallback regex-
         # scanned the joined Info/XMP blob and the title, so a DOI/arXiv id

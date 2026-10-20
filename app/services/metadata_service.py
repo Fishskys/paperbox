@@ -557,6 +557,8 @@ def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:
         values["identifier:doi"] = embedded.doi
     if embedded.arxiv_id:
         values["identifier:arxiv"] = embedded.arxiv_id
+    if embedded.ieee_article_number:
+        values["identifier:ieee_article_number"] = embedded.ieee_article_number
     if embedded.venue:
         venue: dict[str, object] = {"name": embedded.venue}
         if embedded.year:

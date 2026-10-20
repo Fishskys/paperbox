@@ -220,7 +220,7 @@
 |---|---|---|
 | `PageText` | `page:int`、`text:str` | `page` 1-based，直接进 chunk 的 `page_start` |
 | `SizedLine` | `text:str`、`size:float` | 字号用于标题判定 |
-| `EmbeddedMetadata` | `title/authors/abstract/doi/arxiv_id/venue/volume/issue/pages/publication_date/year/language/keywords/raw` | 全可空；`raw={info, xmp, issns, isbns}`（`pdf.py`） |
+| `EmbeddedMetadata` | `title/authors/abstract/doi/arxiv_id/ieee_article_number/venue/volume/issue/pages/publication_date/year/language/keywords/raw` | 全可空；`raw={info, xmp, issns, isbns}`（`pdf.py`）。`ieee_article_number` 取自 Info 的 `/IEEE Article ID`，仅认**显式声明**，归一为纯数字 |
 | `Section` | `title`、`page_start`、`page_end`、`number`、`paragraphs:[(page, text)]` | `label` 是 `number + title` |
 | `Chunk` | `chunk_index`、`text`、`page_start`、`page_end`、`section`、`section_title`、`token_count`、`char_count`、`is_overlap`、`_spans` | `_spans` 仅供 `_finalize` 推页码；`is_overlap` 恒 `False` 且无消费方 |
 | `TextFragment` | `text`、`x`、`y`、`size`、`page` | 降级侧几何判定的输入；`right` 是估算右边界 |
