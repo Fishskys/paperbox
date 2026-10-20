@@ -480,3 +480,32 @@ def test_discard_duplicate_paper_survives_cleanup_failures(monkeypatch) -> None:
 
     assert soft_deleted == [paper.id]
     assert session.commits == 1
+
+
+# --------------------------------------------------------------------------- #
+# HTML in titles (2026-10-20): a parser left <sup>+</sup> in a title
+# --------------------------------------------------------------------------- #
+def test_normalize_text_drops_html_tags_and_entities() -> None:
+    """``MX-SAFE<sup>+</sup>`` and ``MX-SAFE+`` must normalize to the same key.
+
+    The MXFP batch stored the markup in the library while IEEE's JSON carried the
+    plain form, so the two never matched as the same paper.
+    """
+    with_markup = (
+        "MX-SAFE<sup>+</sup>: Universal Microscaling Format with Sign-Aware "
+        "Asymmetric Exponent-Only Scaling and Dynamic Bit Allocation"
+    )
+    plain = (
+        "MX-SAFE+: Universal Microscaling Format with Sign-Aware "
+        "Asymmetric Exponent-Only Scaling and Dynamic Bit Allocation"
+    )
+
+    assert paper_service.normalize_text(with_markup) == paper_service.normalize_text(plain)
+    assert "sup" not in paper_service.normalize_text(with_markup).split()
+
+
+def test_normalize_text_unescapes_entities_and_strips_inline_markup() -> None:
+    assert paper_service.normalize_text("A &amp; B") == "a b"
+    assert paper_service.normalize_text("Low-Power <i>SRAM</i> Design") == "low power sram design"
+    # A plain title is untouched.
+    assert paper_service.normalize_text("Normal Title") == "normal title"

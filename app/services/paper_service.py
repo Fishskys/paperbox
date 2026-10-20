@@ -13,6 +13,7 @@ one transaction.
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 import unicodedata
 import uuid
@@ -75,6 +76,8 @@ PRIMARY_ACTION_NON_PRIMARY = "non_primary"
 PRIMARY_ACTION_NONE = "none"
 
 _NON_WORD = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
+#: Markup some parsers leave in a title (``<sup>+</sup>``, ``<i>``, ``<br/>``).
+_HTML_TAG = re.compile(r"<[^>]{0,200}>")
 _ARXIV_PREFIX = "arxiv:"
 _DOI_PREFIX = "doi:"
 _SHA_PREFIX = "sha256:"
@@ -82,10 +85,16 @@ _TITLE_PREFIX = "title:"
 
 
 def normalize_text(value: str | None) -> str:
-    """Lower-case, strip accents and collapse punctuation to single spaces."""
+    """Lower-case, strip accents/HTML and collapse punctuation to single spaces."""
     if not value:
         return ""
-    decomposed = unicodedata.normalize("NFKD", value)
+    # Titles scraped from PDFs/HTML can carry markup: the MXFP batch had
+    # ``MX-SAFE<sup>+</sup>: ...`` in the library while IEEE's JSON said
+    # ``MX-SAFE+: ...`` -- normalized they became ``mx safe sup sup ...`` vs
+    # ``mx safe ...``, so the two could never be recognised as the same paper.
+    # Unescape entities first (``&amp;`` -> ``&``), then drop tags.
+    cleaned = _HTML_TAG.sub(" ", html.unescape(value))
+    decomposed = unicodedata.normalize("NFKD", cleaned)
     ascii_ish = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     lowered = ascii_ish.casefold()
     return _NON_WORD.sub(" ", lowered).strip()
