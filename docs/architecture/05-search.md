@@ -241,7 +241,7 @@ v2 路径（两条查询 + 进程内 RRF + `aggregate_papers`）**保留**：两
 | `BULK_BATCH_SIZE` | `200` | 写入批量 | `opensearch.py` |
 | `DEFAULT_LIMIT` / `MAX_LIMIT` | `50` / `200` | `GET /api/search-logs` 的 limit | `search_log_service.py` |
 
-> 注意：配置默认索引与真机 `.env` 现均为 `paper_chunks_v3`（CJK bigram + `dynamic: "strict"`），别名 `paper_chunks_current` → v3；`v1`/`v2` 不存在（[01-storage.md](01-storage.md)、[project.md](../progress/project.md)）。**以 `.env` 为准**。
+> 注意：配置默认索引为 `paper_chunks_v3`（CJK bigram + `dynamic: "strict"`），别名 `paper_chunks_current` → v3。较老的部署可能仍用 `paper_chunks_v2`（旧 `text` 映射）：`GET /api/consistency` 的普查已按**实际 mapping** 选可聚合字段（`text` 用 `.keyword` 子字段、`keyword` 用裸字段），不会再因 `text` 不可聚合而 400；索引读失败也按“未知”处理、不再伪造 `missing_index`。旧索引升级/换代的操作见 [升级指引](UPGRADING.md#3-检索索引别让你的部署停在旧一代映射上)。**以 `.env` 为准**。
 
 ## 7. 测试位置与覆盖（tests/xxx.py → 覆盖什么）
 

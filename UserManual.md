@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.6.2**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.7.0**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
@@ -59,7 +59,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.6.2 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
+| 6) 启动 | 日志出现 `paperbox 0.7.0 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
 
 一键自检（推荐）：
 
@@ -387,6 +387,10 @@ cd infra && docker compose --profile local-docling up -d docling
 | `uv run python scripts/acceptance_mcp.py [--with-writes]` | MCP 端点一键验收：传输/鉴权/十工具/异常路径，**自带清理**（只读模式 38 项；`--with-writes` 多一节写工具验收，需要 `MCP_WRITE_ENABLED=true` 才有内容） |
 
 **升级已有部署到新版本**（顺序别换）：
+
+> 从 **0.5.x 升到 0.7.0** 请先读专门的 [升级指引](UPGRADING.md#升级指引05x--070)——
+> 里面有 API key 标识改 `prefix`、吊销即删除的迁移、以及“检索索引停在旧一代映射”的可操作性
+> 步骤。下面是通用顺序：
 
 ```bash
 # 0) 备份（schema 迁移不可逆）

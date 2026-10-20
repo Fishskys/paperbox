@@ -14,7 +14,7 @@ name: paperbox-app
 services:
   api:
     build: .
-    image: paperbox/api:0.6.2
+    image: paperbox/api:0.7.0
     container_name: paperbox-api
     restart: unless-stopped
     env_file:

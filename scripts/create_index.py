@@ -2,16 +2,15 @@
 """Create (or verify) a ``paper_chunks`` index and point the alias at it.
 
 Default (no arguments) behaviour is unchanged in spirit: it idempotently
-creates the index named by ``OPENSEARCH_INDEX`` in ``.env`` (currently
-``paper_chunks_v2``, the CJK-analyzer index) and makes ``paper_chunks_current``
-resolve to it::
+creates the index named by ``OPENSEARCH_INDEX`` in ``.env`` (``paper_chunks_v3``
+by default) and makes ``paper_chunks_current`` resolve to it::
 
     uv run python scripts/create_index.py
 
 Migration to a new analyzer version (SPEC-P1 H1) copies the existing documents
 server-side, so the stored embeddings are never recomputed::
 
-    uv run python scripts/create_index.py --index paper_chunks_v2 --migrate-from paper_chunks_v1
+    uv run python scripts/create_index.py --index paper_chunks_v3 --migrate-from paper_chunks_v2
 
 The migration is idempotent and safe:
 
