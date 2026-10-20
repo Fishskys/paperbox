@@ -424,3 +424,77 @@ def test_structured_sources_still_let_the_longer_list_win(db_session) -> None:
 
     assert report.decisions[0].action == merge.ACTION_SPECIAL
     assert prov.read_field(paper, "authors") == ["Alice", "Bob", "Carol"]
+
+
+# --------------------------------------------------------------------------- #
+# title trust ladder (2026-10-20): pdf_embedded's dc:title is often a header
+# --------------------------------------------------------------------------- #
+def test_pdf_embedded_title_cannot_overwrite_a_heuristic_title(db_session) -> None:
+    """Both PDF sources are equally untrustworthy for the title -- neither wins.
+
+    ``pdf_embedded`` used to count as "structured", so its XMP dc:title (a
+    running header for IEEE PDFs) overwrote the heuristic title without a
+    conflict. Equal trust keeps the current value.
+    """
+    paper = make_paper(db_session)
+    header = "512 • 2026 IEEE International Solid-State Circuits Conference"
+    seed(db_session, paper, "title", header, "pdf_heuristic")
+
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {"title": "30.1 A 28nm 127.54TFLOPS/W MXFP6 Macro"},
+        source_type="pdf_embedded",
+    )
+
+    decision = report.decisions[0]
+    assert decision.action == merge.ACTION_CONFLICT
+    assert prov.read_field(paper, "title") == header
+
+
+def test_pdf_embedded_title_cannot_replace_a_metadata_title(db_session) -> None:
+    """A real metadata title outranks pdf_embedded; the reverse must not happen."""
+    paper = make_paper(db_session)
+    good = "30.1 A 28nm 127.54TFLOPS/W MXFP6 Macro"
+    seed(db_session, paper, "title", good, "ieee_api")
+
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {"title": "Microsoft Word - Data Augmentation New v1.3"},
+        source_type="pdf_embedded",
+    )
+
+    decision = report.decisions[0]
+    assert decision.action == merge.ACTION_CONFLICT
+    assert decision.reason == "a less trustworthy source cannot replace the title"
+    assert prov.read_field(paper, "title") == good
+
+
+def test_a_metadata_source_can_correct_a_pdf_embedded_title(db_session) -> None:
+    """The other direction: ieee_api outranks pdf_embedded for the title."""
+    paper = make_paper(db_session)
+    header = "512 • 2026 IEEE International Solid-State Circuits Conference"
+    seed(db_session, paper, "title", header, "pdf_embedded")
+
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {"title": "30.1 A 28nm 127.54TFLOPS/W MXFP6 Macro"},
+        source_type="ieee_api",
+    )
+
+    decision = report.decisions[0]
+    assert decision.action == merge.ACTION_OVERRIDDEN
+    assert decision.reason == "a more trustworthy source for the title"
+    assert prov.read_field(paper, "title").startswith("30.1 A 28nm")
+
+
+def test_pdf_embedded_still_fills_a_blank_title(db_session) -> None:
+    """The ladder only ranks existing claims; a blank still gets filled."""
+    paper = make_paper(db_session, title="")
+    report = merge.merge_values(
+        db_session, paper, {"title": "Real Title"}, source_type="pdf_embedded"
+    )
+    assert report.decisions[0].action == merge.ACTION_FILLED
+    assert prov.read_field(paper, "title") == "Real Title"

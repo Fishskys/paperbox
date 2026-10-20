@@ -79,6 +79,32 @@ HEURISTIC_SOURCE_TYPES: frozenset[str] = WEAK_SOURCE_TYPES
 #: ``manual`` is the one source R2 does not constrain (decision 12).
 UNRESTRICTED_SOURCE_TYPES: frozenset[str] = frozenset({SOURCE_TYPE_MANUAL})
 
+#: Sources whose *title* claim is not trustworthy, even though they are otherwise
+#: "structured". ``pdf_embedded`` reads the PDF's XMP/Info ``dc:title``, which for
+#: IEEE PDFs is routinely a running header or the proceedings name -- measured on
+#: the MXFP batch (2026-10-20), where it replaced a correct heuristic title with
+#: "512 • 2026 IEEE International Solid-State Circuits Conference". A metadata
+#: source must be allowed to correct it, and it must not overwrite a heuristic.
+LOW_TRUST_TITLE_SOURCES: frozenset[str] = frozenset({SOURCE_TYPE_PDF_EMBEDDED})
+
+#: Title trust, highest first. Only consulted for the ``title`` field; every other
+#: field keeps the plain structured/weak classification above.
+_TITLE_TRUST: dict[str, int] = {
+    SOURCE_TYPE_MANUAL: 3,
+    SOURCE_TYPE_IEEE_API: 2,
+    SOURCE_TYPE_ARXIV_API: 2,
+    SOURCE_TYPE_CROSSREF: 2,
+    SOURCE_TYPE_IMPORT_FILE: 2,
+    SOURCE_TYPE_PDF_HEURISTIC: 1,
+    SOURCE_TYPE_PDF_EMBEDDED: 1,
+    SOURCE_TYPE_FILENAME: 0,
+}
+
+
+def _title_trust(source_type: str | None) -> int | None:
+    """Trust level for a title claim, or ``None`` when the source is unknown."""
+    return _TITLE_TRUST.get((source_type or "").strip().lower())
+
 ACTION_FILLED = "filled"
 ACTION_OVERRIDDEN = "overridden"
 ACTION_CONFLICT = "conflict"
@@ -236,6 +262,44 @@ def decide(
             reason="manual override",
             source_type=incoming_type,
         )
+    if field_name == prov.FIELD_TITLE:
+        # Title gets its own trust ladder: ``pdf_embedded`` (XMP/Info dc:title) is
+        # routinely a running header or a Word file name for PDFs, so it must not
+        # count as "structured" for the title. Rule: a title claim is only replaced
+        # by a strictly more trustworthy source; an equal or weaker source leaves
+        # the current one and records the disagreement.
+        incoming_trust = _title_trust(incoming_type)
+        existing_trust = _title_trust(existing_type)
+        if incoming_trust is not None and existing_trust is not None:
+            if incoming_trust > existing_trust:
+                return MergeDecision(
+                    field=field_name,
+                    action=ACTION_OVERRIDDEN,
+                    kept=value,
+                    rejected=current_value,
+                    reason="a more trustworthy source for the title",
+                    source_type=incoming_type,
+                )
+            if incoming_trust < existing_trust:
+                return MergeDecision(
+                    field=field_name,
+                    action=ACTION_CONFLICT,
+                    kept=current_value,
+                    rejected=value,
+                    reason="a less trustworthy source cannot replace the title",
+                    source_type=incoming_type,
+                )
+            # Equal trust: keep the current value. Title decisions end here -- the
+            # generic structured-over-weak rule below must not re-decide the title
+            # (it would let pdf_embedded "override" a pdf_heuristic title).
+            return MergeDecision(
+                field=field_name,
+                action=ACTION_CONFLICT,
+                kept=current_value,
+                rejected=value,
+                reason="keep the current value and record the disagreement",
+                source_type=incoming_type,
+            )
     if is_heuristic(existing_type) and is_structured(incoming_type):
         return MergeDecision(
             field=field_name,
