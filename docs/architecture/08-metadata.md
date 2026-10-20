@@ -69,7 +69,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 - **要解决的问题**：DOI 是跨平台的论文身份证，但**部分论文没有 DOI**，需要有兜底；同时不同平台各有自己的编号（IEEE article number、ISSN、PMID、OpenAlex…）。
 - **做法**：所有标识符进 `paper_identifiers`，`scheme` 是**开放枚举**（加平台 = 加取值，不加列，`metadata_identifiers.py`）；部分唯一索引保证**一个标识符只属一篇论文**；主标识符（只有 `doi` / `arxiv`）决定 `papers.fingerprint`，兜底链是 `DOI > arXiv > 标题+首作者+年 > sha256`。
-- **代价**：`papers.doi` / `papers.arxiv_id` 变成**镜像列**（真值在标识符表），必须靠 `mirror_legacy_columns`保持同步。
+- **代价**：`papers.doi` / `papers.arxiv_id` 变成**镜像列**（真值在标识符表），必须靠 `mirror_legacy_columns`保持同步。镜像同步在**应用层**（非 DB 触发器），所以理论上有漂移可能；用只读审计 `GET /api/consistency/doi`（或 `scripts/audit_identifier_mirrors.py`）做看门狗——它只报告不修复，覆盖 6 类漂移（mirror 无 identifier、identifier 无 mirror、值不等、同篇重复 identifier、指向已删论文的孤儿 identifier、缺 normalized_value）。
 
 ### 2.4 venue 拆成两级
 
@@ -333,6 +333,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `scripts/reextract_metadata.py` | 对已存 PDF **重跑元数据提取**并合并缺口（不重解析正文/不重嵌入），`--dry-run`（默认）/`--apply`/`--paper-id`/`--limit`/`--no-index`；先 dry-run 出清单再 apply |
 | `scripts/import_metadata.py` | CLI 导入（`--apply` / `--limit` / `--source-type` / `--report`） |
 | `scripts/acceptance_metadata.py` | 真机验收 7 项：回填数字、IEEE 按 DOI 命中并 apply、无 DOI 记录进复核、手动改+回滚+指纹升级、venue 检索（需 reindex）、元数据先 PDF 后、索引一致性。**只在自己的壳论文上造数据**，`--cleanup` 删掉本次造的行 |
+| `scripts/audit_identifier_mirrors.py` | **只读**核对 `papers.doi`/`arxiv_id` 镜像列与 `paper_identifiers`（6 类漂移），`--json`/`--limit`/`--no-fail`；有漂移 exit 1，不修复 |
+| `scripts/audit_author_venue_quality.py` | **只读**核查 authors/venues 归一化质量：拼接名、空名、占位符（`authors` 之类）、同篇重复作者、author_order 断档、venue 空名/含 `;`/同键异名；`--json`/`--no-fail`，不修复 |
 
 ---
 
@@ -344,8 +346,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
  paper_type/venue_edition_id/venue_year`；`GET /api/papers` 支持 `venue`/`year_from`/`year_to`/`paper_type`/`tag`/`author`
  过滤（**读 PG 当前值**，与检索读快照是两条路）。`author` 按 `authors.normalized_name` 匹配、多人 AND；
  有 `q` 时结果按标题词频相关度排序，无 `q` 时最新优先。
-- **一致性**：`GET /api/consistency` 核对三端（元数据本身不参与，它只在 PG）。
-- **测试落点**：`tests/test_index_snapshot.py`（9）、`tests/test_refresh_index_metadata.py`（13）、`tests/test_paper_list_filters.py`（17）、`tests/test_consistency.py`（22）、`tests/test_author_links.py`（5）。
+- **一致性**：`GET /api/consistency` 核对三端（元数据本身不参与，它只在 PG）；`GET /api/consistency/doi` 单独核对 `papers.doi`/`arxiv_id` 镜像列与 `paper_identifiers` 是否同步（只读看门狗，见 §2.3）。
+- **测试落点**：`tests/test_index_snapshot.py`（9）、`tests/test_refresh_index_metadata.py`（13）、`tests/test_paper_list_filters.py`（17）、`tests/test_consistency.py`（22）、`tests/test_identifier_mirror_audit.py`（9）、`tests/test_author_links.py`（5）。
 
 ## 5. 配置项
 

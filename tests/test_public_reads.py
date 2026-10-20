@@ -33,12 +33,13 @@ from app.core import security
 #: Framework/ops endpoints: no gate at all (the read door is not consulted).
 PUBLIC: frozenset[tuple[str, str]] = frozenset({("GET", "/health")})
 
-#: The read tier — 12 business reads plus ``/health`` are the 13 reads of the plan;
-#: ``/health`` stays ungated, so these 12 are the ones carrying ``require_read``.
+#: The read tier — 13 business reads plus ``/health`` are the 14 reads of the plan;
+#: ``/health`` stays ungated, so these 13 are the ones carrying ``require_read``.
 #: ``POST /api/search`` belongs here: it writes one search-log row, not corpus state.
 READS: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/api/consistency"),
+        ("GET", "/api/consistency/doi"),
         ("GET", "/api/jobs"),
         ("GET", "/api/jobs/queue"),
         ("GET", "/api/jobs/{job_id}"),

@@ -31,6 +31,7 @@
 |---|---|---|---|---|---|
 | GET | `/health` | 每个依赖一条**声明式探针**（PG / OpenSearch / MinIO / embedding / rerank / docling；未配置的报 `disabled`）。顶层 `status` 只表示 API 进程存活，`degraded` 汇总**必需**依赖是否就绪，`dependencies` 带每项状态/延迟/检查时刻/原因。**探测只按需**（启动一次 + 每次调用），没有定时器；每项结论按 `HEALTH_PROBE_CACHE_TTL`（默认 300s，`HEALTH_CACHE_TTL_OVERRIDES` 可按依赖覆盖）复用，命中时带 `cached: true` 与原始 `checked_at` | public | — | `app/api/health.py`、`app/services/health_service.py` |
 | GET | `/api/consistency` | 三端只读对账（PG / MinIO / OpenSearch），另含**解析后端与 embedding 模型两份普查** | read | `limit`（1..1000，默认 200）、`parser_papers`（bool，默认 false：连每个解析戳下的存活论文 id 一起返回，即 `parser_backends.paper_ids`） | `app/api/consistency.py` |
+| GET | `/api/consistency/doi` | **只读**核对 `papers.doi`/`arxiv_id` 镜像列与 `paper_identifiers` 是否同步（6 类漂移，不修复） | read | `limit`（1..1000，默认 50，列出的漂移行上限；总数恒精确） | `app/api/consistency.py` |
 | GET | `/` | landing（`include_in_schema=False`） | public | — | `app/main.py` 的 `lifespan()` |
 | POST | `/api/papers/ingest` | URL 摄取 | write | — | `app/api/ingestion.py` |
 | POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | write | — | `app/api/ingestion.py` |
@@ -150,6 +151,7 @@
 | `attach` / `apply`：来源或论文不存在 | 404（`import`）/ 计入 `skipped`（`apply`） | `app/api/metadata.py`, |
 | `POST /api/search`：`SearchError` / `ValueError` | 503 / 422 | `app/api/search.py`|
 | `GET /api/consistency` | **不抛**：store 不可达写进 `errors` 字段、HTTP 仍 200；只读，不写三端 | `app/api/consistency.py` |
+| `GET /api/consistency/doi` | **不抛**：读失败写进 `errors` 字段、HTTP 仍 200；只读，只报告镜像列与标识符的漂移，不修复 | `app/api/consistency.py` |
 
 ### 2.4 lifespan 启停序列（`app/main.py`）
 
@@ -202,7 +204,7 @@
 | `paper.py` | `PaperOut`()、`PaperFileOut`()、`PaperListOut`()、`PaperChunkOut`()、`PaperChunkList`() | 论文读接口 |
 | `metadata.py` | `PaperMetadataOut`()、`SourceOut`()、`IdentifierOut`()、`ProvenanceEntry`()、`MetadataPatch`()、`MetadataPatchOut`()、`MetadataRollbackIn/Out`(/)、`ImportReportOut`()、`ConflictOut`()、`ReviewOut`()、`AttachIn/Out`(/)、`ApplyEntryIn/ApplyIn/ApplyOut`(//) | 元数据读写与导入报告 |
 | `app/schemas/search.py`（**写全路径：裸 `search.py` 会与 `app/api/search.py` 串表**） | `SearchFilters`()、`MIN_TOP_K/MAX_TOP_K`()、`SearchRequest`(含 **`facets`**)、`SearchEvidence`()、`SearchResult`()、`SearchRerankInfo`()、`SearchRewriteInfo`()、**`FacetBucket`()、`SearchFacets`()**、`SearchResponse`(含 `facets`) | 检索请求/响应 |
-| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(含 `parser_backend`、**`embedding_models` **)、`ConsistencyTotalsOut`()、**`ParserBackendsOut`()**（`papers`/ `documents` 计数、`paper_ids` + `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、**`EmbeddingModelsOut`()**（`chunks`/ `documents` 计数）、`ConsistencyOut`(含 `parser_backends`、**`embedding_models` **) | 一致性对账出参（三端普查 + 解析后端/模型两份统计） |
+| `app/schemas/consistency.py`（**写全路径：裸 `consistency.py` 会串到 `app/api/consistency.py`**） | `PaperConsistencyOut`(含 `parser_backend`、**`embedding_models` **)、`ConsistencyTotalsOut`()、**`ParserBackendsOut`()**（`papers`/ `documents` 计数、`paper_ids` + `paper_ids_truncated`，后者只在 `?parser_papers=true` 时有内容）、**`EmbeddingModelsOut`()**（`chunks`/ `documents` 计数）、`ConsistencyOut`(含 `parser_backends`、**`embedding_models` **)、**`MirrorDriftOut`()**、**`IdentifierMirrorOut`()**（`/api/consistency/doi`） | 一致性对账出参（三端普查 + 解析后端/模型两份统计 + 镜像列审计） |
 | `search_log.py` | `SearchLogOut`()、`SearchLogListOut`() | 检索日志读接口 |
 | `__init__.py` | — | 仍是占位（1 行 docstring），无重导出；导入一律走子模块 |
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -107,3 +109,33 @@ class ConsistencyOut(BaseModel):
     errors: list[str] = Field(default_factory=list)
     truncated: bool = False
     took_ms: float = 0.0
+
+
+class MirrorDriftOut(BaseModel):
+    """One paper/identifier pair whose mirror column does not line up."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: str
+    scheme: str
+    paper_id: str
+    mirror_value: Any = None
+    identifier_values: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
+class IdentifierMirrorOut(BaseModel):
+    """``GET /api/consistency/doi``: ``papers.doi``/``arxiv_id`` vs identifiers."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    checked_at: str
+    consistent: bool
+    papers_total: int = 0
+    papers_live: int = 0
+    mirrors_set: dict[str, int] = Field(default_factory=dict)
+    identifiers_total: dict[str, int] = Field(default_factory=dict)
+    drift_totals: dict[str, int] = Field(default_factory=dict)
+    drifts: list[MirrorDriftOut] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    truncated: bool = False

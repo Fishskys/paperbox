@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.security import require_read
 
-from app.schemas.consistency import ConsistencyOut
-from app.services import consistency_service
+from app.schemas.consistency import ConsistencyOut, IdentifierMirrorOut
+from app.services import consistency_service, identifier_mirror_audit
 
 # Read door (plan D2): the credential is checked per AUTH_READ_ACCESS; an open
 # door answers a caller without one as the anonymous reader.
@@ -57,3 +57,28 @@ def get_consistency(
     """Report every paper whose copies disagree across the three stores."""
     report = checker(limit=limit, with_parser_papers=parser_papers)
     return ConsistencyOut.model_validate(report.as_dict())
+
+def get_mirror_auditor() -> Callable[..., Any]:
+    """The mirror audit, as a dependency tests can swap out."""
+    return identifier_mirror_audit.audit_identifier_mirrors
+
+
+@router.get("/doi", response_model=IdentifierMirrorOut)
+def get_identifier_mirrors(
+    limit: int = Query(
+        50,
+        ge=1,
+        le=1000,
+        description="how many drift rows to list (totals are always exact)",
+    ),
+    auditor: Callable[..., Any] = Depends(get_mirror_auditor),
+) -> IdentifierMirrorOut:
+    """Read-only audit: are ``papers.doi``/``arxiv_id`` in step with ``paper_identifiers``?
+
+    The mirrors are maintained by the application, not the database, so this is a
+    watchdog, not a constraint: it reports any drift (mirror set without an
+    identifier, identifier without a mirror, a value that disagrees, duplicates,
+    or identifiers pointing at a deleted paper) and never writes or repairs.
+    """
+    report = auditor(limit=limit)
+    return IdentifierMirrorOut.model_validate(report.as_dict())
