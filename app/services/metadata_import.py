@@ -114,20 +114,59 @@ def detect_format(payload: Any) -> str:
     if isinstance(payload, Mapping):
         if isinstance(payload.get("articles"), (list, tuple)):
             return FORMAT_IEEE_RAW
+        if _looks_like_ieee_article(payload):
+            # A single IEEE Xplore article without its ``articles`` wrapper -- the
+            # shape `_replay_source` sees when it re-parses a stored
+            # ``paper_sources.raw``. Without this branch it fell through to
+            # ``generic``, which has no ``publication_title`` mapping and treats
+            # the nested author objects as one opaque value (2026-10-20: that lost
+            # the venue and stored the literal author name "authors").
+            return FORMAT_IEEE_RAW
         return FORMAT_GENERIC
     if isinstance(payload, (list, tuple)):
         for item in payload:
+            if isinstance(item, Mapping) and (isinstance(item.get("articles"), (list, tuple)) or _looks_like_ieee_article(item)):
+                return FORMAT_IEEE_RAW
             if isinstance(item, Mapping) and ("DOI" in item or "type" in item):
                 return FORMAT_CSL_JSON
         return FORMAT_GENERIC
     raise ValueError("unsupported metadata payload: expected an object or an array")
 
 
+#: Fields only the IEEE Xplore JSON carries. Two of them together is enough to
+#: tell a lone article apart from a generic record (which uses claim-shaped keys
+#: such as ``authors`` as a list of strings, ``identifier:doi`` ... ).
+_IEEE_MARKER_FIELDS: tuple[str, ...] = (
+    "publication_title",
+    "article_number",
+    "html_url",
+    "pdf_url",
+    "abstract_url",
+    "publication_number",
+    "is_number",
+    "citing_paper_count",
+)
+
+
+def _looks_like_ieee_article(record: Mapping[str, Any]) -> bool:
+    """True when ``record`` is one IEEE Xplore article object (unwrapped)."""
+    hits = sum(1 for field in _IEEE_MARKER_FIELDS if field in record)
+    return hits >= 2
+
+
 def records_from_payload(payload: Any) -> tuple[str, list[dict[str, Any]]]:
     """``(format, records)`` for a parsed JSON payload."""
     detected = detect_format(payload)
     if detected == FORMAT_IEEE_RAW:
-        raw_records = list(payload.get("articles") or [])
+        if isinstance(payload, Mapping):
+            if isinstance(payload.get("articles"), (list, tuple)):
+                raw_records = list(payload["articles"])
+            else:
+                # A lone IEEE article (no wrapper): it *is* the record.
+                raw_records = [dict(payload)]
+        else:
+            # A list of IEEE articles.
+            raw_records = list(payload)
     elif isinstance(payload, Mapping):
         raw_records = [dict(payload)]
     else:
@@ -342,8 +381,18 @@ def parse_ieee_record(record: Mapping[str, Any]) -> ParsedRecord:
 
 
 def _ieee_authors(record: Mapping[str, Any]) -> list[str]:
-    """``authors[].full_name`` in ``author_order``; affiliations are not stored."""
+    """``authors[].full_name`` in ``author_order``; affiliations are not stored.
+
+    Two shapes exist in the wild and both must work:
+      * ``"authors": [ {"full_name": ...}, ... ]``      (the documented shape)
+      * ``"authors": {"authors": [ {...}, ... ]}``      (what IEEE Xplore's own
+        JSON returns -- verified against the MXFP batch on 2026-10-20, where the
+        unwrapped dict made the parser read the *key* ``"authors"`` as a name)
+    """
     raw_authors = record.get("authors") or []
+    if isinstance(raw_authors, Mapping):
+        # Unwrap the extra ``{"authors": [...]}`` layer.
+        raw_authors = raw_authors.get("authors") or []
     if isinstance(raw_authors, str):
         return [part.strip() for part in raw_authors.split(";") if part.strip()]
     entries: list[tuple[int, str]] = []

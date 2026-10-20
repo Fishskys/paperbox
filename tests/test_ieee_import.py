@@ -211,6 +211,59 @@ def test_authors_are_sorted_by_author_order() -> None:
     assert parsed.authors == ["First Author", "Second Author"]
 
 
+def test_authors_wrapped_in_an_extra_authors_object_are_unwrapped() -> None:
+    """IEEE Xplore's own JSON nests ``authors -> {authors: [...]}``.
+
+    Without the unwrap the mapping iterated the dict and read its *key* as an
+    author name, which is how a paper ended up with a single author literally
+    called "authors" (2026-10-20).
+    """
+    record = dict(IEEE_SAMPLE["articles"][0])
+    record["authors"] = {
+        "authors": [
+            {"full_name": "Second Author", "author_order": 2},
+            {"full_name": "First Author", "author_order": 1},
+        ]
+    }
+
+    parsed = importer.parse_records({"articles": [record]})[0]
+
+    assert parsed.authors == ["First Author", "Second Author"]
+
+
+def test_a_lone_ieee_article_is_detected_and_parsed_as_ieee() -> None:
+    """A single article without the ``articles`` wrapper (a stored source.raw).
+
+    ``_replay_source`` re-parses one record at a time; treating it as generic
+    dropped ``publication_title`` (no venue) and mangled the authors.
+    """
+    article = IEEE_SAMPLE["articles"][0]
+
+    assert importer.detect_format(article) == importer.FORMAT_IEEE_RAW
+    assert importer.detect_format([article]) == importer.FORMAT_IEEE_RAW
+
+    parsed = importer.parse_records(article)[0]
+    assert parsed.format == importer.FORMAT_IEEE_RAW
+    assert parsed.values["venue"]["name"] == "IEEE Journal of Solid-State Circuits"
+    assert parsed.authors == ["Alice Smith", "Bob Jones"]
+
+
+def test_a_generic_record_is_still_generic() -> None:
+    """The IEEE detector must not swallow claim-shaped generic records."""
+    generic = {
+        "title": "T",
+        "authors": ["Alice", "Bob"],
+        "doi": "10.1/x",
+        "year": 2015,
+    }
+    assert importer.detect_format(generic) == importer.FORMAT_GENERIC
+    # A single marker field is not enough evidence.
+    assert (
+        importer.detect_format({"title": "T", "publication_title": "X"})
+        == importer.FORMAT_GENERIC
+    )
+
+
 def test_csl_json_is_parsed() -> None:
     parsed = importer.parse_records(
         [
