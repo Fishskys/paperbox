@@ -1,0 +1,30 @@
+[keywords]
+# "agent" is the runtime hostname on the current development host and is a
+# common domain term throughout this repository, so it is not a useful secret.
+disable = ["my_hostname"]
+
+[check]
+# Documentation and network-guard fixtures. Keep these exact so other private
+# or public addresses still block commits.
+ip_whitelist = [
+    "1.2.3.4",
+    "1.3.7.1",
+    "10.0.0.5",
+    "10.0.0.7",
+    "10.1.2.3",
+    "93.184.216.34",
+    "127.1.2.3",
+    "169.254.169.254",
+    "172.16.9.9",
+    "192.168.0.0",
+    "192.168.0.5",
+    "192.168.0.20",
+    "192.168.1.5",
+    "203.0.113.5",
+    "224.0.0.1",
+]
+whitelist_strings = [
+    "postgresql://user:pw@db",
+    "postgresql://postgres:pw@127.0.0.1/db",
+    "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/paperbox",
+]

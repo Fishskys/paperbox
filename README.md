@@ -38,6 +38,19 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 
 另开一个终端自检：`uv run python scripts/healthcheck.py`（六个依赖 + 应用 + 检索管道逐项检查，依赖就绪看 `degraded`），交互式接口文档在 <http://127.0.0.1:8077/docs>。
 
+### 提交前敏感信息检查
+
+项目使用 `iyp` 配合 pre-commit 检查暂存文件中的密钥、凭证和本机隐私信息。首次开发时安装工具并启用钩子：
+
+```bash
+uv tool install git+https://github.com/Fishskys/init_your_proj
+uv tool install pre-commit
+pre-commit install
+```
+
+手动检查当前暂存内容使用 `pre-commit run`；检查全部已跟踪文件使用 `iyp check --tracked .`。
+仓库根目录的 `iyp.toml` 是团队共享的误报策略，只白名单文档和网络防护测试中的固定样例。
+
 > **已有部署升级**：从旧版本升到当前版本请读 [升级指引](UPGRADING.md)——按顺序覆盖 schema 迁移、破坏性配置变更（如 API key 标识改 `prefix`）与检索索引换代。
 
 > 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pypdf 解析，> 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成

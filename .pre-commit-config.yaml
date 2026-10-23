@@ -1,0 +1,5 @@
+repos:
+  - repo: https://github.com/Fishskys/init_your_proj
+    rev: v0.2.0
+    hooks:
+      - id: iyp-check
