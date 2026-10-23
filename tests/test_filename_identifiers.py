@@ -46,6 +46,36 @@ def test_arxiv_id_is_taken_from_the_file_name(filename: str, expected: str) -> N
 
 
 @pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("10.1109_Name.2025.1234567.pdf", "10.1109/name.2025.1234567"),
+        ("10.1109_NAME.2025.1234567.PDF", "10.1109/name.2025.1234567"),
+        ("10.1145_suffix_with_underscores.pdf", "10.1145/suffix_with_underscores"),
+        ("/mnt/papers/10.1109_NoMeTDC.2013.6658237.pdf", "10.1109/nometdc.2013.6658237"),
+    ],
+)
+def test_doi_is_taken_from_a_strict_pdf_file_name(filename: str, expected: str) -> None:
+    assert metadata_service.doi_from_filename(filename) == expected
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        None,
+        "",
+        "10.1109_Name.2025.1234567.json",
+        "paper_10.1109_Name.2025.1234567.pdf",
+        "10.123_suffix.pdf",  # registrant is too short
+        "10.1109_.pdf",
+        "/tmp/10.1109_hidden/ordinary.pdf",  # directory names do not count
+        "../10.1109_suffix/not-the-doi.pdf",
+    ],
+)
+def test_non_doi_file_names_are_rejected(filename: str | None) -> None:
+    assert metadata_service.doi_from_filename(filename) is None
+
+
+@pytest.mark.parametrize(
     "filename",
     [
         "",

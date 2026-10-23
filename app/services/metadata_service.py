@@ -13,7 +13,7 @@ from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
 from app.parsing.pdf import EmbeddedMetadata, PageText
-from app.services.paper_service import normalize_arxiv_id
+from app.services.paper_service import normalize_arxiv_id, normalize_doi
 
 _ARXIV_IN_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/([A-Za-z0-9.\-/]+)", re.IGNORECASE)
 _ARXIV_LINE = re.compile(
@@ -513,6 +513,31 @@ def heuristic_claim_values(metadata: Mapping[str, object]) -> dict[str, object]:
 #: tail such as ``notes-2024.12345.pdf`` from being read as an identifier --
 #: and the lookarounds stop a match inside a longer digit run.
 ARXIV_ID_TOKEN = re.compile(r"(?<![\d.])(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?(?![\d.])")
+#: Strict corpus convention: ``10.<registrant>_<suffix>.pdf``. Only the first
+#: underscore separates the DOI prefix from its suffix; underscores inside the
+#: suffix are legitimate DOI characters and must survive unchanged.
+DOI_FILENAME = re.compile(
+    r"^(10\.\d{4,9})_(.+)\.pdf$",
+    re.IGNORECASE,
+)
+
+
+def doi_from_filename(filename: str | None) -> str | None:
+    """Return the DOI encoded by a strict PDF file name, or ``None``.
+
+    Directory components never participate. A loose ``10.x`` token elsewhere in
+    a descriptive name is intentionally ignored: file names are weak evidence,
+    so only the repository's complete ``prefix_suffix.pdf`` convention is safe.
+    """
+    if not filename:
+        return None
+    match = DOI_FILENAME.fullmatch(Path(filename).name)
+    if match is None:
+        return None
+    suffix = match.group(2).strip()
+    if not suffix or "/" in suffix or "\\" in suffix:
+        return None
+    return normalize_doi(f"{match.group(1)}/{suffix}")
 
 
 def arxiv_id_from_filename(filename: str | None) -> str | None:
@@ -588,6 +613,7 @@ def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:
 __all__ = [
     "arxiv_id_from_text",
     "arxiv_id_from_url",
+    "doi_from_filename",
     "detect_abstract",
     "detect_authors",
     "detect_doi",
