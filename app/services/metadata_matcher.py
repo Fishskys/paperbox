@@ -51,7 +51,6 @@ MATCH_STATUSES: tuple[str, ...] = (
 METHOD_DOI = "doi"
 METHOD_ARXIV = "arxiv"
 METHOD_IEEE_ARTICLE_NUMBER = "ieee_article_number"
-METHOD_ISSN = "issn"
 METHOD_SHA256 = "sha256"
 METHOD_TITLE_YEAR_AUTHOR = "title_year_author"
 METHOD_TITLE = "title"
@@ -69,7 +68,6 @@ _MATCH_SCHEMES: tuple[tuple[str, str], ...] = (
     (ids.SCHEME_DOI, METHOD_DOI),
     (ids.SCHEME_ARXIV, METHOD_ARXIV),
     (ids.SCHEME_IEEE_ARTICLE_NUMBER, METHOD_IEEE_ARTICLE_NUMBER),
-    (ids.SCHEME_ISSN, METHOD_ISSN),
 )
 
 #: Max number of ``paper_id IN (...)`` values per exact-title lookup (kept small so
@@ -440,7 +438,6 @@ __all__ = [
     "METHOD_DOI",
     "METHOD_FILENAME",
     "METHOD_IEEE_ARTICLE_NUMBER",
-    "METHOD_ISSN",
     "METHOD_MANUAL",
     "METHOD_SHA256",
     "METHOD_TITLE",

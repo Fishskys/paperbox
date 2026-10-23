@@ -95,6 +95,24 @@ def test_ieee_article_number_matches(db_session) -> None:
     assert result.matched and result.method == matcher.METHOD_IEEE_ARTICLE_NUMBER
 
 
+def test_issn_does_not_identify_an_individual_paper(db_session) -> None:
+    paper = make_paper(db_session)
+    ids.upsert_identifier(
+        db_session,
+        paper_id=paper.id,
+        scheme=ids.SCHEME_ISSN,
+        value="0018-9200",
+    )
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(identifiers={ids.SCHEME_ISSN: "0018-9200"}),
+    )
+
+    assert result.status == matcher.STATUS_UNMATCHED
+    assert result.paper is None
+
+
 def test_doi_wins_over_arxiv_when_both_are_present(db_session) -> None:
     doi_paper = make_paper(db_session, title="DOI paper")
     arxiv_paper = make_paper(db_session, title="arXiv paper")

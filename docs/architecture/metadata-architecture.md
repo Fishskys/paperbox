@@ -192,7 +192,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 | 步 | 依据 | 置信度 | 结果 |
 |---|---|---|---|
-| 1 | `scheme + normalized_value` 命中 `paper_identifiers` | 1.0 | 自动 `matched` |
+| 1 | 论文级 `scheme + normalized_value`（DOI / arXiv / IEEE article number）命中 `paper_identifiers`；ISSN 不参与论文身份匹配 | 1.0 | 自动 `matched` |
 | 2 | `paper_files.sha256` 命中 | 1.0 | 自动 `matched` |
 | 3 | 规范化标题 + 首作者 + 年份（三者全中） | 0.8 | 自动 `matched` |
 | 4 | 仅标题命中 | 0.5 | `ambiguous`（进复核清单，**不自动挂**） |
