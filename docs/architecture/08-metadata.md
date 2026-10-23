@@ -276,12 +276,14 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 |---|---|---|---|
 | 1 | `paper_identifiers`，按 `doi > arxiv > ieee_article_number` 顺序探测（`_MATCH_SCHEMES`）；ISSN 是刊物标识，不参与论文身份匹配 | 1.0 | `matched`，method 同名（`METHOD_*`） |
 | 2 | `paper_files.sha256` | 1.0 | `matched`，`sha256` |
-| 3 | 规范化标题 + 首作者 + 年份三者全中 | 0.8 | `matched`，`title_year_author` |
-| 4 | 仅标题命中（候选 = 规范化标题的**每个词**都 AND 命中，再 Python 精确等值；不设 200 上限/最长词截断） | 0.5 | **`ambiguous`**，不自动挂 |
-| 5 | 文件名归一化相等 | 0.5 | `ambiguous` |
+| 3 | 严格文件名 DOI + 规范化标题一致，且候选唯一 | 0.95 | `matched`，`filename_doi_title`；并列则 `ambiguous` |
+| 4 | 严格 DOI 文件名中出现输入 IEEE article number + 规范化标题一致，且候选唯一 | 0.9 | `matched`，`filename_ieee_article_number_title`；并列则 `ambiguous` |
+| 5 | 规范化标题 + 首作者 + 年份三者全中 | 0.8 | `matched`，`title_year_author` |
+| 6 | 仅标题命中（候选 = 规范化标题的**每个词**都 AND 命中，再 Python 精确等值；不设 200 上限/最长词截断） | 0.5 | **`ambiguous`**，不自动挂 |
+| 7 | 文件名归一化相等 | 0.5 | `ambiguous` |
 | — | 都没有 | — | `unmatched` → 导入侧建壳 |
 
-每步都跳过 `exclude_paper_id`（摄取时传本次新建的论文，绝不匹配自己）。`pending` 不是匹配器的输出，而是 `paper_sources.match_status` 的列默认值。
+文件名 DOI 只接受完整 `10.<4-9位注册号>_<后缀>.pdf`，只把第一个 `_` 还原为 `/`；目录名和描述性文件名中的 DOI token 不参与。每步都跳过 `exclude_paper_id`（摄取时传本次新建的论文，绝不匹配自己）。`pending` 不是匹配器的输出，而是 `paper_sources.match_status` 的列默认值。
 
 ### 4.5 摄取链：PDF → 归属哪篇论文 → 主版本 → 元数据回填
 

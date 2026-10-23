@@ -21,8 +21,10 @@ it as unmatched.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import PurePath
 from typing import Any
 
 from sqlalchemy import func, select
@@ -31,6 +33,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import Paper, PaperFile, new_uuid
 from app.services import metadata_identifiers as ids
+from app.services import metadata_service
 from app.services import paper_service
 
 logger = get_logger(__name__)
@@ -52,6 +55,8 @@ METHOD_DOI = "doi"
 METHOD_ARXIV = "arxiv"
 METHOD_IEEE_ARTICLE_NUMBER = "ieee_article_number"
 METHOD_SHA256 = "sha256"
+METHOD_FILENAME_DOI_TITLE = "filename_doi_title"
+METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE = "filename_ieee_article_number_title"
 METHOD_TITLE_YEAR_AUTHOR = "title_year_author"
 METHOD_TITLE = "title"
 METHOD_FILENAME = "filename"
@@ -59,6 +64,8 @@ METHOD_MANUAL = "manual"
 
 CONFIDENCE_IDENTIFIER = 1.0
 CONFIDENCE_SHA256 = 1.0
+CONFIDENCE_FILENAME_DOI_TITLE = 0.95
+CONFIDENCE_FILENAME_IEEE_ARTICLE_NUMBER_TITLE = 0.9
 CONFIDENCE_TITLE_YEAR_AUTHOR = 0.8
 CONFIDENCE_TITLE_ONLY = 0.5
 CONFIDENCE_FILENAME = 0.5
@@ -173,6 +180,108 @@ def find_by_sha256(session: Session, sha256: str | None) -> Paper | None:
     if len(digest) != 64:
         return None
     return paper_service.find_by_sha256(session, digest)
+
+
+def _papers_by_ids(session: Session, paper_ids: Sequence[str]) -> list[Paper]:
+    """Load live papers in ``paper_ids`` order, de-duplicated."""
+    ordered_ids = list(dict.fromkeys(str(item) for item in paper_ids if item))
+    if not ordered_ids:
+        return []
+    rows = session.execute(
+        select(Paper).where(Paper.id.in_(ordered_ids), Paper.deleted_at.is_(None))
+    ).scalars()
+    by_id = {paper.id: paper for paper in rows}
+    return [by_id[paper_id] for paper_id in ordered_ids if paper_id in by_id]
+
+
+def find_by_filename_identifier(
+    session: Session, *, scheme: str, value: str | None
+) -> list[Paper]:
+    """Papers whose live PDF filename carries ``scheme:value``.
+
+    DOI filenames use the strict complete-name convention parsed by
+    :func:`metadata_service.doi_from_filename`. IEEE article numbers are only
+    accepted as a standalone digit token inside such a DOI filename; the number
+    comes from the external record and is never inferred as metadata from a DOI.
+    """
+    normalized = ids.normalize_identifier(scheme, value)
+    if not normalized:
+        return []
+
+    statement = (
+        select(Paper.id, PaperFile.filename)
+        .join(PaperFile, PaperFile.paper_id == Paper.id)
+        .where(Paper.deleted_at.is_(None), PaperFile.deleted_at.is_(None))
+    )
+    if scheme == ids.SCHEME_DOI:
+        expected = f"{normalized.replace('/', '_', 1)}.pdf".casefold()
+        statement = statement.where(func.lower(PaperFile.filename) == expected)
+        rows = session.execute(statement).all()
+        matched_ids = [
+            str(paper_id)
+            for paper_id, filename in rows
+            if metadata_service.doi_from_filename(filename) == normalized
+        ]
+        return _papers_by_ids(session, matched_ids)
+
+    if scheme == ids.SCHEME_IEEE_ARTICLE_NUMBER:
+        statement = statement.where(PaperFile.filename.contains(normalized))
+        rows = session.execute(statement).all()
+        token = re.compile(rf"(?<!\d){re.escape(normalized)}(?!\d)")
+        matched_ids = [
+            str(paper_id)
+            for paper_id, filename in rows
+            if metadata_service.doi_from_filename(filename)
+            and token.search(PurePath(filename).stem)
+        ]
+        return _papers_by_ids(session, matched_ids)
+    return []
+
+
+def find_by_filename_identity_and_title(
+    session: Session, match_input: MatchInput
+) -> tuple[list[Paper], str | None, float | None, list[dict[str, Any]]]:
+    """Strongest filename identity supported by an exact normalized title."""
+    wanted_title = paper_service.normalize_text(match_input.title)
+    if not wanted_title:
+        return [], None, None, []
+    normalized = match_input.normalized_identifiers()
+    probes = (
+        (
+            ids.SCHEME_DOI,
+            METHOD_FILENAME_DOI_TITLE,
+            CONFIDENCE_FILENAME_DOI_TITLE,
+        ),
+        (
+            ids.SCHEME_IEEE_ARTICLE_NUMBER,
+            METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE,
+            CONFIDENCE_FILENAME_IEEE_ARTICLE_NUMBER_TITLE,
+        ),
+    )
+    for scheme, method, confidence in probes:
+        value = normalized.get(scheme)
+        if not value:
+            continue
+        papers = find_by_filename_identifier(session, scheme=scheme, value=value)
+        candidates = [
+            paper
+            for paper in papers
+            if paper_service.normalize_text(paper.title) == wanted_title
+        ]
+        if not candidates:
+            continue
+        details = [
+            {
+                "paper_id": paper.id,
+                "title": paper.title,
+                "confidence": confidence,
+                "title_match": True,
+                "filename_identifier_matches": [scheme],
+            }
+            for paper in candidates
+        ]
+        return candidates, method, confidence, details
+    return [], None, None, []
 
 
 def title_candidates(session: Session, title: str | None) -> list[Paper]:
@@ -332,6 +441,33 @@ def match_record(
             reason="identical file content",
         )
 
+    filename_identity, method, confidence, candidates = find_by_filename_identity_and_title(
+        session, match_input
+    )
+    filename_identity = [
+        paper for paper in filename_identity if paper.id != exclude_paper_id
+    ]
+    candidates = [
+        item for item in candidates if item.get("paper_id") != exclude_paper_id
+    ]
+    if len(filename_identity) == 1:
+        return MatchResult(
+            status=STATUS_MATCHED,
+            method=method,
+            confidence=confidence,
+            paper=filename_identity[0],
+            candidates=candidates,
+            reason="filename identifier + normalized title",
+        )
+    if filename_identity:
+        return MatchResult(
+            status=STATUS_AMBIGUOUS,
+            method=method,
+            confidence=confidence,
+            candidates=candidates,
+            reason="multiple papers share filename identifier + normalized title",
+        )
+
     paper, confidence, reason, candidates = find_by_title(
         session,
         title=match_input.title,
@@ -429,6 +565,8 @@ def shell_paper_id() -> str:
 
 __all__ = [
     "CONFIDENCE_FILENAME",
+    "CONFIDENCE_FILENAME_DOI_TITLE",
+    "CONFIDENCE_FILENAME_IEEE_ARTICLE_NUMBER_TITLE",
     "CONFIDENCE_IDENTIFIER",
     "CONFIDENCE_SHA256",
     "CONFIDENCE_TITLE_ONLY",
@@ -437,6 +575,8 @@ __all__ = [
     "METHOD_ARXIV",
     "METHOD_DOI",
     "METHOD_FILENAME",
+    "METHOD_FILENAME_DOI_TITLE",
+    "METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE",
     "METHOD_IEEE_ARTICLE_NUMBER",
     "METHOD_MANUAL",
     "METHOD_SHA256",
@@ -450,6 +590,8 @@ __all__ = [
     "MatchInput",
     "MatchResult",
     "find_by_filename",
+    "find_by_filename_identifier",
+    "find_by_filename_identity_and_title",
     "find_by_identifier",
     "find_by_sha256",
     "find_by_title",

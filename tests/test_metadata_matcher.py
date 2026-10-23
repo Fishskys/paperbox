@@ -155,6 +155,92 @@ def test_sha256_matches_an_already_stored_file(db_session) -> None:
     assert result.matched and result.method == matcher.METHOD_SHA256
 
 
+def test_filename_doi_and_title_match_a_unique_paper(db_session) -> None:
+    paper = make_paper(db_session)
+    attach_file(
+        db_session,
+        paper,
+        filename="10.1109_JSSC.2020.1234567.pdf",
+    )
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1109/jssc.2020.1234567"},
+            title="Low Power SRAM Leakage Reduction",
+        ),
+    )
+
+    assert result.matched
+    assert result.method == matcher.METHOD_FILENAME_DOI_TITLE
+    assert result.confidence == 0.95
+    assert result.paper_id == paper.id
+
+
+def test_filename_doi_without_a_matching_title_does_not_attach(db_session) -> None:
+    paper = make_paper(db_session, title="A Different Publication")
+    attach_file(
+        db_session,
+        paper,
+        filename="10.1109_JSSC.2020.1234567.pdf",
+    )
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1109/jssc.2020.1234567"},
+            title="Low Power SRAM Leakage Reduction",
+        ),
+    )
+
+    assert result.status == matcher.STATUS_UNMATCHED
+
+
+def test_duplicate_filename_doi_and_title_candidates_are_ambiguous(db_session) -> None:
+    first = make_paper(db_session)
+    second = make_paper(db_session)
+    for paper in (first, second):
+        attach_file(
+            db_session,
+            paper,
+            filename="10.1109_JSSC.2020.1234567.pdf",
+        )
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1109/jssc.2020.1234567"},
+            title="Low Power SRAM Leakage Reduction",
+        ),
+    )
+
+    assert result.status == matcher.STATUS_AMBIGUOUS
+    assert result.method == matcher.METHOD_FILENAME_DOI_TITLE
+    assert {item["paper_id"] for item in result.candidates} == {first.id, second.id}
+
+
+def test_filename_article_number_and_title_match_a_unique_paper(db_session) -> None:
+    paper = make_paper(db_session)
+    attach_file(
+        db_session,
+        paper,
+        filename="10.1109_JSSC.2020.7065247.pdf",
+    )
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_IEEE_ARTICLE_NUMBER: "7065247"},
+            title="Low Power SRAM Leakage Reduction",
+        ),
+    )
+
+    assert result.matched
+    assert result.method == matcher.METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE
+    assert result.confidence == 0.9
+    assert result.paper_id == paper.id
+
+
 def test_a_short_digest_is_not_a_sha256(db_session) -> None:
     paper = make_paper(db_session)
     attach_file(db_session, paper, sha256="a" * 64)

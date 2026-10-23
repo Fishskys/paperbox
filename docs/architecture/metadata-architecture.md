@@ -194,10 +194,12 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 |---|---|---|---|
 | 1 | 论文级 `scheme + normalized_value`（DOI / arXiv / IEEE article number）命中 `paper_identifiers`；ISSN 不参与论文身份匹配 | 1.0 | 自动 `matched` |
 | 2 | `paper_files.sha256` 命中 | 1.0 | 自动 `matched` |
-| 3 | 规范化标题 + 首作者 + 年份（三者全中） | 0.8 | 自动 `matched` |
-| 4 | 仅标题命中 | 0.5 | `ambiguous`（进复核清单，**不自动挂**） |
-| 5 | 文件名归一化相等 | 0.5 | `ambiguous` |
-| 6 | 都没有 | — | 建**壳论文**（`AWAITING_FILE`）或记为 `unmatched`（`dry_run` 时只报告） |
+| 3 | 严格文件名 DOI + 规范化标题一致，且候选唯一 | 0.95 | 自动 `matched`；并列则 `ambiguous` |
+| 4 | DOI 文件名中的输入 IEEE article number + 规范化标题一致，且候选唯一 | 0.9 | 自动 `matched`；并列则 `ambiguous` |
+| 5 | 规范化标题 + 首作者 + 年份（三者全中） | 0.8 | 自动 `matched` |
+| 6 | 仅标题命中 | 0.5 | `ambiguous`（进复核清单，**不自动挂**） |
+| 7 | 文件名归一化相等 | 0.5 | `ambiguous` |
+| 8 | 都没有 | — | 建**壳论文**（`AWAITING_FILE`）或记为 `unmatched`（`dry_run` 时只报告） |
 
 复核与人工：`GET /api/metadata/review`（pending/ambiguous 来源 + 冲突字段）、`POST /api/metadata/sources/{id}/attach`（人工归属）。
 
