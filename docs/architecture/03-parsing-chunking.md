@@ -117,7 +117,7 @@
 | `detect_year` / `_year_from_arxiv_id` | arXiv 优先；否则首页 2 页最高频年份（同频取大年份） |
 | `detect_doi` | 前 2 页内首个 DOI 形态 token（第 1 页优先），去尾 `.;` |
 | `doi_from_filename` / `arxiv_id_from_filename` | 层 3 文件名标识符解析；DOI 只接受完整 `10.<4-9位注册号>_<后缀>.pdf`，仅首个 `_` 还原为 `/`，目录名不参与 |
-| `heuristic_claim_values` / `embedded_claim_values` | 转成合并引擎吃的 `{provenance field: value}` |
+| `heuristic_claim_values` / `embedded_claim_values` / `filename_claim_values` | 转成合并引擎吃的 `{provenance field: value}`；文件名层只提供 DOI/arXiv identifier，属于弱来源、只填空 |
 | `_backfill_metadata` | 层 1 → 层 2 顺序写 claim |
 | `_placeholder_title` / `_reset_placeholder_title` / `_restore_placeholder_title` | 文件名占位标题的清除与兜底 |
 | `classify_failure` | 异常 → `error_code`；两个解析码（`DoclingUnavailable`→`PARSE_BACKEND_UNAVAILABLE`、`DoclingFailed`→`PARSE_FAILED`）只在「明确要求 docling 且不许降级」时出现 |

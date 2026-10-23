@@ -98,6 +98,9 @@ def test_file_name_claims_only_ever_carry_the_identifier() -> None:
         "identifier:arxiv": "1706.03762"
     }
     assert metadata_service.filename_claim_values("low_power_sram.pdf") == {}
+    assert metadata_service.filename_claim_values(
+        "10.1109_NoMeTDC.2013.6658237.pdf"
+    ) == {"identifier:doi": "10.1109/nometdc.2013.6658237"}
 
 
 # --------------------------------------------------------------------------- #
@@ -124,6 +127,41 @@ def test_a_file_name_claim_fills_a_blank_identifier(db_session: Session) -> None
     assert paper.arxiv_id == "2105.11453"
     rows = db_session.query(PaperIdentifier).filter_by(paper_id=paper.id, scheme="arxiv").all()
     assert [row.normalized_value for row in rows] == ["2105.11453"]
+
+
+def test_a_file_name_doi_fills_a_blank_identifier(db_session: Session) -> None:
+    paper = _paper(db_session)
+    source = _source(db_session, paper, metadata_sources.SOURCE_TYPE_FILENAME)
+
+    report = metadata_merge.merge_values(
+        db_session,
+        paper,
+        metadata_service.filename_claim_values("10.1109_Name.2025.1234567.pdf"),
+        source_type=metadata_sources.SOURCE_TYPE_FILENAME,
+        source_id=source.id,
+        confidence=0.4,
+    )
+
+    assert [decision.field for decision in report.decisions] == ["identifier:doi"]
+    assert paper.doi == "10.1109/name.2025.1234567"
+
+
+def test_backfill_records_a_doi_file_name_source(factory) -> None:  # noqa: ANN001
+    session = factory()
+    paper = _paper(session)
+
+    tasks._backfill_metadata(
+        session,
+        paper,
+        [],
+        None,
+        filename="10.1109_Name.2025.1234567.pdf",
+    )
+
+    assert paper.doi == "10.1109/name.2025.1234567"
+    source = session.query(PaperSource).filter_by(paper_id=paper.id).one()
+    assert source.source_type == metadata_sources.SOURCE_TYPE_FILENAME
+    assert source.raw["identifier:doi"] == "10.1109/name.2025.1234567"
 
 
 def test_a_structured_source_overrides_a_file_name_claim(db_session: Session) -> None:

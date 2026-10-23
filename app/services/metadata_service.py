@@ -563,8 +563,14 @@ def filename_claim_values(filename: str | None) -> dict[str, object]:
     Only the identifier: titles, authors and years come from the document
     itself (layers 1 and 2), never from whatever the file happens to be called.
     """
+    values: dict[str, object] = {}
+    doi = doi_from_filename(filename)
+    if doi:
+        values["identifier:doi"] = doi
     arxiv_id = arxiv_id_from_filename(filename)
-    return {"identifier:arxiv": arxiv_id} if arxiv_id else {}
+    if arxiv_id:
+        values["identifier:arxiv"] = arxiv_id
+    return values
 
 
 def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:
@@ -613,6 +619,7 @@ def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:
 __all__ = [
     "arxiv_id_from_text",
     "arxiv_id_from_url",
+    "arxiv_id_from_filename",
     "doi_from_filename",
     "detect_abstract",
     "detect_authors",
@@ -621,5 +628,6 @@ __all__ = [
     "detect_year",
     "embedded_claim_values",
     "extract_metadata",
+    "filename_claim_values",
     "heuristic_claim_values",
 ]

@@ -73,21 +73,25 @@ class ReextractResult:
         return bool(self.changes)
 
 
-def _may_offer_arxiv_id(session: Session, paper: Paper, arxiv_id: str) -> bool:
-    """Whether layer 3 may offer the arXiv id its file name carries.
+def _may_offer_identifier(
+    session: Session, paper: Paper, scheme: str, value: str
+) -> bool:
+    """Whether layer 3 may offer the identifier its file name carries.
 
     Two ways the answer is no: the paper already knows an arXiv id (as a claim or
     as the mirror column), or the id already belongs to another paper. This guard
     has always protected the ingest pipeline; re-extraction keeps it so a name can
     never second-guess a document or a human.
     """
-    if provenance_service.current_claim(session, paper.id, "identifier:arxiv"):
+    field = f"identifier:{scheme}"
+    if provenance_service.current_claim(session, paper.id, field):
         return False
-    if (paper.arxiv_id or "").strip():
+    mirror = paper.doi if scheme == metadata_identifiers.SCHEME_DOI else paper.arxiv_id
+    if (mirror or "").strip():
         return False
     return (
         metadata_identifiers.find_identifier(
-            session, metadata_identifiers.SCHEME_ARXIV, arxiv_id
+            session, scheme, value
         )
         is None
     )
@@ -152,16 +156,21 @@ def reextract_paper_metadata(
 
     if filename:
         filename_values = metadata_service.filename_claim_values(filename)
-        guessed = str(filename_values.get("identifier:arxiv") or "")
-        if guessed and _may_offer_arxiv_id(session, paper, guessed):
+        accepted: dict[str, object] = {}
+        for field, raw_value in filename_values.items():
+            scheme = field.split(":", 1)[1]
+            value = str(raw_value or "")
+            if value and _may_offer_identifier(session, paper, scheme, value):
+                accepted[field] = raw_value
+        if accepted:
             _merge_layer(
                 session,
                 paper,
                 result,
-                filename_values,
+                accepted,
                 source_type=metadata_sources.SOURCE_TYPE_FILENAME,
                 source_ref=metadata_sources.paper_filename_ref(paper.id),
-                raw={"filename": filename, **filename_values},
+                raw={"filename": filename, **accepted},
                 match_method="filename",
                 confidence=FILENAME_MATCH_CONFIDENCE,
                 dry_run=dry_run,

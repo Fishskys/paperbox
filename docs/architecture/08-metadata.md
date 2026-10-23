@@ -287,6 +287,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 文件名 DOI 只接受完整 `10.<4-9位注册号>_<后缀>.pdf`，只把第一个 `_` 还原为 `/`；目录名和描述性文件名中的 DOI token 不参与。每步都跳过 `exclude_paper_id`（摄取时传本次新建的论文，绝不匹配自己）。`pending` 不是匹配器的输出，而是 `paper_sources.match_status` 的列默认值。
 
+摄取与重新提取会把严格文件名中的 DOI/arXiv 登记为 `source_type='filename'` 的弱声明：只在论文尚无该 scheme 且值未被其他论文占用时填空，不能覆盖文档内嵌、结构化导入或人工值；IEEE article number 不从 DOI 尾部推导。
+
 ### 4.5 摄取链：PDF → 归属哪篇论文 → 主版本 → 元数据回填
 
 1. `_run_pipeline`（`tasks.py`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`。
