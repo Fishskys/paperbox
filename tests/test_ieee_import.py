@@ -9,7 +9,7 @@ citation counts, license).
 
 from __future__ import annotations
 
-from app.db.models import Paper, PaperSource, Venue, VenueEdition
+from app.db.models import Paper, PaperFile, PaperSource, Venue, VenueEdition
 from app.services import metadata_identifiers as ids
 from app.services import metadata_import as importer
 from app.services import metadata_merge as merge
@@ -88,7 +88,35 @@ def make_paper(session, **overrides) -> Paper:
 
 def paper_with_doi(session, **overrides) -> Paper:
     paper = make_paper(session, **overrides)
-    ids.upsert_identifier(session, paper_id=paper.id, scheme=ids.SCHEME_DOI, value=DOI)
+    source = sources.upsert_source(
+        session,
+        source_type=sources.SOURCE_TYPE_PDF_EMBEDDED,
+        source_ref=sources.paper_embedded_ref(paper.id),
+        raw={},
+        paper_id=paper.id,
+        match_status=sources.MATCH_STATUS_MATCHED,
+    )
+    ids.upsert_identifier(
+        session,
+        paper_id=paper.id,
+        scheme=ids.SCHEME_DOI,
+        value=DOI,
+        first_source_id=source.id,
+    )
+    session.add(
+        PaperFile(
+            id=paper_service.new_uuid(),
+            paper_id=paper.id,
+            kind="original",
+            object_key=f"papers/{paper.id}/original.pdf",
+            bucket="paperbox",
+            filename="10.1109_JSSC.2015.2441234.pdf",
+            content_type="application/pdf",
+            size_bytes=10,
+            is_primary=True,
+        )
+    )
+    session.flush()
     ids.refresh_primary(session, paper.id)
     return paper
 
@@ -337,7 +365,12 @@ def test_dry_run_writes_nothing_but_reports_the_match(db_session) -> None:
     assert report.sources[0]["paper_id"] == paper.id
     assert report.sources[0]["match_method"] == "doi"
     assert (paper.title, paper.volume, paper.issue) == before
-    assert db_session.query(PaperSource).count() == 0
+    assert (
+        db_session.query(PaperSource)
+        .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+        .count()
+        == 0
+    )
     assert db_session.query(Venue).count() == 0
 
 
@@ -479,7 +512,12 @@ def test_re_importing_the_same_record_changes_nothing(db_session) -> None:
     assert first.matched == 1
     assert second.unchanged == 1
     assert second.matched == 0
-    assert db_session.query(PaperSource).count() == 1
+    assert (
+        db_session.query(PaperSource)
+        .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+        .count()
+        == 1
+    )
     assert db_session.query(Venue).count() == 1
     assert db_session.query(Paper).count() == 1
 
@@ -568,7 +606,11 @@ def test_reimport_after_soft_delete_repoints_the_record(db_session) -> None:
 
     assert again.unchanged == 0
     assert again.matched == 1
-    rows = db_session.query(PaperSource).all()
+    rows = (
+        db_session.query(PaperSource)
+        .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+        .all()
+    )
     assert len(rows) == 1, "the re-import must re-point, not create a second row"
     assert rows[0].paper_id == replacement.id
 

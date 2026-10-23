@@ -383,8 +383,20 @@ def test_a_second_version_joins_the_indexed_paper(db_session, monkeypatch) -> No
         kind=paper_service.FILE_KIND_PUBLISHED_PDF,
     )
     paper_service.apply_primary_selection(db_session, existing, incoming=published)
+    embedded_source = metadata_sources.upsert_source(
+        db_session,
+        source_type=metadata_sources.SOURCE_TYPE_PDF_EMBEDDED,
+        source_ref=metadata_sources.paper_embedded_ref(existing.id),
+        raw={"doi": DOI},
+        paper_id=existing.id,
+        match_status=metadata_sources.MATCH_STATUS_MATCHED,
+    )
     ids.upsert_identifier(
-        db_session, paper_id=existing.id, scheme=ids.SCHEME_DOI, value=DOI
+        db_session,
+        paper_id=existing.id,
+        scheme=ids.SCHEME_DOI,
+        value=DOI,
+        first_source_id=embedded_source.id,
     )
     ids.refresh_primary(db_session, existing.id)
 

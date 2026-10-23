@@ -323,7 +323,7 @@ def test_cli_import_matches_an_existing_paper(
     try:
         paper = Paper(
             id=paper_service.new_uuid(),
-            title="Placeholder",
+            title="A 0.6 V Low Power SRAM with Leakage Reduction",
             fingerprint=f"sha256:{paper_service.new_uuid()}",
             status="INDEXED",
         )

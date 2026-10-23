@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.db.models import Paper, PaperFile, new_uuid
+from app.db.models import Paper, PaperFile, PaperSource, new_uuid
 from app.services import metadata_identifiers as ids
 from app.services import metadata_matcher as matcher
 from app.services import paper_service
@@ -48,10 +48,37 @@ def attach_file(session, paper, sha256=None, filename="original.pdf") -> PaperFi
     return record
 
 
+def attach_identifier(
+    session,
+    paper,
+    scheme,
+    value,
+    *,
+    source_type="import_file",
+):
+    source = PaperSource(
+        id=new_uuid(),
+        paper_id=paper.id,
+        source_type=source_type,
+        source_ref=f"{scheme}:{value}:{new_uuid()}",
+        raw={},
+        match_status="matched",
+    )
+    session.add(source)
+    session.flush()
+    return ids.upsert_identifier(
+        session,
+        paper_id=paper.id,
+        scheme=scheme,
+        value=value,
+        first_source_id=source.id,
+    )
+
+
 def test_doi_identifier_matches_with_full_confidence(db_session) -> None:
     paper = make_paper(db_session)
-    ids.upsert_identifier(
-        db_session, paper_id=paper.id, scheme=ids.SCHEME_DOI, value="10.1109/JSSC.2020.1234567"
+    attach_identifier(
+        db_session, paper, ids.SCHEME_DOI, "10.1109/JSSC.2020.1234567"
     )
 
     result = matcher.match_record(
@@ -67,8 +94,8 @@ def test_doi_identifier_matches_with_full_confidence(db_session) -> None:
 
 def test_arxiv_identifier_matches(db_session) -> None:
     paper = make_paper(db_session)
-    ids.upsert_identifier(
-        db_session, paper_id=paper.id, scheme=ids.SCHEME_ARXIV, value="1710.07153"
+    attach_identifier(
+        db_session, paper, ids.SCHEME_ARXIV, "1710.07153"
     )
 
     result = matcher.match_record(
@@ -80,11 +107,11 @@ def test_arxiv_identifier_matches(db_session) -> None:
 
 def test_ieee_article_number_matches(db_session) -> None:
     paper = make_paper(db_session)
-    ids.upsert_identifier(
+    attach_identifier(
         db_session,
-        paper_id=paper.id,
-        scheme=ids.SCHEME_IEEE_ARTICLE_NUMBER,
-        value="7065247",
+        paper,
+        ids.SCHEME_IEEE_ARTICLE_NUMBER,
+        "7065247",
     )
 
     result = matcher.match_record(
@@ -115,12 +142,11 @@ def test_issn_does_not_identify_an_individual_paper(db_session) -> None:
 
 def test_doi_wins_over_arxiv_when_both_are_present(db_session) -> None:
     doi_paper = make_paper(db_session, title="DOI paper")
-    arxiv_paper = make_paper(db_session, title="arXiv paper")
-    ids.upsert_identifier(
-        db_session, paper_id=doi_paper.id, scheme=ids.SCHEME_DOI, value="10.1/x"
+    attach_identifier(
+        db_session, doi_paper, ids.SCHEME_DOI, "10.1/x"
     )
-    ids.upsert_identifier(
-        db_session, paper_id=arxiv_paper.id, scheme=ids.SCHEME_ARXIV, value="1710.07153"
+    attach_identifier(
+        db_session, doi_paper, ids.SCHEME_ARXIV, "1710.07153"
     )
 
     result = matcher.match_record(
@@ -130,6 +156,108 @@ def test_doi_wins_over_arxiv_when_both_are_present(db_session) -> None:
 
     assert result.paper_id == doi_paper.id
     assert result.method == matcher.METHOD_DOI
+
+
+def test_identifiers_pointing_to_different_papers_are_ambiguous(db_session) -> None:
+    doi_paper = make_paper(db_session, title="DOI paper")
+    arxiv_paper = make_paper(db_session, title="arXiv paper")
+    attach_identifier(db_session, doi_paper, ids.SCHEME_DOI, "10.1/x")
+    attach_identifier(db_session, arxiv_paper, ids.SCHEME_ARXIV, "1710.07153")
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_ARXIV: "1710.07153", ids.SCHEME_DOI: "10.1/x"}
+        ),
+    )
+
+    assert result.status == matcher.STATUS_AMBIGUOUS
+    assert result.method == matcher.METHOD_IDENTIFIER_CONFLICT
+    assert {item["paper_id"] for item in result.candidates} == {
+        doi_paper.id,
+        arxiv_paper.id,
+    }
+
+
+def test_weak_identifier_needs_title_or_filename_support(db_session) -> None:
+    paper = make_paper(db_session, title="Stored title")
+    attach_identifier(
+        db_session,
+        paper,
+        ids.SCHEME_DOI,
+        "10.1/weak",
+        source_type="pdf_heuristic",
+    )
+
+    unsupported = matcher.match_record(
+        db_session,
+        matcher.MatchInput(identifiers={ids.SCHEME_DOI: "10.1/weak"}),
+    )
+    supported = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1/weak"},
+            title="Stored title",
+        ),
+    )
+
+    assert unsupported.status == matcher.STATUS_AMBIGUOUS
+    assert "lacks title or filename support" in unsupported.reason
+    assert supported.matched
+    assert supported.confidence == matcher.CONFIDENCE_WEAK_IDENTIFIER
+
+
+def test_a_conflicting_primary_filename_vetoes_an_identifier_hit(db_session) -> None:
+    paper = make_paper(db_session)
+    attach_identifier(db_session, paper, ids.SCHEME_DOI, "10.1/incoming")
+    attach_file(db_session, paper, filename="10.1109_Different.2025.1.pdf")
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1/incoming"},
+            title=paper.title,
+        ),
+    )
+
+    assert result.status == matcher.STATUS_AMBIGUOUS
+    assert "primary filename DOI" in result.reason
+
+
+def test_a_structured_doi_conflict_vetoes_a_filename_match(db_session) -> None:
+    paper = make_paper(db_session)
+    attach_identifier(db_session, paper, ids.SCHEME_DOI, "10.1/stored")
+    attach_file(db_session, paper, filename="10.1109_Incoming.2025.2.pdf")
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1109/incoming.2025.2"},
+            title=paper.title,
+        ),
+    )
+
+    assert result.status == matcher.STATUS_AMBIGUOUS
+    assert "structured doi" in result.reason
+
+
+def test_title_author_year_cannot_override_a_different_filename_doi(db_session) -> None:
+    paper = make_paper(db_session, year=2015, authors=["Alice Smith"])
+    attach_file(db_session, paper, filename="10.1109_Different.2025.3.pdf")
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1109/incoming.2025.4"},
+            title=paper.title,
+            authors=["Alice Smith"],
+            year=2015,
+        ),
+    )
+
+    assert result.status == matcher.STATUS_AMBIGUOUS
+    assert result.method == matcher.METHOD_TITLE_YEAR_AUTHOR
+    assert "primary filename DOI" in result.reason
 
 
 def test_an_identifier_of_a_deleted_paper_is_a_miss(db_session) -> None:

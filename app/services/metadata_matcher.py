@@ -31,8 +31,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.db.models import Paper, PaperFile, new_uuid
+from app.db.models import Paper, PaperFile, PaperIdentifier, PaperSource, new_uuid
 from app.services import metadata_identifiers as ids
+from app.services import metadata_merge
 from app.services import metadata_service
 from app.services import paper_service
 
@@ -57,12 +58,14 @@ METHOD_IEEE_ARTICLE_NUMBER = "ieee_article_number"
 METHOD_SHA256 = "sha256"
 METHOD_FILENAME_DOI_TITLE = "filename_doi_title"
 METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE = "filename_ieee_article_number_title"
+METHOD_IDENTIFIER_CONFLICT = "identifier_conflict"
 METHOD_TITLE_YEAR_AUTHOR = "title_year_author"
 METHOD_TITLE = "title"
 METHOD_FILENAME = "filename"
 METHOD_MANUAL = "manual"
 
 CONFIDENCE_IDENTIFIER = 1.0
+CONFIDENCE_WEAK_IDENTIFIER = 0.95
 CONFIDENCE_SHA256 = 1.0
 CONFIDENCE_FILENAME_DOI_TITLE = 0.95
 CONFIDENCE_FILENAME_IEEE_ARTICLE_NUMBER_TITLE = 0.9
@@ -140,6 +143,21 @@ class MatchResult:
         }
 
 
+@dataclass(frozen=True)
+class IdentifierHit:
+    """One incoming identifier that already belongs to a live paper."""
+
+    paper: Paper
+    row: PaperIdentifier
+    method: str
+    value: str
+    source_type: str | None
+
+    @property
+    def structured(self) -> bool:
+        return metadata_merge.is_structured(self.source_type)
+
+
 def _year(value: int | str | None) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -154,10 +172,11 @@ def _first_author_of(paper: Paper) -> str | None:
     return names[0] if names else None
 
 
-def find_by_identifier(
+def find_identifier_hits(
     session: Session, normalized: Mapping[str, str]
-) -> tuple[Paper | None, str | None, str | None]:
-    """Step 1: any identifier hit, in DOI > arXiv > IEEE number > ISSN order."""
+) -> list[IdentifierHit]:
+    """Every live paper hit by an incoming paper-level identifier."""
+    hits: list[IdentifierHit] = []
     for scheme, method in _MATCH_SCHEMES:
         value = normalized.get(scheme)
         if not value:
@@ -170,8 +189,32 @@ def find_by_identifier(
             # The identifier points at a soft-deleted paper: treat it as a miss
             # so the record can attach to a live one instead of a tombstone.
             continue
-        return paper, method, value
-    return None, None, None
+        source = (
+            session.get(PaperSource, row.first_source_id)
+            if row.first_source_id
+            else None
+        )
+        hits.append(
+            IdentifierHit(
+                paper=paper,
+                row=row,
+                method=method,
+                value=value,
+                source_type=source.source_type if source is not None else None,
+            )
+        )
+    return hits
+
+
+def find_by_identifier(
+    session: Session, normalized: Mapping[str, str]
+) -> tuple[Paper | None, str | None, str | None]:
+    """Backward-compatible first identifier hit in priority order."""
+    hits = find_identifier_hits(session, normalized)
+    if not hits:
+        return None, None, None
+    hit = hits[0]
+    return hit.paper, hit.method, hit.value
 
 
 def find_by_sha256(session: Session, sha256: str | None) -> Paper | None:
@@ -411,6 +454,121 @@ def find_by_filename(session: Session, filename: str | None) -> list[Paper]:
     return [by_id[paper_id] for paper_id in matched_ids if paper_id in by_id]
 
 
+def _title_matches(paper: Paper, incoming: str | None) -> bool:
+    wanted = paper_service.normalize_text(incoming)
+    return bool(wanted) and paper_service.normalize_text(paper.title) == wanted
+
+
+def _titles_compatible(stored: str | None, incoming: str | None) -> bool:
+    """Positive title support without treating minor subtitle drift as conflict."""
+    left = paper_service.normalize_text(stored)
+    right = paper_service.normalize_text(incoming)
+    if not left or not right:
+        return False
+    if left == right or left in right or right in left:
+        return True
+    left_words = {word for word in left.split() if len(word) >= 3}
+    right_words = {word for word in right.split() if len(word) >= 3}
+    if not left_words or not right_words:
+        return False
+    return len(left_words & right_words) / min(len(left_words), len(right_words)) >= 0.6
+
+
+def _titles_clearly_conflict(stored: str | None, incoming: str | None) -> bool:
+    """Conservative negative signal: both titles exist and share no real word."""
+    left = paper_service.normalize_text(stored)
+    right = paper_service.normalize_text(incoming)
+    if not left or not right or left == right:
+        return False
+    left_words = {word for word in left.split() if len(word) >= 3}
+    right_words = {word for word in right.split() if len(word) >= 3}
+    return bool(left_words and right_words and left_words.isdisjoint(right_words))
+
+
+def _primary_filename(paper: Paper) -> str | None:
+    record = paper_service.original_file(paper)
+    return record.filename if record is not None else None
+
+
+def _filename_supports(
+    paper: Paper, normalized: Mapping[str, str]
+) -> list[str]:
+    """Incoming identifiers explicitly carried by the candidate's main filename."""
+    filename = _primary_filename(paper)
+    if not filename:
+        return []
+    matches: list[str] = []
+    doi = normalized.get(ids.SCHEME_DOI)
+    if doi and metadata_service.doi_from_filename(filename) == doi:
+        matches.append(ids.SCHEME_DOI)
+    article_number = normalized.get(ids.SCHEME_IEEE_ARTICLE_NUMBER)
+    if (
+        article_number
+        and metadata_service.doi_from_filename(filename)
+        and re.search(rf"(?<!\d){re.escape(article_number)}(?!\d)", PurePath(filename).stem)
+    ):
+        matches.append(ids.SCHEME_IEEE_ARTICLE_NUMBER)
+    return matches
+
+
+def _strong_conflicts(
+    session: Session,
+    paper: Paper,
+    match_input: MatchInput,
+    normalized: Mapping[str, str],
+) -> list[str]:
+    """Evidence that must veto an otherwise positive automatic match."""
+    conflicts: list[str] = []
+    incoming_doi = normalized.get(ids.SCHEME_DOI)
+    filename_doi = metadata_service.doi_from_filename(_primary_filename(paper))
+    if incoming_doi and filename_doi and filename_doi != incoming_doi:
+        conflicts.append(f"primary filename DOI is {filename_doi}")
+
+    for row in ids.identifiers_for_paper(session, paper.id):
+        incoming = normalized.get(row.scheme)
+        if not incoming or row.normalized_value == incoming:
+            continue
+        source = (
+            session.get(PaperSource, row.first_source_id)
+            if row.first_source_id
+            else None
+        )
+        if source is not None and metadata_merge.is_structured(source.source_type):
+            conflicts.append(
+                f"structured {row.scheme} is {row.normalized_value}"
+            )
+
+    filename_support = _filename_supports(paper, normalized)
+    if (
+        incoming_doi
+        and not filename_support
+        and not match_input.sha256
+        and _titles_clearly_conflict(paper.title, match_input.title)
+    ):
+        conflicts.append("incoming title is unrelated to the candidate title")
+    return list(dict.fromkeys(conflicts))
+
+
+def _candidate_detail(
+    paper: Paper,
+    *,
+    confidence: float,
+    match_input: MatchInput,
+    normalized: Mapping[str, str],
+    identifier_matches: Sequence[str] = (),
+    conflicts: Sequence[str] = (),
+) -> dict[str, Any]:
+    return {
+        "paper_id": paper.id,
+        "title": paper.title,
+        "confidence": confidence,
+        "title_match": _title_matches(paper, match_input.title),
+        "identifier_matches": list(identifier_matches),
+        "filename_identifier_matches": _filename_supports(paper, normalized),
+        "identifier_conflicts": list(conflicts),
+    }
+
+
 def match_record(
     session: Session, match_input: MatchInput, *, exclude_paper_id: str | None = None
 ) -> MatchResult:
@@ -421,14 +579,80 @@ def match_record(
     """
     normalized = match_input.normalized_identifiers()
 
-    paper, method, value = find_by_identifier(session, normalized)
-    if paper is not None and paper.id != exclude_paper_id:
+    identifier_hits = [
+        hit
+        for hit in find_identifier_hits(session, normalized)
+        if hit.paper.id != exclude_paper_id
+    ]
+    hits_by_paper: dict[str, list[IdentifierHit]] = {}
+    for hit in identifier_hits:
+        hits_by_paper.setdefault(hit.paper.id, []).append(hit)
+    if len(hits_by_paper) > 1:
+        candidates = []
+        for hits in hits_by_paper.values():
+            paper = hits[0].paper
+            conflicts = _strong_conflicts(session, paper, match_input, normalized)
+            candidates.append(
+                _candidate_detail(
+                    paper,
+                    confidence=CONFIDENCE_IDENTIFIER,
+                    match_input=match_input,
+                    normalized=normalized,
+                    identifier_matches=[hit.row.scheme for hit in hits],
+                    conflicts=conflicts,
+                )
+            )
         return MatchResult(
-            status=STATUS_MATCHED,
-            method=method,
+            status=STATUS_AMBIGUOUS,
+            method=METHOD_IDENTIFIER_CONFLICT,
             confidence=CONFIDENCE_IDENTIFIER,
-            paper=paper,
-            reason=f"{method} identifier {value}",
+            candidates=candidates,
+            reason="incoming identifiers point to different papers",
+        )
+    if hits_by_paper:
+        hits = next(iter(hits_by_paper.values()))
+        hit = hits[0]
+        paper = hit.paper
+        conflicts = _strong_conflicts(session, paper, match_input, normalized)
+        structured = any(item.structured for item in hits)
+        supported = _titles_compatible(paper.title, match_input.title) or bool(
+            _filename_supports(paper, normalized)
+        )
+        confidence = (
+            CONFIDENCE_IDENTIFIER if structured else CONFIDENCE_WEAK_IDENTIFIER
+        )
+        candidate = _candidate_detail(
+            paper,
+            confidence=confidence,
+            match_input=match_input,
+            normalized=normalized,
+            identifier_matches=[item.row.scheme for item in hits],
+            conflicts=conflicts,
+        )
+        if conflicts:
+            return MatchResult(
+                status=STATUS_AMBIGUOUS,
+                method=hit.method,
+                confidence=confidence,
+                candidates=[candidate],
+                reason="; ".join(conflicts),
+            )
+        if structured or supported:
+            support = "structured source" if structured else "title or filename support"
+            return MatchResult(
+                status=STATUS_MATCHED,
+                method=hit.method,
+                confidence=confidence,
+                paper=paper,
+                candidates=[candidate],
+                reason=f"{hit.method} identifier {hit.value} ({support})",
+            )
+        return MatchResult(
+            status=STATUS_AMBIGUOUS,
+            method=hit.method,
+            confidence=confidence,
+            candidates=[candidate],
+            reason="weak or unknown-source identifier lacks title or filename support",
         )
 
     paper = find_by_sha256(session, match_input.sha256)
@@ -451,11 +675,29 @@ def match_record(
         item for item in candidates if item.get("paper_id") != exclude_paper_id
     ]
     if len(filename_identity) == 1:
+        paper = filename_identity[0]
+        conflicts = _strong_conflicts(session, paper, match_input, normalized)
+        if conflicts:
+            return MatchResult(
+                status=STATUS_AMBIGUOUS,
+                method=method,
+                confidence=confidence,
+                candidates=[
+                    _candidate_detail(
+                        paper,
+                        confidence=confidence or CONFIDENCE_TITLE_ONLY,
+                        match_input=match_input,
+                        normalized=normalized,
+                        conflicts=conflicts,
+                    )
+                ],
+                reason="; ".join(conflicts),
+            )
         return MatchResult(
             status=STATUS_MATCHED,
             method=method,
             confidence=confidence,
-            paper=filename_identity[0],
+            paper=paper,
             candidates=candidates,
             reason="filename identifier + normalized title",
         )
@@ -475,6 +717,23 @@ def match_record(
         year=match_input.year,
     )
     if paper is not None and paper.id != exclude_paper_id:
+        conflicts = _strong_conflicts(session, paper, match_input, normalized)
+        if conflicts:
+            return MatchResult(
+                status=STATUS_AMBIGUOUS,
+                method=METHOD_TITLE_YEAR_AUTHOR,
+                confidence=confidence,
+                candidates=[
+                    _candidate_detail(
+                        paper,
+                        confidence=confidence or CONFIDENCE_TITLE_ONLY,
+                        match_input=match_input,
+                        normalized=normalized,
+                        conflicts=conflicts,
+                    )
+                ],
+                reason="; ".join(conflicts),
+            )
         return MatchResult(
             status=STATUS_MATCHED,
             method=METHOD_TITLE_YEAR_AUTHOR,
@@ -568,6 +827,7 @@ __all__ = [
     "CONFIDENCE_FILENAME_DOI_TITLE",
     "CONFIDENCE_FILENAME_IEEE_ARTICLE_NUMBER_TITLE",
     "CONFIDENCE_IDENTIFIER",
+    "CONFIDENCE_WEAK_IDENTIFIER",
     "CONFIDENCE_SHA256",
     "CONFIDENCE_TITLE_ONLY",
     "CONFIDENCE_TITLE_YEAR_AUTHOR",
@@ -578,6 +838,7 @@ __all__ = [
     "METHOD_FILENAME_DOI_TITLE",
     "METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE",
     "METHOD_IEEE_ARTICLE_NUMBER",
+    "METHOD_IDENTIFIER_CONFLICT",
     "METHOD_MANUAL",
     "METHOD_SHA256",
     "METHOD_TITLE",
@@ -589,10 +850,12 @@ __all__ = [
     "STATUS_UNMATCHED",
     "MatchInput",
     "MatchResult",
+    "IdentifierHit",
     "find_by_filename",
     "find_by_filename_identifier",
     "find_by_filename_identity_and_title",
     "find_by_identifier",
+    "find_identifier_hits",
     "find_by_sha256",
     "find_by_title",
     "match_input_from_values",

@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.security import require_write
-from app.db.models import Paper, PaperSource
+from app.db.models import Paper, PaperFile, PaperSource
 from app.db.session import get_db
 from app.main import app
 from app.services import metadata_identifiers as ids
@@ -83,8 +83,33 @@ def seed_paper_with_doi(session_factory, **overrides) -> str:
         paper = Paper(**values)
         session.add(paper)
         session.flush()
+        source = sources.upsert_source(
+            session,
+            source_type=sources.SOURCE_TYPE_PDF_EMBEDDED,
+            source_ref=sources.paper_embedded_ref(paper.id),
+            raw={},
+            paper_id=paper.id,
+            match_status=sources.MATCH_STATUS_MATCHED,
+        )
         ids.upsert_identifier(
-            session, paper_id=paper.id, scheme=ids.SCHEME_DOI, value=DOI
+            session,
+            paper_id=paper.id,
+            scheme=ids.SCHEME_DOI,
+            value=DOI,
+            first_source_id=source.id,
+        )
+        session.add(
+            PaperFile(
+                id=paper_service.new_uuid(),
+                paper_id=paper.id,
+                kind="original",
+                object_key=f"papers/{paper.id}/original.pdf",
+                bucket="paperbox",
+                filename="10.1109_JSSC.2015.2441234.pdf",
+                content_type="application/pdf",
+                size_bytes=10,
+                is_primary=True,
+            )
         )
         ids.refresh_primary(session, paper.id)
         session.commit()
@@ -114,7 +139,16 @@ def test_import_defaults_to_a_dry_run(client, session_factory) -> None:
     assert body["dry_run"] is True
     assert body["matched"] == 1
     assert body["sources"][0]["paper_id"] == paper_id
-    assert count(session_factory, PaperSource) == 0
+    session = session_factory()
+    try:
+        assert (
+            session.query(PaperSource)
+            .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+            .count()
+            == 0
+        )
+    finally:
+        session.close()
 
 
 def test_import_applies_when_asked(client, session_factory) -> None:
@@ -139,7 +173,16 @@ def test_import_accepts_dry_run_false_as_the_same_thing(client, session_factory)
     response = client.post("/api/metadata/import?dry_run=false", json=IEEE_SAMPLE)
 
     assert response.json()["dry_run"] is False
-    assert count(session_factory, PaperSource) == 1
+    session = session_factory()
+    try:
+        assert (
+            session.query(PaperSource)
+            .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+            .count()
+            == 1
+        )
+    finally:
+        session.close()
 
 
 def test_import_accepts_a_multipart_file(client, session_factory) -> None:
@@ -153,7 +196,16 @@ def test_import_accepts_a_multipart_file(client, session_factory) -> None:
 
     assert response.status_code == 200
     assert response.json()["matched"] == 1
-    assert count(session_factory, PaperSource) == 1
+    session = session_factory()
+    try:
+        assert (
+            session.query(PaperSource)
+            .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+            .count()
+            == 1
+        )
+    finally:
+        session.close()
 
 
 def test_import_reports_a_shell_for_an_unknown_record(client, session_factory) -> None:
@@ -176,7 +228,16 @@ def test_import_is_idempotent_over_http(client, session_factory) -> None:
     second = client.post("/api/metadata/import?apply=true", json=IEEE_SAMPLE)
 
     assert second.json()["unchanged"] == 1
-    assert count(session_factory, PaperSource) == 1
+    session = session_factory()
+    try:
+        assert (
+            session.query(PaperSource)
+            .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+            .count()
+            == 1
+        )
+    finally:
+        session.close()
 
 
 def test_import_rejects_an_unsupported_media_type(client) -> None:
