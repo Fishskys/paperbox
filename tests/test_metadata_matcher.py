@@ -222,6 +222,8 @@ def test_a_conflicting_primary_filename_vetoes_an_identifier_hit(db_session) -> 
 
     assert result.status == matcher.STATUS_AMBIGUOUS
     assert "primary filename DOI" in result.reason
+    assert result.conflicts == [result.reason]
+    assert "identifier:doi" in result.evidence
 
 
 def test_a_structured_doi_conflict_vetoes_a_filename_match(db_session) -> None:
@@ -412,6 +414,7 @@ def test_duplicate_title_author_year_candidates_are_ambiguous(db_session) -> Non
     assert result.status == matcher.STATUS_AMBIGUOUS
     assert result.method == matcher.METHOD_TITLE_YEAR_AUTHOR
     assert result.confidence == matcher.CONFIDENCE_TITLE_YEAR_AUTHOR
+    assert result.conflicts == ["multiple top candidates"]
     assert {item["paper_id"] for item in result.candidates} == {first.id, second.id}
 
 
@@ -488,6 +491,8 @@ def test_nothing_matches_on_an_empty_library(db_session) -> None:
     assert result.status == matcher.STATUS_UNMATCHED
     assert result.paper_id is None
     assert result.as_dict()["match_method"] is None
+    assert result.as_dict()["evidence"] == []
+    assert result.as_dict()["conflicts"] == []
 
 
 def test_match_input_is_built_from_claim_values() -> None:

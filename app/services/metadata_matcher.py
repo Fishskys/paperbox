@@ -122,6 +122,8 @@ class MatchResult:
     confidence: float | None = None
     paper: Paper | None = None
     candidates: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    evidence: list[str] = dataclass_field(default_factory=list)
+    conflicts: list[str] = dataclass_field(default_factory=list)
     reason: str = ""
 
     @property
@@ -139,6 +141,8 @@ class MatchResult:
             "match_method": self.method,
             "match_confidence": self.confidence,
             "candidates": self.candidates,
+            "evidence": self.evidence,
+            "conflicts": self.conflicts,
             "reason": self.reason,
         }
 
@@ -614,6 +618,10 @@ def match_record(
             method=METHOD_IDENTIFIER_CONFLICT,
             confidence=CONFIDENCE_IDENTIFIER,
             candidates=candidates,
+            evidence=[
+                f"identifier:{hit.row.scheme}" for hit in identifier_hits
+            ],
+            conflicts=["incoming identifiers point to different papers"],
             reason="incoming identifiers point to different papers",
         )
     if hits_by_paper:
@@ -642,16 +650,28 @@ def match_record(
                 method=hit.method,
                 confidence=confidence,
                 candidates=[candidate],
+                evidence=[f"identifier:{item.row.scheme}" for item in hits],
+                conflicts=conflicts,
                 reason="; ".join(conflicts),
             )
         if structured or supported:
             support = "structured source" if structured else "title or filename support"
+            evidence = [f"identifier:{item.row.scheme}" for item in hits]
+            if structured:
+                evidence.append("identifier_source:structured")
+            if _titles_compatible(paper.title, match_input.title):
+                evidence.append("title:compatible")
+            evidence.extend(
+                f"filename_identifier:{scheme}"
+                for scheme in _filename_supports(paper, normalized)
+            )
             return MatchResult(
                 status=STATUS_MATCHED,
                 method=hit.method,
                 confidence=confidence,
                 paper=paper,
                 candidates=[candidate],
+                evidence=evidence,
                 reason=f"{hit.method} identifier {hit.value} ({support})",
             )
         return MatchResult(
@@ -659,6 +679,7 @@ def match_record(
             method=hit.method,
             confidence=confidence,
             candidates=[candidate],
+            evidence=[f"identifier:{item.row.scheme}" for item in hits],
             reason="weak or unknown-source identifier lacks title or filename support",
         )
 
@@ -669,6 +690,7 @@ def match_record(
             method=METHOD_SHA256,
             confidence=CONFIDENCE_SHA256,
             paper=paper,
+            evidence=["sha256:exact"],
             reason="identical file content",
         )
 
@@ -698,6 +720,8 @@ def match_record(
                         conflicts=conflicts,
                     )
                 ],
+                evidence=["filename_identifier", "title:exact"],
+                conflicts=conflicts,
                 reason="; ".join(conflicts),
             )
         return MatchResult(
@@ -706,6 +730,7 @@ def match_record(
             confidence=confidence,
             paper=paper,
             candidates=candidates,
+            evidence=["filename_identifier", "title:exact"],
             reason="filename identifier + normalized title",
         )
     if filename_identity:
@@ -714,6 +739,8 @@ def match_record(
             method=method,
             confidence=confidence,
             candidates=candidates,
+            evidence=["filename_identifier", "title:exact"],
+            conflicts=["multiple top candidates"],
             reason="multiple papers share filename identifier + normalized title",
         )
 
@@ -739,6 +766,8 @@ def match_record(
                         conflicts=conflicts,
                     )
                 ],
+                evidence=["title:exact", "first_author:exact", "year:exact"],
+                conflicts=conflicts,
                 reason="; ".join(conflicts),
             )
         return MatchResult(
@@ -746,6 +775,7 @@ def match_record(
             method=METHOD_TITLE_YEAR_AUTHOR,
             confidence=confidence,
             paper=paper,
+            evidence=["title:exact", "first_author:exact", "year:exact"],
             reason=reason,
         )
     candidates = [
@@ -762,6 +792,12 @@ def match_record(
             method=ambiguous_method,
             confidence=confidence,
             candidates=candidates,
+            evidence=["title:exact"],
+            conflicts=(
+                ["multiple top candidates"]
+                if ambiguous_method == METHOD_TITLE_YEAR_AUTHOR
+                else []
+            ),
             reason=reason,
         )
 
@@ -779,6 +815,7 @@ def match_record(
                 {"paper_id": item.id, "title": item.title, "confidence": CONFIDENCE_FILENAME}
                 for item in filename_matches
             ],
+            evidence=["filename:exact"],
             reason="same file name",
         )
 

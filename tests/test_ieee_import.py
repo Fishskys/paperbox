@@ -364,6 +364,9 @@ def test_dry_run_writes_nothing_but_reports_the_match(db_session) -> None:
     assert report.dry_run is True
     assert report.sources[0]["paper_id"] == paper.id
     assert report.sources[0]["match_method"] == "doi"
+    assert "identifier:doi" in report.sources[0]["evidence"]
+    assert report.sources[0]["match_conflicts"] == []
+    assert report.sources[0]["reason"]
     assert (paper.title, paper.volume, paper.issue) == before
     assert (
         db_session.query(PaperSource)

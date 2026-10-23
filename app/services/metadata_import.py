@@ -777,6 +777,16 @@ def import_records(
     return report
 
 
+def _match_explanation(result: matcher.MatchResult) -> dict[str, Any]:
+    """Stable, JSON-ready explanation shared by dry-run and apply reports."""
+    return {
+        "reason": result.reason,
+        "evidence": list(result.evidence),
+        "match_conflicts": list(result.conflicts),
+        "candidates": list(result.candidates),
+    }
+
+
 def _import_one(
     session: Session,
     parsed: ParsedRecord,
@@ -832,6 +842,7 @@ def _import_one(
                     "paper_id": result.paper.id,
                     "match_method": result.method,
                     "match_confidence": result.confidence,
+                    **_match_explanation(result),
                 }
             )
             return
@@ -888,6 +899,7 @@ def _import_one(
                 "paper_id": result.paper.id,
                 "match_method": result.method,
                 "match_confidence": result.confidence,
+                **_match_explanation(result),
             }
         )
         return
@@ -914,7 +926,7 @@ def _import_one(
                     "match_status": sources.MATCH_STATUS_AMBIGUOUS,
                     "paper_id": None,
                     "match_method": result.method,
-                    "candidates": result.candidates,
+                    **_match_explanation(result),
                 }
             )
         else:
@@ -924,7 +936,7 @@ def _import_one(
                     "match_status": sources.MATCH_STATUS_AMBIGUOUS,
                     "paper_id": None,
                     "match_method": result.method,
-                    "candidates": result.candidates,
+                    **_match_explanation(result),
                 }
             )
         return

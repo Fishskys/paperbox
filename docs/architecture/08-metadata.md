@@ -101,8 +101,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `content_type` | VARCHAR(32) | `ieee_raw` / `csl_json` / `generic_json` 等 |
 | `raw` | JSONB NOT NULL，默认 `{}` | **来源原样**（IEEE 一条约 8KB），只在 PG |
 | `match_status` | VARCHAR(16) NOT NULL，默认 `pending` | `matched` / `pending` / `ambiguous` / `rejected`；复核队列取 `pending` + `ambiguous` |
-| `match_method` | VARCHAR(32) | 怎么匹配上的，见 [#4.4](#44-五步匹配器match_record) |
-| `match_confidence` | FLOAT | 0.5 / 0.8 / 1.0 |
+| `match_method` | VARCHAR(32) | 怎么匹配上的，见 [#4.4](#44-证据匹配器match_record) |
+| `match_confidence` | FLOAT | 0.5 / 0.8 / 0.9 / 0.95 / 1.0 |
 | `fetched_at` | DATETIME | 来源侧取数时间 |
 | `imported_at` | DATETIME NOT NULL，默认 `now()` | |
 | `importer` | VARCHAR(128) | API / CLI / 脚本名 |
@@ -318,6 +318,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `GET /api/metadata/review` | 复核清单（`pending` / `ambiguous` 来源 + 真冲突） | |
 | `POST /api/metadata/sources/{source_id}/attach` | 人工把来源挂到某篇论文并重放合并 | |
 | `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | |
+
+导入报告的每个 `sources[]` 条目除 `match_method` / `match_confidence` 外，还返回 `reason`、`evidence[]`、`match_conflicts[]` 和 `candidates[]`；dry-run 与 apply 使用同一解释结构，便于批量复核自动匹配与否决原因。
 | `POST /api/metadata/reextract` | **全库**对已存 PDF 重跑元数据提取并合并缺口，**默认 dry_run**，admin | |
 | `POST /api/papers/{id}/metadata/reextract` | **单篇**重跑元数据提取并合并缺口，**默认 dry_run**，write | `api/papers.py` |
 | `GET /api/papers/{id}/metadata` | 当前值 + 字段账本视图 | `api/papers.py` 的 `get_paper_metadata()` |

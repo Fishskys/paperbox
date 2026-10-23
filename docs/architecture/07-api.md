@@ -55,7 +55,7 @@
 | POST | `/api/papers/{paper_id}/metadata/reextract` | 单篇重跑元数据提取并合并缺口（默认 `dry_run=true`） | write | — | `app/api/papers.py` |
 | POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | admin | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
 | POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | write | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
-| POST | `/api/metadata/import` | 外部元数据导入 | write | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py` |
+| POST | `/api/metadata/import` | 外部元数据导入；`sources[]` 带 `reason`、`evidence[]`、`match_conflicts[]`、`candidates[]` | write | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py` |
 | GET | `/api/metadata/review` | 复核清单 + 已登记冲突 | read | `status`（可重复）、`limit`（1..200，默认 50） | `app/api/metadata.py` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | write | — | `app/api/metadata.py` |
 | POST | `/api/metadata/apply` | 按报告批量应用人工决定 | write | — | `app/api/metadata.py` |

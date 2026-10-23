@@ -139,6 +139,8 @@ def test_import_defaults_to_a_dry_run(client, session_factory) -> None:
     assert body["dry_run"] is True
     assert body["matched"] == 1
     assert body["sources"][0]["paper_id"] == paper_id
+    assert "identifier:doi" in body["sources"][0]["evidence"]
+    assert body["sources"][0]["match_conflicts"] == []
     session = session_factory()
     try:
         assert (
