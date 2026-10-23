@@ -213,6 +213,9 @@ def upsert_identifier(
     existing = find_identifier(session, scheme, normalized)
     if existing is not None:
         if existing.paper_id == paper_id:
+            if first_source_id and not existing.first_source_id:
+                existing.first_source_id = first_source_id
+                session.flush()
             return existing
         owner = session.get(Paper, existing.paper_id)
         if owner is None or owner.deleted_at is not None:

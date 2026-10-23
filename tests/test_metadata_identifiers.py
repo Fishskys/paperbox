@@ -377,3 +377,64 @@ def test_first_source_is_recorded(db_session) -> None:
     )
 
     assert row.first_source_id == source.id
+
+
+def test_restatement_fills_a_missing_first_source(db_session) -> None:
+    from app.db.models import PaperSource
+
+    paper = make_paper(db_session)
+    row = ids.upsert_identifier(
+        db_session,
+        paper_id=paper.id,
+        scheme=ids.SCHEME_DOI,
+        value="10.1/x",
+    )
+    source = PaperSource(
+        id=new_uuid(),
+        paper_id=paper.id,
+        source_type="import_file",
+        source_ref="doi:10.1/x",
+        raw={},
+        match_status="matched",
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    restated = ids.upsert_identifier(
+        db_session,
+        paper_id=paper.id,
+        scheme=ids.SCHEME_DOI,
+        value="10.1/x",
+        first_source_id=source.id,
+    )
+
+    assert restated is row
+    assert restated.first_source_id == source.id
+
+
+def test_provenance_write_passes_the_source_to_an_identifier(db_session) -> None:
+    from app.db.models import PaperSource
+
+    paper = make_paper(db_session)
+    source = PaperSource(
+        id=new_uuid(),
+        paper_id=paper.id,
+        source_type="import_file",
+        source_ref="doi:10.1/from-import",
+        raw={},
+        match_status="matched",
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    provenance_service.set_field(
+        db_session,
+        paper,
+        "identifier:doi",
+        "10.1/from-import",
+        source_id=source.id,
+    )
+
+    row = ids.find_identifier(db_session, ids.SCHEME_DOI, "10.1/from-import")
+    assert row is not None
+    assert row.first_source_id == source.id

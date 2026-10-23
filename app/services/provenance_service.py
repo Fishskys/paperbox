@@ -255,7 +255,14 @@ def set_field(
     if claim is not None:
         if human:
             record_human_decision(claim)
-        write_field(session, paper, field, value, override=override)
+        write_field(
+            session,
+            paper,
+            field,
+            value,
+            override=override,
+            source_id=source_id,
+        )
     return claim
 
 
@@ -340,7 +347,13 @@ def _jsonable(value: Any) -> Any:
 
 
 def write_field(
-    session: Session, paper: Paper, field: str, value: Any, *, override: bool = False
+    session: Session,
+    paper: Paper,
+    field: str,
+    value: Any,
+    *,
+    override: bool = False,
+    source_id: str | None = None,
 ) -> bool:
     """Apply a claim value to the paper row; returns whether anything changed.
 
@@ -367,7 +380,14 @@ def write_field(
         # so the mirrored column has to follow the new identifier. Fill-only here
         # kept the superseded value: ``paper_identifiers``/``fingerprint`` already
         # said 2105.11499 while ``papers.arxiv_id`` still said 2105.11453.
-        return _write_identifier(session, paper, scheme, value, correct=override)
+        return _write_identifier(
+            session,
+            paper,
+            scheme,
+            value,
+            correct=override,
+            source_id=source_id,
+        )
 
     if kind_of_tag_field(field) is not None:
         return _write_tags(session, paper, field, value)
@@ -483,6 +503,7 @@ def _write_identifier(
     *,
     replace: bool = False,
     correct: bool = False,
+    source_id: str | None = None,
 ) -> bool:
     """Identifier claims keep the table and the mirrored columns in step.
 
@@ -500,11 +521,19 @@ def _write_identifier(
     """
     if replace or correct:
         row = identifiers.replace_identifier(
-            session, paper_id=paper.id, scheme=scheme, value=str(value)
+            session,
+            paper_id=paper.id,
+            scheme=scheme,
+            value=str(value),
+            first_source_id=source_id,
         )
     else:
         row = identifiers.upsert_identifier(
-            session, paper_id=paper.id, scheme=scheme, value=str(value)
+            session,
+            paper_id=paper.id,
+            scheme=scheme,
+            value=str(value),
+            first_source_id=source_id,
         )
     if row is None:
         return False
