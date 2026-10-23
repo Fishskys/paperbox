@@ -285,7 +285,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 强冲突优先于正向证据：主文件名携带不同 DOI、候选已有不同的结构化论文级 identifier、输入的多个 identifier 分别属于不同论文，或 DOI 命中但标题明显无关且没有 SHA256/文件名支持时，结果为 `ambiguous`。候选明细包含标题、identifier、文件名支持和冲突原因。
 
-文件名 DOI 只接受完整 `10.<4-9位注册号>_<后缀>.pdf`，只把第一个 `_` 还原为 `/`；目录名和描述性文件名中的 DOI token 不参与。每步都跳过 `exclude_paper_id`（摄取时传本次新建的论文，绝不匹配自己）。`pending` 不是匹配器的输出，而是 `paper_sources.match_status` 的列默认值。
+文件名 DOI 只接受完整 `10.<4-9位注册号>_<后缀>.pdf`，目录名和描述性文件名中的 DOI token 不参与。下载器会把 DOI 中每个 `/` 编码成 `_`：已有 DOI 与文件名比较时将全部 `/` 编码后精确比较；反向提取只有在文件名恰好一个 `_` 时才安全，多下划线文件名不猜测也不持久化 DOI。每步都跳过 `exclude_paper_id`（摄取时传本次新建的论文，绝不匹配自己）。`pending` 不是匹配器的输出，而是 `paper_sources.match_status` 的列默认值。
 
 摄取与重新提取会把严格文件名中的 DOI/arXiv 登记为 `source_type='filename'` 的弱声明：只在论文尚无该 scheme 且值未被其他论文占用时填空，不能覆盖文档内嵌、结构化导入或人工值；IEEE article number 不从 DOI 尾部推导。
 

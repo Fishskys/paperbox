@@ -261,13 +261,13 @@ def find_by_filename_identifier(
         .where(Paper.deleted_at.is_(None), PaperFile.deleted_at.is_(None))
     )
     if scheme == ids.SCHEME_DOI:
-        expected = f"{normalized.replace('/', '_', 1)}.pdf".casefold()
+        expected = f"{normalized.replace('/', '_')}.pdf".casefold()
         statement = statement.where(func.lower(PaperFile.filename) == expected)
         rows = session.execute(statement).all()
         matched_ids = [
             str(paper_id)
             for paper_id, filename in rows
-            if metadata_service.doi_from_filename(filename) == normalized
+            if metadata_service.doi_filename_matches(filename, normalized)
         ]
         return _papers_by_ids(session, matched_ids)
 
@@ -278,7 +278,7 @@ def find_by_filename_identifier(
         matched_ids = [
             str(paper_id)
             for paper_id, filename in rows
-            if metadata_service.doi_from_filename(filename)
+            if metadata_service.is_doi_filename(filename)
             and token.search(PurePath(filename).stem)
         ]
         return _papers_by_ids(session, matched_ids)
@@ -510,12 +510,12 @@ def _filename_supports(
         return []
     matches: list[str] = []
     doi = normalized.get(ids.SCHEME_DOI)
-    if doi and metadata_service.doi_from_filename(filename) == doi:
+    if doi and metadata_service.doi_filename_matches(filename, doi):
         matches.append(ids.SCHEME_DOI)
     article_number = normalized.get(ids.SCHEME_IEEE_ARTICLE_NUMBER)
     if (
         article_number
-        and metadata_service.doi_from_filename(filename)
+        and metadata_service.is_doi_filename(filename)
         and re.search(rf"(?<!\d){re.escape(article_number)}(?!\d)", PurePath(filename).stem)
     ):
         matches.append(ids.SCHEME_IEEE_ARTICLE_NUMBER)
@@ -531,9 +531,20 @@ def _strong_conflicts(
     """Evidence that must veto an otherwise positive automatic match."""
     conflicts: list[str] = []
     incoming_doi = normalized.get(ids.SCHEME_DOI)
-    filename_doi = metadata_service.doi_from_filename(_primary_filename(paper))
-    if incoming_doi and filename_doi and filename_doi != incoming_doi:
-        conflicts.append(f"primary filename DOI is {filename_doi}")
+    primary_filename = _primary_filename(paper)
+    filename_doi = metadata_service.doi_from_filename(primary_filename)
+    if (
+        incoming_doi
+        and primary_filename
+        and metadata_service.is_doi_filename(primary_filename)
+        and not metadata_service.doi_filename_matches(primary_filename, incoming_doi)
+    ):
+        if filename_doi:
+            conflicts.append(f"primary filename DOI is {filename_doi}")
+        else:
+            conflicts.append(
+                "primary filename DOI encoding differs from incoming DOI"
+            )
 
     for row in ids.identifiers_for_paper(session, paper.id):
         incoming = normalized.get(row.scheme)

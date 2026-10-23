@@ -50,7 +50,6 @@ def test_arxiv_id_is_taken_from_the_file_name(filename: str, expected: str) -> N
     [
         ("10.1109_Name.2025.1234567.pdf", "10.1109/name.2025.1234567"),
         ("10.1109_NAME.2025.1234567.PDF", "10.1109/name.2025.1234567"),
-        ("10.1145_suffix_with_underscores.pdf", "10.1145/suffix_with_underscores"),
         ("/mnt/papers/10.1109_NoMeTDC.2013.6658237.pdf", "10.1109/nometdc.2013.6658237"),
     ],
 )
@@ -67,6 +66,8 @@ def test_doi_is_taken_from_a_strict_pdf_file_name(filename: str, expected: str) 
         "paper_10.1109_Name.2025.1234567.pdf",
         "10.123_suffix.pdf",  # registrant is too short
         "10.1109_.pdf",
+        "10.1145_suffix_with_underscores.pdf",  # slash positions are ambiguous
+        "10.1109_NSS_MIC42101.2019.9059958.pdf",
         "/tmp/10.1109_hidden/ordinary.pdf",  # directory names do not count
         "../10.1109_suffix/not-the-doi.pdf",
     ],
@@ -101,6 +102,20 @@ def test_file_name_claims_only_ever_carry_the_identifier() -> None:
     assert metadata_service.filename_claim_values(
         "10.1109_NoMeTDC.2013.6658237.pdf"
     ) == {"identifier:doi": "10.1109/nometdc.2013.6658237"}
+    assert metadata_service.filename_claim_values(
+        "10.1109_NSS_MIC42101.2019.9059958.pdf"
+    ) == {}
+
+
+def test_a_known_doi_matches_the_lossy_downloader_filename_encoding() -> None:
+    filename = "10.1109_NSS_MIC42101.2019.9059958.pdf"
+
+    assert metadata_service.doi_filename_matches(
+        filename, "10.1109/NSS/MIC42101.2019.9059958"
+    )
+    assert not metadata_service.doi_filename_matches(
+        filename, "10.1109/NSS/MIC42101.2019.9059999"
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -226,6 +226,22 @@ def test_a_conflicting_primary_filename_vetoes_an_identifier_hit(db_session) -> 
     assert "identifier:doi" in result.evidence
 
 
+def test_a_multi_slash_doi_agrees_with_its_downloader_filename(db_session) -> None:
+    paper = make_paper(db_session)
+    doi = "10.1109/NSS/MIC42101.2019.9059958"
+    attach_identifier(db_session, paper, ids.SCHEME_DOI, doi)
+    attach_file(db_session, paper, filename="10.1109_NSS_MIC42101.2019.9059958.pdf")
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(identifiers={ids.SCHEME_DOI: doi}, title=paper.title),
+    )
+
+    assert result.matched
+    assert result.method == matcher.METHOD_DOI
+    assert result.conflicts == []
+
+
 def test_a_structured_doi_conflict_vetoes_a_filename_match(db_session) -> None:
     paper = make_paper(db_session)
     attach_identifier(db_session, paper, ids.SCHEME_DOI, "10.1/stored")
@@ -304,6 +320,27 @@ def test_filename_doi_and_title_match_a_unique_paper(db_session) -> None:
     assert result.matched
     assert result.method == matcher.METHOD_FILENAME_DOI_TITLE
     assert result.confidence == 0.95
+    assert result.paper_id == paper.id
+
+
+def test_multi_slash_filename_doi_and_title_match_a_unique_paper(db_session) -> None:
+    paper = make_paper(db_session)
+    attach_file(
+        db_session,
+        paper,
+        filename="10.1109_NSS_MIC42101.2019.9059958.pdf",
+    )
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            identifiers={ids.SCHEME_DOI: "10.1109/NSS/MIC42101.2019.9059958"},
+            title=paper.title,
+        ),
+    )
+
+    assert result.matched
+    assert result.method == matcher.METHOD_FILENAME_DOI_TITLE
     assert result.paper_id == paper.id
 
 

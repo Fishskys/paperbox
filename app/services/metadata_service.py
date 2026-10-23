@@ -513,21 +513,37 @@ def heuristic_claim_values(metadata: Mapping[str, object]) -> dict[str, object]:
 #: tail such as ``notes-2024.12345.pdf`` from being read as an identifier --
 #: and the lookarounds stop a match inside a longer digit run.
 ARXIV_ID_TOKEN = re.compile(r"(?<![\d.])(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?(?![\d.])")
-#: Strict corpus convention: ``10.<registrant>_<suffix>.pdf``. Only the first
-#: underscore separates the DOI prefix from its suffix; underscores inside the
-#: suffix are legitimate DOI characters and must survive unchanged.
+#: Strict corpus convention: the downloader replaces every DOI slash with an
+#: underscore. The encoding is safe for comparing a known DOI with a filename,
+#: but it is not reversible when the DOI suffix itself contains an underscore or
+#: another slash.
 DOI_FILENAME = re.compile(
     r"^(10\.\d{4,9})_(.+)\.pdf$",
     re.IGNORECASE,
 )
 
 
+def is_doi_filename(filename: str | None) -> bool:
+    """Whether the basename follows the downloader's complete DOI convention."""
+    return bool(filename and DOI_FILENAME.fullmatch(Path(filename).name))
+
+
+def doi_filename_matches(filename: str | None, doi: str | None) -> bool:
+    """Whether ``filename`` is the downloader encoding of the known ``doi``."""
+    normalized = normalize_doi(doi)
+    if not filename or not normalized or not is_doi_filename(filename):
+        return False
+    expected = f"{normalized.replace('/', '_')}.pdf"
+    return Path(filename).name.casefold() == expected.casefold()
+
+
 def doi_from_filename(filename: str | None) -> str | None:
     """Return the DOI encoded by a strict PDF file name, or ``None``.
 
     Directory components never participate. A loose ``10.x`` token elsewhere in
-    a descriptive name is intentionally ignored: file names are weak evidence,
-    so only the repository's complete ``prefix_suffix.pdf`` convention is safe.
+    a descriptive name is intentionally ignored. Reverse extraction is allowed
+    only when the stem has one underscore: with more than one, the downloader's
+    slash-to-underscore encoding is ambiguous and must not create a guessed DOI.
     """
     if not filename:
         return None
@@ -535,7 +551,7 @@ def doi_from_filename(filename: str | None) -> str | None:
     if match is None:
         return None
     suffix = match.group(2).strip()
-    if not suffix or "/" in suffix or "\\" in suffix:
+    if not suffix or "_" in suffix or "/" in suffix or "\\" in suffix:
         return None
     return normalize_doi(f"{match.group(1)}/{suffix}")
 
@@ -620,7 +636,9 @@ __all__ = [
     "arxiv_id_from_text",
     "arxiv_id_from_url",
     "arxiv_id_from_filename",
+    "doi_filename_matches",
     "doi_from_filename",
+    "is_doi_filename",
     "detect_abstract",
     "detect_authors",
     "detect_doi",
