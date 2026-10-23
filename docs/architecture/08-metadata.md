@@ -278,7 +278,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 2 | `paper_files.sha256` | 1.0 | `matched`，`sha256` |
 | 3 | 严格文件名 DOI + 规范化标题一致，且候选唯一 | 0.95 | `matched`，`filename_doi_title`；并列则 `ambiguous` |
 | 4 | 严格 DOI 文件名中出现输入 IEEE article number + 规范化标题一致，且候选唯一 | 0.9 | `matched`，`filename_ieee_article_number_title`；并列则 `ambiguous` |
-| 5 | 规范化标题 + 首作者 + 年份三者全中 | 0.8 | `matched`，`title_year_author` |
+| 5 | 规范化标题 + 首作者 + 年份三者全中，且最高证据候选唯一 | 0.8 | `matched`，`title_year_author`；并列则 `ambiguous`，不按创建时间选第一个 |
 | 6 | 仅标题命中（候选 = 规范化标题的**每个词**都 AND 命中，再 Python 精确等值；不设 200 上限/最长词截断） | 0.5 | **`ambiguous`**，不自动挂 |
 | 7 | 文件名归一化相等 | 0.5 | `ambiguous` |
 | — | 都没有 | — | `unmatched` → 导入侧建壳 |

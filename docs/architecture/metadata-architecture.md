@@ -196,7 +196,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | 2 | `paper_files.sha256` 命中 | 1.0 | 自动 `matched` |
 | 3 | 严格文件名 DOI + 规范化标题一致，且候选唯一 | 0.95 | 自动 `matched`；并列则 `ambiguous` |
 | 4 | DOI 文件名中的输入 IEEE article number + 规范化标题一致，且候选唯一 | 0.9 | 自动 `matched`；并列则 `ambiguous` |
-| 5 | 规范化标题 + 首作者 + 年份（三者全中） | 0.8 | 自动 `matched` |
+| 5 | 规范化标题 + 首作者 + 年份（三者全中），且最高证据候选唯一 | 0.8 | 自动 `matched`；并列则 `ambiguous` |
 | 6 | 仅标题命中 | 0.5 | `ambiguous`（进复核清单，**不自动挂**） |
 | 7 | 文件名归一化相等 | 0.5 | `ambiguous` |
 | 8 | 都没有 | — | 建**壳论文**（`AWAITING_FILE`）或记为 `unmatched`（`dry_run` 时只报告） |

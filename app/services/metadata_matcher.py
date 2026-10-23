@@ -391,7 +391,7 @@ def find_by_title(
     )
     wanted_year = _year(year)
     scored: list[dict[str, Any]] = []
-    best: Paper | None = None
+    best: list[Paper] = []
     for paper in candidates:
         author = paper_service.normalize_text(_first_author_of(paper))
         author_hit = bool(wanted_author) and author == wanted_author
@@ -406,12 +406,19 @@ def find_by_title(
                 "year_match": year_hit,
             }
         )
-        if author_hit and year_hit and best is None:
-            best = paper
+        if author_hit and year_hit:
+            best.append(paper)
 
     scored.sort(key=lambda item: item["confidence"], reverse=True)
-    if best is not None:
-        return best, CONFIDENCE_TITLE_YEAR_AUTHOR, "title + first author + year", scored
+    if len(best) == 1:
+        return best[0], CONFIDENCE_TITLE_YEAR_AUTHOR, "title + first author + year", scored
+    if best:
+        return (
+            None,
+            CONFIDENCE_TITLE_YEAR_AUTHOR,
+            "multiple papers share title + first author + year",
+            scored,
+        )
     return None, CONFIDENCE_TITLE_ONLY, "title only", scored
 
 
@@ -745,9 +752,14 @@ def match_record(
         item for item in candidates if item.get("paper_id") != exclude_paper_id
     ]
     if candidates:
+        ambiguous_method = (
+            METHOD_TITLE_YEAR_AUTHOR
+            if confidence == CONFIDENCE_TITLE_YEAR_AUTHOR
+            else METHOD_TITLE
+        )
         return MatchResult(
             status=STATUS_AMBIGUOUS,
-            method=METHOD_TITLE,
+            method=ambiguous_method,
             confidence=confidence,
             candidates=candidates,
             reason=reason,

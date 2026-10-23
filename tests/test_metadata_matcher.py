@@ -396,6 +396,25 @@ def test_title_author_and_year_together_attach(db_session) -> None:
     assert result.paper_id == paper.id
 
 
+def test_duplicate_title_author_year_candidates_are_ambiguous(db_session) -> None:
+    first = make_paper(db_session, year=2015, authors=["Alice Smith"])
+    second = make_paper(db_session, year=2015, authors=["Alice Smith"])
+
+    result = matcher.match_record(
+        db_session,
+        matcher.MatchInput(
+            title="Low Power SRAM Leakage Reduction",
+            authors=["Alice Smith"],
+            year=2015,
+        ),
+    )
+
+    assert result.status == matcher.STATUS_AMBIGUOUS
+    assert result.method == matcher.METHOD_TITLE_YEAR_AUTHOR
+    assert result.confidence == matcher.CONFIDENCE_TITLE_YEAR_AUTHOR
+    assert {item["paper_id"] for item in result.candidates} == {first.id, second.id}
+
+
 def test_title_only_is_ambiguous_and_never_attaches(db_session) -> None:
     paper = make_paper(db_session, year=2015, authors=["Alice Smith"])
 
