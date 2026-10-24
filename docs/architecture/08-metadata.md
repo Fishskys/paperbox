@@ -340,7 +340,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `scripts/backfill_metadata.py` | 给历史论文补来源行 / 声明 / 标识符 / 主版本标记，**幂等**，`--dry-run` / `--limit`；从不改 `papers.fingerprint` |
 | `scripts/reextract_metadata.py` | 对已存 PDF **重跑元数据提取**并合并缺口（不重解析正文/不重嵌入），`--dry-run`（默认）/`--apply`/`--paper-id`/`--limit`/`--no-index`；先 dry-run 出清单再 apply |
 | `scripts/import_metadata.py` | CLI 导入（`--apply` / `--limit` / `--source-type` / `--report`） |
-| `scripts/acceptance_metadata.py` | 真机验收 7 项：回填数字、IEEE 按 DOI 命中并 apply、无 DOI 记录进复核、手动改+回滚+指纹升级、venue 检索（需 reindex）、元数据先 PDF 后、索引一致性。**只在自己的壳论文上造数据**，`--cleanup` 删掉本次造的行 |
+| `scripts/acceptance_metadata.py` | 真机验收 7 项：动态盘点当前库并验证回填不变量、IEEE 按 DOI 命中并 apply、无 DOI 记录进复核、手动改+回滚+指纹升级、venue 检索（需 reindex）、元数据先 PDF 后、索引一致性。**只在自己的壳论文上造数据**，`--cleanup` 删掉本次造的行 |
 | `scripts/audit_identifier_mirrors.py` | **只读**核对 `papers.doi`/`arxiv_id` 镜像列与 `paper_identifiers`（6 类漂移），`--json`/`--limit`/`--no-fail`；有漂移 exit 1，不修复 |
 | `scripts/audit_author_venue_quality.py` | **只读**核查 authors/venues 归一化质量：拼接名、空名、占位符（`authors` 之类）、同篇重复作者、author_order 断档、venue 空名/含 `;`/同键异名；`--json`/`--no-fail`，不修复 |
 

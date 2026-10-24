@@ -7,8 +7,8 @@
 Checks, against the *live* stack (PostgreSQL + OpenSearch + MinIO + the running
 app), not against fakes:
 
-1. the migration + backfill numbers (sources/claims/identifiers/primary files,
-   fingerprint count unchanged);
+1. a runtime census of the current library plus migration/backfill invariants
+   (sources/claims/identifiers/primary files, fingerprint count unchanged);
 2. an IEEE record matched by DOI: dry run reports it, ``apply`` fills volume/issue/
    pages/publication_date, creates one venue + one edition, stores the three kinds
    of index terms and the raw payload, and a second import changes nothing;
@@ -172,11 +172,18 @@ class Api:
 # --------------------------------------------------------------------------- #
 # checks
 # --------------------------------------------------------------------------- #
+def live_paper_count(session) -> int:  # noqa: ANN001 - accepts a SQLAlchemy session
+    """Return the current live-paper baseline instead of assuming a fixed corpus."""
+    return int(
+        session.execute(
+            select(func.count(Paper.id)).where(Paper.deleted_at.is_(None))
+        ).scalar_one()
+    )
+
+
 def check_backfill(session, checker: Checker) -> None:
     print("1. migration + backfill")
-    live = session.execute(
-        select(func.count(Paper.id)).where(Paper.deleted_at.is_(None))
-    ).scalar_one()
+    live = live_paper_count(session)
     sources = session.execute(select(func.count(PaperSource.id))).scalar_one()
     claims = session.execute(select(func.count(PaperFieldProvenance.id))).scalar_one()
     idents = session.execute(select(func.count(PaperIdentifier.id))).scalar_one()
@@ -185,7 +192,7 @@ def check_backfill(session, checker: Checker) -> None:
             PaperFile.is_primary.is_(True), PaperFile.deleted_at.is_(None)
         )
     ).scalar_one()
-    checker.check("68 live papers", live == 68, f"papers={live}")
+    print(f"  [INFO] live paper baseline -- papers={live}")
     heuristic_sources = session.execute(
         select(func.count(PaperSource.id)).where(
             PaperSource.source_type == "pdf_heuristic"

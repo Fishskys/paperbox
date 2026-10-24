@@ -23,7 +23,7 @@ from app.db.models import (
 )
 from app.services import metadata_identifiers as ids
 from app.services import paper_service
-from scripts import backfill_metadata, import_metadata
+from scripts import acceptance_metadata, backfill_metadata, import_metadata
 
 DOI = "10.1109/JSSC.2015.2441234"
 SHA = "a" * 64
@@ -255,6 +255,17 @@ def test_backfill_respects_the_limit(db_session, monkeypatch, capsys) -> None:
 
     assert "backfilling 1 live paper" in capsys.readouterr().out
     assert db_session.query(PaperSource).count() == 1
+
+
+# --------------------------------------------------------------------------- #
+# acceptance census
+# --------------------------------------------------------------------------- #
+def test_acceptance_metadata_detects_the_current_live_paper_count(db_session) -> None:
+    assert acceptance_metadata.live_paper_count(db_session) == 0
+
+    make_legacy_paper(db_session)
+
+    assert acceptance_metadata.live_paper_count(db_session) == 1
 
 
 # --------------------------------------------------------------------------- #
