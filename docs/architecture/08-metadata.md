@@ -272,7 +272,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 |---|---|---|---|
 | 1 | `paper_identifiers`，按 `doi > arxiv > ieee_article_number` 顺序探测（`_MATCH_SCHEMES`）；ISSN 是刊物标识，不参与论文身份匹配 | 结构化来源 1.0；弱/无来源 0.95 | 结构化命中可自动匹配；弱/无来源必须有兼容标题或主文件名标识符支持 |
 | 2 | `paper_files.sha256` | 1.0 | `matched`，`sha256` |
-| 3 | 严格文件名 DOI + 规范化标题一致，且候选唯一 | 0.95 | `matched`，`filename_doi_title`；并列则 `ambiguous` |
+| 3 | 严格完整 DOI 文件名命中，且候选唯一 | 0.95 | `matched`，`filename_doi`；PDF 标题可能损坏，不作为必要条件；并列或结构化 DOI 冲突则 `ambiguous` |
 | 4 | 严格 DOI 文件名中出现输入 IEEE article number + 规范化标题一致，且候选唯一 | 0.9 | `matched`，`filename_ieee_article_number_title`；并列则 `ambiguous` |
 | 5 | 规范化标题 + 首作者 + 年份三者全中，且最高证据候选唯一 | 0.8 | `matched`，`title_year_author`；并列则 `ambiguous`，不按创建时间选第一个 |
 | 6 | 仅标题命中（候选 = 规范化标题的**每个词**都 AND 命中，再 Python 精确等值；不设 200 上限/最长词截断） | 0.5 | **`ambiguous`**，不自动挂 |
@@ -282,6 +282,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 强冲突优先于正向证据：主文件名携带不同 DOI、候选已有不同的结构化论文级 identifier、输入的多个 identifier 分别属于不同论文，或 DOI 命中但标题明显无关且没有 SHA256/文件名支持时，结果为 `ambiguous`。候选明细包含标题、identifier、文件名支持和冲突原因。
 
 文件名 DOI 只接受完整 `10.<4-9位注册号>_<后缀>.pdf`，目录名和描述性文件名中的 DOI token 不参与。下载器会把 DOI 中每个 `/` 编码成 `_`：已有 DOI 与文件名比较时将全部 `/` 编码后精确比较；反向提取只有在文件名恰好一个 `_` 时才安全，多下划线文件名不猜测也不持久化 DOI。每步都跳过 `exclude_paper_id`（摄取时传本次新建的论文，绝不匹配自己）。`pending` 不是匹配器的输出，而是 `paper_sources.match_status` 的列默认值。
+
+历史壳清理由 `scripts/reconcile_metadata_shells.py` 执行，默认 dry-run。唯一匹配的来源重放到已有 PDF 论文；其余没有文件、chunk、ingestion job 的空壳硬删除。任何带上述依赖的异常 `AWAITING_FILE` 行都会跳过。
 
 摄取与重新提取会把严格文件名中的 DOI/arXiv 登记为 `source_type='filename'` 的弱声明：只在论文尚无该 scheme 且值未被其他论文占用时填空，不能覆盖文档内嵌、结构化导入或人工值；IEEE article number 不从 DOI 尾部推导。
 

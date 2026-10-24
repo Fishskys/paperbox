@@ -194,7 +194,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 |---|---|---|---|
 | 1 | 论文级 `scheme + normalized_value`（DOI / arXiv / IEEE article number）命中 `paper_identifiers`；ISSN 不参与论文身份匹配 | 结构化来源 1.0；弱/无来源 0.95 | 结构化命中可自动匹配；弱/无来源还需兼容标题或主文件名支持 |
 | 2 | `paper_files.sha256` 命中 | 1.0 | 自动 `matched` |
-| 3 | 严格文件名 DOI + 规范化标题一致，且候选唯一 | 0.95 | 自动 `matched`；并列则 `ambiguous` |
+| 3 | 严格完整 DOI 文件名命中，且候选唯一 | 0.95 | 自动 `matched`；PDF 标题可能损坏，不作为必要条件；并列或结构化 DOI 冲突则 `ambiguous` |
 | 4 | DOI 文件名中的输入 IEEE article number + 规范化标题一致，且候选唯一 | 0.9 | 自动 `matched`；并列则 `ambiguous` |
 | 5 | 规范化标题 + 首作者 + 年份（三者全中），且最高证据候选唯一 | 0.8 | 自动 `matched`；并列则 `ambiguous` |
 | 6 | 仅标题命中 | 0.5 | `ambiguous`（进复核清单，**不自动挂**） |
@@ -202,6 +202,8 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | 8 | 都没有 | — | 建**壳论文**（`AWAITING_FILE`）或记为 `unmatched`（`dry_run` 时只报告） |
 
 复核与人工：`GET /api/metadata/review`（pending/ambiguous 来源 + 冲突字段）、`POST /api/metadata/sources/{id}/attach`（人工归属）。
+
+历史壳清理：`scripts/reconcile_metadata_shells.py` 默认 dry-run；它用同一匹配器把唯一命中的来源重放到已有 PDF 论文，硬删除其余没有文件、chunk、作业的空壳。任何带文件、chunk 或 ingestion job 的异常 `AWAITING_FILE` 行都会跳过，不参与自动删除。
 
 正向证据不能覆盖强冲突：主文件名不同 DOI、候选不同结构化 identifier、输入 identifier 分裂到不同论文，以及 DOI 命中但标题明显无关且无文件身份支持，均返回 `ambiguous` 并列出冲突原因。
 

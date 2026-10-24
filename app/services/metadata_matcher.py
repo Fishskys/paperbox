@@ -7,14 +7,16 @@ step    evidence                                            confidence  outcome
 ======  ==================================================  =========  =============
 1       ``scheme + normalized_value`` in paper_identifiers  1.0        matched
 2       ``paper_files.sha256``                              1.0        matched
-3       normalized title + first author + year              0.8        matched
-4       title only (or title + one signal)                  0.5        ambiguous
-5       normalized file name                                0.5        ambiguous
-6       nothing                                              --         unmatched
+3       unique complete DOI filename                        0.95       matched
+4       filename article number + exact title               0.9        matched
+5       normalized title + first author + year              0.8        matched
+6       title only (or title + one signal)                  0.5        ambiguous
+7       normalized file name                                0.5        ambiguous
+8       nothing                                              --         unmatched
 ======  ==================================================  =========  =============
 
-Step 4 never attaches automatically: with no UI to confirm a guess, a wrong
-attachment is worse than a review-queue entry. Step 6 leaves the decision to the
+Step 6 never attaches automatically: with no UI to confirm a guess, a wrong
+attachment is worse than a review-queue entry. Step 8 leaves the decision to the
 caller -- ``apply`` creates a shell paper (``AWAITING_FILE``), ``dry_run`` reports
 it as unmatched.
 """
@@ -56,7 +58,10 @@ METHOD_DOI = "doi"
 METHOD_ARXIV = "arxiv"
 METHOD_IEEE_ARTICLE_NUMBER = "ieee_article_number"
 METHOD_SHA256 = "sha256"
-METHOD_FILENAME_DOI_TITLE = "filename_doi_title"
+METHOD_FILENAME_DOI = "filename_doi"
+# Backward-compatible import name; reports now use ``filename_doi`` because an
+# exact complete DOI filename no longer depends on the often-broken PDF title.
+METHOD_FILENAME_DOI_TITLE = METHOD_FILENAME_DOI
 METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE = "filename_ieee_article_number_title"
 METHOD_IDENTIFIER_CONFLICT = "identifier_conflict"
 METHOD_TITLE_YEAR_AUTHOR = "title_year_author"
@@ -288,15 +293,18 @@ def find_by_filename_identifier(
 def find_by_filename_identity_and_title(
     session: Session, match_input: MatchInput
 ) -> tuple[list[Paper], str | None, float | None, list[dict[str, Any]]]:
-    """Strongest filename identity supported by an exact normalized title."""
+    """Strongest paper identity carried by a stored PDF filename.
+
+    A complete DOI filename is the normalized DOI itself and is therefore enough
+    to identify a unique candidate. An IEEE article number is only a substring of
+    such a filename, so that weaker probe still requires an exact title.
+    """
     wanted_title = paper_service.normalize_text(match_input.title)
-    if not wanted_title:
-        return [], None, None, []
     normalized = match_input.normalized_identifiers()
     probes = (
         (
             ids.SCHEME_DOI,
-            METHOD_FILENAME_DOI_TITLE,
+            METHOD_FILENAME_DOI,
             CONFIDENCE_FILENAME_DOI_TITLE,
         ),
         (
@@ -310,11 +318,16 @@ def find_by_filename_identity_and_title(
         if not value:
             continue
         papers = find_by_filename_identifier(session, scheme=scheme, value=value)
-        candidates = [
-            paper
-            for paper in papers
-            if paper_service.normalize_text(paper.title) == wanted_title
-        ]
+        if scheme == ids.SCHEME_DOI:
+            candidates = papers
+        elif wanted_title:
+            candidates = [
+                paper
+                for paper in papers
+                if paper_service.normalize_text(paper.title) == wanted_title
+            ]
+        else:
+            candidates = []
         if not candidates:
             continue
         details = [
@@ -322,7 +335,7 @@ def find_by_filename_identity_and_title(
                 "paper_id": paper.id,
                 "title": paper.title,
                 "confidence": confidence,
-                "title_match": True,
+                "title_match": _title_matches(paper, match_input.title),
                 "filename_identifier_matches": [scheme],
             }
             for paper in candidates
@@ -714,6 +727,16 @@ def match_record(
     candidates = [
         item for item in candidates if item.get("paper_id") != exclude_paper_id
     ]
+    filename_evidence = (
+        ["filename_identifier:doi"]
+        if method == METHOD_FILENAME_DOI
+        else ["filename_identifier", "title:exact"]
+    )
+    filename_reason = (
+        "unique complete DOI filename"
+        if method == METHOD_FILENAME_DOI
+        else "filename identifier + normalized title"
+    )
     if len(filename_identity) == 1:
         paper = filename_identity[0]
         conflicts = _strong_conflicts(session, paper, match_input, normalized)
@@ -731,7 +754,7 @@ def match_record(
                         conflicts=conflicts,
                     )
                 ],
-                evidence=["filename_identifier", "title:exact"],
+                evidence=filename_evidence,
                 conflicts=conflicts,
                 reason="; ".join(conflicts),
             )
@@ -741,8 +764,8 @@ def match_record(
             confidence=confidence,
             paper=paper,
             candidates=candidates,
-            evidence=["filename_identifier", "title:exact"],
-            reason="filename identifier + normalized title",
+            evidence=filename_evidence,
+            reason=filename_reason,
         )
     if filename_identity:
         return MatchResult(
@@ -750,7 +773,7 @@ def match_record(
             method=method,
             confidence=confidence,
             candidates=candidates,
-            evidence=["filename_identifier", "title:exact"],
+            evidence=filename_evidence,
             conflicts=["multiple top candidates"],
             reason="multiple papers share filename identifier + normalized title",
         )
@@ -895,6 +918,7 @@ __all__ = [
     "METHOD_ARXIV",
     "METHOD_DOI",
     "METHOD_FILENAME",
+    "METHOD_FILENAME_DOI",
     "METHOD_FILENAME_DOI_TITLE",
     "METHOD_FILENAME_IEEE_ARTICLE_NUMBER_TITLE",
     "METHOD_IEEE_ARTICLE_NUMBER",

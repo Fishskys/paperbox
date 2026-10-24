@@ -346,7 +346,7 @@ def test_multi_slash_filename_doi_and_title_match_a_unique_paper(db_session) -> 
     assert result.paper_id == paper.id
 
 
-def test_filename_doi_without_a_matching_title_does_not_attach(db_session) -> None:
+def test_unique_complete_filename_doi_matches_despite_a_bad_pdf_title(db_session) -> None:
     paper = make_paper(db_session, title="A Different Publication")
     attach_file(
         db_session,
@@ -362,7 +362,10 @@ def test_filename_doi_without_a_matching_title_does_not_attach(db_session) -> No
         ),
     )
 
-    assert result.status == matcher.STATUS_UNMATCHED
+    assert result.status == matcher.STATUS_MATCHED
+    assert result.paper_id == paper.id
+    assert result.method == matcher.METHOD_FILENAME_DOI
+    assert result.evidence == ["filename_identifier:doi"]
 
 
 def test_duplicate_filename_doi_and_title_candidates_are_ambiguous(db_session) -> None:
