@@ -4,6 +4,43 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.7.1] - 2026-10-24
+
+### Added
+
+- **元数据自动匹配结果可解释**：导入报告为每条记录返回匹配原因、采用的证据、否决冲突与候选列表，
+  可以直接区分 DOI、文章号、文件名 DOI、标题/作者/年份等证据如何参与最终决定。
+- **严格 PDF 文件名标识符进入统一账本**：从规范文件名提取 DOI，写入带来源声明的
+  `paper_identifiers`，后续元数据导入可复用；对于文件系统损失 `/` 等字符的 DOI 形式，仅在标题等证据
+  同时成立时使用，不把模糊子串当作精确身份。
+- **历史元数据壳论文整理工具**：新增 `scripts/reconcile_metadata_shells.py`，默认只生成 dry-run 计划；
+  可把来源重放并合并到唯一匹配的已有 PDF 论文，删除无文件、chunk 与作业的剩余空壳，异常依赖项会跳过。
+
+### Changed
+
+- **精确匹配的结构化元数据可以覆盖 PDF 元数据**：DOI、arXiv ID、IEEE article number 或严格文件名身份
+  唯一命中后，导入值按来源优先级替换 PDF 内嵌/启发式字段，同时保留字段声明与被替换历史；弱匹配仍只补空缺。
+- **ISSN 回归出版物层级**：ISSN 只保存在 `venues.issn`，不再作为论文身份写入或查询
+  `paper_identifiers`；升级迁移会删除历史论文级 ISSN identifier 及其来源声明，但保留 venue ISSN。
+  升级到 0.7.1 后需要执行 `uv run alembic upgrade head` 完成数据清理。
+- **dry-run 与实际导入使用同一批内状态**：试运行在数据库 SAVEPOINT 中按真实顺序模拟新增、合并和标识符更新，
+  最终整体回滚；已导入来源通过有界批量查询直接报告 `unchanged`，不加载原始 JSON，减少重复导入的查询开销。
+- **验收脚本动态探测语料规模**：元数据验收不再写死论文数量，按当前有效论文数建立基线，避免库规模变化造成误报。
+- 开发环境加入 `init_your_proj` 的 pre-commit 敏感信息检查。
+
+### Fixed
+
+- **弱证据和冲突标识符不再误合并论文**：自动匹配要求唯一最高候选；已有结构化 DOI 等身份冲突时直接否决，
+  IEEE article number 的子串命中必须再通过精确标题校验。
+- **dry-run 与 apply 对同一批记录给出不同结果**：后续记录现在能看到本批前序记录拟创建的 shell、来源和标识符；
+  dry-run 报告也不再返回回滚后不存在的临时 shell UUID，已存在的 shell 来源不会误报成“将创建壳论文”。
+- **PDF 日期污染出版日期**：PDF 创建/修改时间不再作为论文 `publication_date` 的结构化来源，避免文件生成时间
+  阻止权威外部元数据写入。
+- **IEEE 描述性期号无法写入**：`"1: Single-Photon Technologies and Applications"` 等值会提取规范期号，
+  原始文本仍完整保留在来源记录中。
+- **标识符来源丢失或镜像不一致**：文件名 DOI 与导入标识符保留正确 `source_id`，`papers.doi` 等兼容镜像继续由
+  `paper_identifiers` 刷新，不再产生无法追溯的身份声明。
+
 ## [0.7.0] - 2026-10-20
 
 ### Added
