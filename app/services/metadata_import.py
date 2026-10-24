@@ -69,12 +69,22 @@ _IEEE_MONTH_NUMBERS = {
 }
 
 _IEEE_MONTH_TOKEN_RE = re.compile("|".join(_IEEE_MONTH_NUMBERS))
+_IEEE_DESCRIPTIVE_ISSUE_RE = re.compile(r"^(\d+(?:\s*[-\u2013]\s*\d+)?)\s*:\s+\S")
 
 
 def _month_in_text(lowered: str) -> int | None:
     """Month number for the first month word in an (already casefolded) date string."""
     match = _IEEE_MONTH_TOKEN_RE.search(lowered)
     return _IEEE_MONTH_NUMBERS[match.group(0)] if match else None
+
+
+def _ieee_issue(value: Any) -> str | None:
+    """Return the issue designator, excluding an IEEE special-issue title."""
+    text = _text(value)
+    if not text:
+        return None
+    match = _IEEE_DESCRIPTIVE_ISSUE_RE.match(text)
+    return match.group(1) if match else text
 
 
 @dataclass
@@ -330,7 +340,7 @@ def parse_ieee_record(record: Mapping[str, Any]) -> ParsedRecord:
     volume = _text(record.get("volume"))
     if volume:
         values["volume"] = volume
-    issue = _text(record.get("issue"))
+    issue = _ieee_issue(record.get("issue"))
     if issue:
         values["issue"] = issue
     pages = _pages(record.get("start_page"), record.get("end_page"))

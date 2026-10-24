@@ -168,6 +168,16 @@ def test_a_record_covers_every_mapped_field() -> None:
     assert values["url"] == "https://ieeexplore.ieee.org/document/7065247"
 
 
+def test_ieee_descriptive_issue_keeps_only_the_issue_designator() -> None:
+    record = dict(IEEE_SAMPLE["articles"][0])
+    record["issue"] = "1: Single-Photon Technologies and Applications"
+
+    parsed = importer.parse_records({"articles": [record]})[0]
+
+    assert parsed.values["issue"] == "1"
+    assert parsed.raw["issue"] == "1: Single-Photon Technologies and Applications"
+
+
 def test_the_venue_claim_carries_the_edition_detail() -> None:
     venue = importer.parse_records(IEEE_SAMPLE)[0].values["venue"]
 
@@ -417,6 +427,24 @@ def test_apply_fills_the_record_onto_the_matched_paper(db_session) -> None:
     assert paper.title == "A 0.6 V Low Power SRAM with Leakage Reduction"
     assert paper_service.paper_author_names(paper) == ["Alice Smith", "Bob Jones"]
     assert paper.url == "https://ieeexplore.ieee.org/document/7065247"
+
+
+def test_apply_accepts_an_ieee_descriptive_issue(db_session) -> None:
+    paper = paper_with_doi(db_session)
+    payload = {"articles": [dict(IEEE_SAMPLE["articles"][0])]}
+    payload["articles"][0]["issue"] = (
+        "1: Single-Photon Technologies and Applications"
+    )
+
+    report = importer.import_payload(db_session, payload, apply=True)
+
+    assert report.matched == 1
+    assert paper.issue == "1"
+    source = sources.find_source(
+        db_session, sources.SOURCE_TYPE_IMPORT_FILE, f"doi:{DOI.casefold()}"
+    )
+    assert source is not None
+    assert source.raw["issue"] == "1: Single-Photon Technologies and Applications"
 
 
 def test_exact_match_import_replaces_pdf_embedded_fields(db_session) -> None:

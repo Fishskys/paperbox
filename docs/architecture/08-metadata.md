@@ -331,6 +331,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 契约：请求体既不是 multipart 也不是 JSON → 415（`_payload_from_request`）；`source_type` 非法 → 422；同一记录重复导入计入 `unchanged`，不产生第二行来源。
 
+IEEE Xplore 的 `issue` 偶尔采用“期号: 专题名”（如 `1: Single-Photon Technologies and Applications`）。`parse_ieee_record` 只把冒号前的数字期号写入 `papers.issue`，完整标签仍原样保存在 `paper_sources.raw`；该规则不对 CSL-JSON 或通用 JSON 做任意截断。
+
 ### 4.8 脚本
 
 | 脚本 | 作用 |
