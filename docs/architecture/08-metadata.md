@@ -249,26 +249,22 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ### 4.3 合并规则 R2（现状）
 
-三类来源集合（`metadata_merge.py` 的 `SOURCE_TYPE_MANUAL`）：
+自动导入分成两个连续关口：`metadata_matcher.match_record` 必须先返回唯一、无强冲突的 `matched` 论文，`metadata_import._import_one` 才调用 `merge_values`。`ambiguous` 来源只进入复核队列，不能修改论文；未匹配记录建立 `AWAITING_FILE` 壳论文，不会覆盖已有论文。
 
-| 集合 | 取值 |
-|---|---|
-| 结构化（可覆盖启发式） | `ieee_api` / `arxiv_api` / `crossref` / `pdf_embedded` / `import_file` / `manual` |
-| 启发式（唯一会被覆盖的一方） | `pdf_heuristic` |
-| 不受约束 | `manual`（PATCH 想改什么就改什么） |
+通用字段的来源权威级别由 `metadata_merge.SOURCE_AUTHORITY` 定义：
 
-`decide` 对单个字段给出三种动作：`filled` / `overridden` / `conflict`。规则只有两条：
+| 级别 | 来源 | 行为 |
+|---|---|---|
+| 3 | `manual` | 人工值可强制覆盖，并保留旧声明供回滚 |
+| 2 | `ieee_api` / `arxiv_api` / `crossref` / `import_file` | 已精确匹配的外部书目元数据，可覆盖 PDF 自带值和弱抽取值 |
+| 1 | `pdf_embedded` | 可覆盖首页启发式和文件名值，不能覆盖外部书目元数据 |
+| 0 | `pdf_heuristic` / `filename` | 只填空；不同弱来源互相冲突时保留现值 |
 
-1. **只填空**：列里已有值就不覆盖，但照样记一条 `is_current=false` 的声明（历史不丢，可回滚）。
-2. **一个例外**：`pdf_heuristic` 的值可以被任何结构化来源覆盖。结构化来源**之间不比较权威性**——分歧保留现值并登记为冲突。
+`decide` 的顺序是：空值直接 `filled`；同值 `unchanged`；人工来源 `overridden`；标题走独立可信度阶梯；其余字段比较 `SOURCE_AUTHORITY`。新来源级别更高则 `overridden`，更低则 `conflict`，同级分歧保留现值并登记历史声明。标题仍把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免 PDF 的运行页眉或生成文件名覆盖正确标题。
 
-人工裁决（`_dismiss`/回滚）：冲突清单里的每条分歧，人要么「采纳被拒值」（rollback），要么
-「保留现值」（`decided_by='dismissed'`）；两种裁决都不删声明、都让该字段退出清单。
+字段特例（`_special_winner`）只在**同一非弱级别**内生效：`abstract` 取更长文本，`authors` 取更多作者，`year` 保留现值。低级别来源不能靠内容更长越级覆盖。`tag:<kind>` 在覆盖时调用 `metadata_tags.replace_kind`，替换该 kind 的旧链接；不同 kind 互不影响，旧声明仍保留在 provenance 中。
 
-字段特例（`_special_winner`）：`abstract` 取最长、`authors` 取最多、`year` 冲突时保现值 ——
-**仅限结构化来源之间**：弱来源（`pdf_heuristic`/`filename`）不参与这条，因为它不是"截断得更短"而是"读错了"，且错读的列表往往更长。
-
-落库与报告：`apply_decision` → `merge_values`（批量）→ `conflict_report`；复核清单由 `recorded_conflicts` 生成，**只列"真冲突"**（`is_current=false` 且值不同、来源不是 `pdf_heuristic`、论文未删）——"结构化覆盖启发式"是规则 2 的正常工作，不出现在清单里。
+人工裁决（`_dismiss`/回滚）不删除声明：要么采纳历史值，要么保留现值并把分歧标为已处理。落库与报告链为 `apply_decision` → `merge_values` → `conflict_report`；只有未被规则解决的同级或降级分歧进入复核清单。
 
 ### 4.4 证据匹配器（`match_record`）
 

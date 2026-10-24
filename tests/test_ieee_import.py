@@ -419,6 +419,46 @@ def test_apply_fills_the_record_onto_the_matched_paper(db_session) -> None:
     assert paper.url == "https://ieeexplore.ieee.org/document/7065247"
 
 
+def test_exact_match_import_replaces_pdf_embedded_fields(db_session) -> None:
+    paper = paper_with_doi(db_session, title="PDF title")
+    source = sources.find_source(
+        db_session,
+        sources.SOURCE_TYPE_PDF_EMBEDDED,
+        sources.paper_embedded_ref(paper.id),
+    )
+    assert source is not None
+    stale = {
+        "abstract": "PDF Subject metadata",
+        "year": 2014,
+        "authors": ["Alice Smith", "PDF Producer"],
+        "publication_date": "D:20140613032338+08'00'",
+        "tag:author_terms": ["stale PDF keyword"],
+    }
+    for field, value in stale.items():
+        provenance_service.set_field(
+            db_session,
+            paper,
+            field,
+            value,
+            source_id=source.id,
+            override=True,
+        )
+
+    report = importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
+
+    assert report.matched == 1
+    assert report.sources[0]["match_method"] == "doi"
+    assert paper.abstract == "This paper presents a leakage reduction technique for SRAM."
+    assert paper.year == 2015
+    assert paper.publication_date.isoformat() == "2015-07-01"
+    assert paper_service.paper_author_names(paper) == ["Alice Smith", "Bob Jones"]
+    assert tags.tags_for_paper(db_session, paper, kind="author_terms") == [
+        "leakage reduction"
+    ]
+    conflicted_fields = {item["field"] for item in report.conflicts}
+    assert not conflicted_fields.intersection(stale)
+
+
 def test_apply_records_the_venue_and_its_edition(db_session) -> None:
     paper = paper_with_doi(db_session)
     importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
@@ -548,7 +588,12 @@ def test_import_is_idempotent_for_a_shell_too(db_session) -> None:
 
 
 def test_a_title_only_record_goes_to_the_review_queue(db_session) -> None:
-    make_paper(db_session, title="A 0.6 V Low Power SRAM with Leakage Reduction", year=2015)
+    paper = make_paper(
+        db_session,
+        title="A 0.6 V Low Power SRAM with Leakage Reduction",
+        abstract="Existing abstract",
+        year=2015,
+    )
     record = dict(IEEE_SAMPLE["articles"][0])
     record.pop("doi")
     record.pop("article_number")
@@ -567,6 +612,7 @@ def test_a_title_only_record_goes_to_the_review_queue(db_session) -> None:
     assert len(queued) == 1
     assert queued[0].match_status == sources.MATCH_STATUS_AMBIGUOUS
     assert queued[0].paper_id is None
+    assert paper.abstract == "Existing abstract"
 
 
 def test_the_limit_is_respected(db_session) -> None:

@@ -390,7 +390,7 @@ def write_field(
         )
 
     if kind_of_tag_field(field) is not None:
-        return _write_tags(session, paper, field, value)
+        return _write_tags(session, paper, field, value, override=override)
 
     logger.debug("no writer for provenance field %s", field)
     return False
@@ -556,8 +556,15 @@ def _restore_identifier(session: Session, paper: Paper, scheme: str, value: Any)
     _write_identifier(session, paper, scheme, value, replace=True)
 
 
-def _write_tags(session: Session, paper: Paper, field: str, value: Any) -> bool:
-    """``tag:<kind>`` claims link paper_tags rows with that kind."""
+def _write_tags(
+    session: Session,
+    paper: Paper,
+    field: str,
+    value: Any,
+    *,
+    override: bool = False,
+) -> bool:
+    """Apply a ``tag:<kind>`` claim, replacing that kind on an override."""
     kind = kind_of_tag_field(field)
     if kind is None or value is None:
         return False
@@ -571,7 +578,10 @@ def _write_tags(session: Session, paper: Paper, field: str, value: Any) -> bool:
         return False
     from app.services import metadata_tags as tags
 
-    return tags.link_tags(session, paper, names, kind=kind)
+    if override:
+        tags.replace_kind(session, paper, kind, names)
+        return True
+    return bool(tags.link_tags(session, paper, names, kind=kind))
 
 
 def read_field(paper: Paper, field: str) -> Any:

@@ -1,29 +1,20 @@
-"""Merge engine, rule R2 (decision 11): fill blanks, never rank sources.
+"""Merge engine: fill blanks, then prefer authoritative bibliographic metadata.
 
 The rules, in order:
 
-1. **Fill blanks only.** When ``papers`` already holds a value, the incoming
-   record does not replace it; its claim is still recorded (as history) and the
-   disagreement is reported as a conflict.
-2. **One exception, both directions.** A value that came from ``pdf_heuristic`` may
-   be replaced by any *structured* source (``ieee_api`` / ``arxiv_api`` /
-   ``crossref`` / ``import_file`` / ``pdf_embedded`` / ``manual``). That is the
-   whole point of the layer: the 68 existing papers were described by heuristics,
-   so a real record from IEEE has to be able to correct them. The same rule read
-   backwards stops a weak source from *winning* against a structured one -- in
-   particular it may not win rule 4 by being longer (see ``_special_winner``).
-3. **No authority ranking between structured sources.** IEEE vs. arXiv: first
-   writer keeps the field, the other one is logged.
+1. **Fill blanks.** Every non-empty source may fill an empty field.
+2. **Authority tiers.** Manual edits are unrestricted. A matched external
+   bibliographic record (IEEE/arXiv/Crossref/import file) may correct PDF embedded
+   metadata; PDF embedded metadata may correct page heuristics and file names.
+   Lower-authority sources never replace higher-authority values.
+3. **Equal-tier disagreements stay visible.** IEEE vs. arXiv, for example, keeps
+   the current value and records the other claim for review.
 4. **Field specifics.** ``abstract`` keeps the longest text (sources truncate
    differently), ``authors`` keeps the longest list, ``year`` keeps the current
-   value on a conflict. These tie-breaks apply between *structured* records only:
-   the "sources truncate differently" premise is what makes "longer" a reason to
-   prefer one, and a weak source does not truncate, it misreads.
+   value on a conflict. These tie-breaks apply only within one non-weak authority
+   tier; a lower-authority source cannot win merely by being longer.
 5. Nothing is ever deleted: the loser is a row in ``paper_field_provenance`` with
    ``is_current=false``, so anything can be rolled back.
-
-There is deliberately no "which source is more trustworthy" table -- deciding
-that for every new platform is the maintenance burden this design avoids.
 """
 
 from __future__ import annotations
@@ -79,6 +70,21 @@ HEURISTIC_SOURCE_TYPES: frozenset[str] = WEAK_SOURCE_TYPES
 #: ``manual`` is the one source R2 does not constrain (decision 12).
 UNRESTRICTED_SOURCE_TYPES: frozenset[str] = frozenset({SOURCE_TYPE_MANUAL})
 
+#: Generic-field authority. Automatic imports reach this merge engine only after
+#: the matcher has selected one conflict-free paper, so an external bibliographic
+#: record can safely replace values produced by the document itself. Sources in
+#: the same tier still disagree visibly instead of silently replacing each other.
+SOURCE_AUTHORITY: dict[str, int] = {
+    SOURCE_TYPE_MANUAL: 3,
+    SOURCE_TYPE_IEEE_API: 2,
+    SOURCE_TYPE_ARXIV_API: 2,
+    SOURCE_TYPE_CROSSREF: 2,
+    SOURCE_TYPE_IMPORT_FILE: 2,
+    SOURCE_TYPE_PDF_EMBEDDED: 1,
+    SOURCE_TYPE_PDF_HEURISTIC: 0,
+    SOURCE_TYPE_FILENAME: 0,
+}
+
 #: Sources whose *title* claim is not trustworthy, even though they are otherwise
 #: "structured". ``pdf_embedded`` reads the PDF's XMP/Info ``dc:title``, which for
 #: IEEE PDFs is routinely a running header or the proceedings name -- measured on
@@ -104,6 +110,11 @@ _TITLE_TRUST: dict[str, int] = {
 def _title_trust(source_type: str | None) -> int | None:
     """Trust level for a title claim, or ``None`` when the source is unknown."""
     return _TITLE_TRUST.get((source_type or "").strip().lower())
+
+
+def source_authority(source_type: str | None) -> int | None:
+    """Generic-field authority tier, or ``None`` for an unknown source."""
+    return SOURCE_AUTHORITY.get((source_type or "").strip().lower())
 
 ACTION_FILLED = "filled"
 ACTION_OVERRIDDEN = "overridden"
@@ -320,9 +331,8 @@ def decide(
                     reason="a less trustworthy source cannot replace the title",
                     source_type=incoming_type,
                 )
-            # Equal trust: keep the current value. Title decisions end here -- the
-            # generic structured-over-weak rule below must not re-decide the title
-            # (it would let pdf_embedded "override" a pdf_heuristic title).
+            # Equal trust: keep the current value. Title decisions end here so
+            # the generic authority table cannot re-decide the title.
             return MergeDecision(
                 field=field_name,
                 action=ACTION_CONFLICT,
@@ -331,44 +341,46 @@ def decide(
                 reason="keep the current value and record the disagreement",
                 source_type=incoming_type,
             )
-    if is_heuristic(existing_type) and is_structured(incoming_type):
-        return MergeDecision(
-            field=field_name,
-            action=ACTION_OVERRIDDEN,
-            kept=value,
-            rejected=current_value,
-            reason="structured source overrides a weak source",
-            source_type=incoming_type,
-        )
-    if is_heuristic(incoming_type) and is_structured(existing_type):
-        # Rule 2, the other direction -- it used to only say "a structured source
-        # may correct a weak one", which silently left the mirror case to the field
-        # specifics below. Those read "longer is more complete" and assume every
-        # candidate is the same list, truncated differently; a weak source does not
-        # truncate, it *misreads*, so a broken page parse (title fragments, abstract
-        # sentences) produces the longer ``authors`` list and wins. Longer is not
-        # better when the source is the one that cannot be trusted.
-        return MergeDecision(
-            field=field_name,
-            action=ACTION_CONFLICT,
-            kept=current_value,
-            rejected=value,
-            reason="a weak source cannot outgrow a structured one",
-            source_type=incoming_type,
-        )
-    if is_heuristic(incoming_type) and is_heuristic(existing_type):
-        # Rule 3 already says two weak sources do not get compared -- and rule 4's
-        # field specifics are how they used to get compared anyway, by length. That
-        # also meant a re-parse with a *better* heuristic could never correct a bad
-        # one: the bad list was longer.
-        return MergeDecision(
-            field=field_name,
-            action=ACTION_CONFLICT,
-            kept=current_value,
-            rejected=value,
-            reason="two weak sources disagree; the current value stays",
-            source_type=incoming_type,
-        )
+    incoming_authority = source_authority(incoming_type)
+    existing_authority = source_authority(existing_type)
+    if incoming_authority is not None and existing_authority is not None:
+        if incoming_authority > existing_authority:
+            reason = (
+                "structured source overrides a weak source"
+                if is_heuristic(existing_type)
+                else "higher-authority bibliographic source overrides PDF metadata"
+            )
+            return MergeDecision(
+                field=field_name,
+                action=ACTION_OVERRIDDEN,
+                kept=value,
+                rejected=current_value,
+                reason=reason,
+                source_type=incoming_type,
+            )
+        if incoming_authority < existing_authority:
+            reason = (
+                "a weak source cannot outgrow a structured one"
+                if is_heuristic(incoming_type)
+                else "lower-authority PDF metadata cannot replace bibliographic metadata"
+            )
+            return MergeDecision(
+                field=field_name,
+                action=ACTION_CONFLICT,
+                kept=current_value,
+                rejected=value,
+                reason=reason,
+                source_type=incoming_type,
+            )
+        if incoming_authority == 0:
+            return MergeDecision(
+                field=field_name,
+                action=ACTION_CONFLICT,
+                kept=current_value,
+                rejected=value,
+                reason="two weak sources disagree; the current value stays",
+                source_type=incoming_type,
+            )
     if _special_winner(field_name, current_value, value):
         return MergeDecision(
             field=field_name,
@@ -554,6 +566,7 @@ __all__ = [
     "SOURCE_TYPE_MANUAL",
     "SOURCE_TYPE_PDF_EMBEDDED",
     "SOURCE_TYPE_PDF_HEURISTIC",
+    "SOURCE_AUTHORITY",
     "STRUCTURED_SOURCE_TYPES",
     "UNRESTRICTED_SOURCE_TYPES",
     "YEAR_FIELD",
@@ -568,4 +581,5 @@ __all__ = [
     "is_heuristic",
     "is_structured",
     "merge_values",
+    "source_authority",
 ]

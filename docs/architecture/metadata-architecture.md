@@ -207,26 +207,22 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 ---
 
-## 8. 合并规则 R2（**不引入来源权威性排序**）
+## 8. 合并规则 R2（精确匹配后按来源级别覆盖）
 
-1. **只填空**：目标字段已有值 → 不覆盖，只写 provenance（`is_current=false`）并登记冲突。
-2. **唯一例外**：现有值的来源是**弱来源**（`pdf_heuristic`、`filename`），而新值是**结构化来源**（`ieee_api`/`arxiv_api`/`crossref`/`import_file`/`pdf_embedded`/`manual`）→ 覆盖，`decided_by='structured_override'`，旧值保留为历史行。
-   两个弱来源互相矛盾时按规则 3 处理（只填空 + 登记冲突），不比较谁更可信。
-3. **结构化来源之间**：只填空 + 登记冲突，**不比较谁更权威**。
-4. **字段特例**：`abstract` 取最长；`authors` 取条数最多的一份；`year` 冲突保留现值并登记。
-   **只适用于结构化来源之间**：这条的前提是"各来源截断程度不同，所以更长 = 更完整"，而弱来源（`pdf_heuristic` / `filename`）不是截断而是**误读** —— 它把标题碎片、摘要句子当成人名，列表反而更长。所以规则 2 必须双向成立：弱来源既不能靠"更新"覆盖结构化值，也不能靠"更长"赢它；
-   两个弱来源之间按规则 3 处理（保现值 + 登记冲突），规则 4 不替它们比长度。
-5. **回滚**：把某条历史 provenance 置回 `is_current=true`，并把当时的 `papers` 列写回；不删历史。
-   **人工裁决的两个出口**：`POST /api/papers/{id}/metadata/rollback` = 「采纳被拒值」
-   （落败那条恢复为当前值），`POST /api/papers/{id}/metadata/conflicts/dismiss` = 「保留现值」
-   （现值不动，把落败那条标 `decided_by='dismissed'`）。两者都**不删任何声明**，所以裁决完仍可回滚。
-   裁决过的字段不再进 `GET /api/metadata/review` 的冲突清单（清单是"未决分歧"队列，必须有出口），冲突条目同时带上落败声明的 `provenance_id`，界面不必再查一次。
+外部记录只有在匹配器返回唯一且无强冲突的 `matched` 论文后才进入合并；`ambiguous` 只入复核队列，不能写论文字段。未命中的记录建立独立 `AWAITING_FILE` 壳论文，不会碰已有论文。
 
-> 为什么这样：现有 68 篇的历史元数据全部由启发式写入（回填时统一标 `pdf_heuristic`），因此 IEEE 导入能修正它们；
-> 同时避免了维护一张"谁比谁权威"的排序表。
+来源级别从高到低为：
 
-**更正 = 替换，不是并存**：R2 判成覆盖（或回滚、手动改）时，`provenance_service._write_identifier` 走
-`replace_identifier`——**删掉同 scheme 的旧行**并强制镜像列跟随。只插入新行是不够的：`primary_identifier` 取"同 scheme 里最早的那一行"，于是 `papers.arxiv_id` 与 `papers.fingerprint` 会继续指向刚被否定的旧值（指纹还直接决定查重）。
+1. `manual`：人工值可强制覆盖。
+2. 外部书目：`ieee_api` / `arxiv_api` / `crossref` / `import_file`。精确匹配后可覆盖 PDF 内嵌和弱抽取字段。
+3. `pdf_embedded`：可覆盖首页启发式与文件名值，不能覆盖外部书目元数据。
+4. 弱来源：`pdf_heuristic` / `filename`，只填空，互相矛盾时保留现值。
+
+同级来源分歧不静默覆盖：保留现值并记录历史声明，供复核和回滚。`abstract` 取最长、`authors` 取最多仅在同一非弱级别内生效；`year` 同级冲突保留现值。标题使用独立阶梯，把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免运行页眉覆盖正确标题。
+
+覆盖是字段级替换：标量写回 `papers`；authors 重建顺序；identifier 替换同 scheme 并同步镜像列和指纹；`tag:<kind>` 只替换该 kind 的链接，不与旧值并存，也不影响其他 tag kind。被替换声明仍保留为 `is_current=false`，因此所有自动覆盖都可追溯、可回滚。
+
+人工裁决有两个出口：`POST /api/papers/{id}/metadata/rollback` 采纳历史值，`POST /api/papers/{id}/metadata/conflicts/dismiss` 保留现值。两者都不删除声明，已裁决字段不再进入复核清单。
 
 ---
 

@@ -1,13 +1,8 @@
-"""Merge rule R2: fill blanks, override heuristics, never rank structured sources.
+"""Merge rules: fill blanks and rank source tiers without hiding peer conflicts.
 
-The three branches the plan calls out explicitly:
-
-* fill a blank,
-* structured source overrides ``pdf_heuristic``,
-* structured vs. structured -> keep the current value and record the conflict.
-
-Plus the field specifics (``abstract`` longest, ``authors`` longest list,
-``year`` keeps the current value) and ``manual`` being exempt from R2.
+The core branches are blank filling, higher-tier replacement, lower-tier
+rejection, and equal-tier conflict retention. Field-specific tie-breakers only
+operate inside one non-weak tier; ``manual`` remains unrestricted.
 """
 
 from __future__ import annotations
@@ -64,6 +59,9 @@ def test_structured_and_heuristic_classification() -> None:
     assert not merge.is_structured(None)
     assert merge.is_heuristic("PDF_Heuristic")
     assert not merge.is_heuristic("ieee_api")
+    assert merge.source_authority("import_file") == 2
+    assert merge.source_authority("pdf_embedded") == 1
+    assert merge.source_authority("filename") == 0
 
 
 def test_source_type_of_an_unclaimed_value_is_the_heuristic(db_session) -> None:
@@ -139,6 +137,44 @@ def test_structured_source_overrides_a_heuristic_value(db_session) -> None:
     assert current.value == "Real title"
     history = prov.field_history(db_session, paper.id, "title")
     assert [row.value for row in history if not row.is_current] == ["Heuristic title"]
+
+
+def test_bibliographic_import_overrides_pdf_embedded_metadata(db_session) -> None:
+    paper = make_paper(db_session, abstract="PDF subject", year=2014)
+    seed(db_session, paper, "abstract", "PDF subject", "pdf_embedded")
+    seed(db_session, paper, "year", 2014, "pdf_embedded")
+    seed(db_session, paper, "authors", ["Alice", "PDF Producer"], "pdf_embedded")
+
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {
+            "abstract": "Curated abstract",
+            "year": 2015,
+            "authors": ["Alice", "Bob"],
+        },
+        source_type="import_file",
+    )
+
+    assert [item.action for item in report.decisions] == [merge.ACTION_OVERRIDDEN] * 3
+    assert paper.abstract == "Curated abstract"
+    assert paper.year == 2015
+    assert prov.read_field(paper, "authors") == ["Alice", "Bob"]
+
+
+def test_pdf_embedded_cannot_replace_bibliographic_metadata(db_session) -> None:
+    paper = make_paper(db_session, abstract="Curated abstract")
+    seed(db_session, paper, "abstract", "Curated abstract", "import_file")
+
+    report = merge.merge_values(
+        db_session,
+        paper,
+        {"abstract": "A much longer PDF producer string " * 20},
+        source_type="pdf_embedded",
+    )
+
+    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert paper.abstract == "Curated abstract"
 
 
 def test_a_heuristic_does_not_override_a_heuristic(db_session) -> None:
