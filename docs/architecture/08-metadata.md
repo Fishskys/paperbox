@@ -314,7 +314,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 | 端点 | 作用 | 出处 |
 |---|---|---|
-| `POST /api/metadata/import` | 导入外部记录，**默认 dry_run** | `api/metadata.py` |
+| `POST /api/metadata/import` | 导入外部记录，**默认 dry_run**；试运行在 SAVEPOINT 内按实际顺序执行整批后回滚，因此批内匹配统计与 apply 一致 | `api/metadata.py` |
 | `GET /api/metadata/review` | 复核清单（`pending` / `ambiguous` 来源 + 真冲突） | |
 | `POST /api/metadata/sources/{source_id}/attach` | 人工把来源挂到某篇论文并重放合并 | |
 | `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | |

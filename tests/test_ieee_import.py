@@ -409,6 +409,36 @@ def test_dry_run_reports_conflicts_without_writing(db_session) -> None:
     assert paper.volume == "1"
 
 
+def test_dry_run_and_apply_make_the_same_batch_decisions(db_session) -> None:
+    payload = [
+        {
+            "title": "A metadata-first paper",
+            "authors": ["Alice Smith"],
+            "year": 2025,
+            "abstract": "first source",
+        },
+        {
+            "title": "A metadata-first paper",
+            "authors": ["Alice Smith"],
+            "year": 2025,
+            "abstract": "second source",
+        },
+    ]
+
+    preview = importer.import_payload(db_session, payload)
+
+    assert preview.dry_run is True
+    assert (preview.created_shell, preview.matched, preview.ambiguous) == (1, 1, 0)
+    assert db_session.query(Paper).count() == 0
+    assert db_session.query(PaperSource).count() == 0
+
+    applied = importer.import_payload(db_session, payload, apply=True)
+
+    assert (applied.created_shell, applied.matched, applied.ambiguous) == (1, 1, 0)
+    assert db_session.query(Paper).count() == 1
+    assert db_session.query(PaperSource).count() == 2
+
+
 # --------------------------------------------------------------------------- #
 # the import: apply
 # --------------------------------------------------------------------------- #

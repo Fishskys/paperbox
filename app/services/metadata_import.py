@@ -767,16 +767,54 @@ def import_records(
     importer: str = "metadata_import",
     limit: int | None = None,
 ) -> ImportReport:
-    """Match, merge and report on ``records``; write only when ``apply`` is true.
+    """Match, merge and report on ``records``; persist only when ``apply`` is true.
 
     Idempotency comes from ``paper_sources``: a record whose ``(source_type,
     source_ref)`` is already stored is counted as ``unchanged`` and left alone, so
     re-running the same import cannot duplicate anything.
+
+    A dry run executes the same ordered writes inside a database savepoint and
+    rolls that savepoint back. This matters for batches: record N must see shells,
+    sources and identifiers that records 1..N-1 would create, otherwise the dry
+    run and apply pass can make different matching decisions from the same state.
     """
     selected = list(records)
     if limit is not None:
         selected = selected[: max(0, limit)]
-    report = ImportReport(total=len(selected), dry_run=not apply)
+    if apply:
+        return _run_import_records(
+            session,
+            selected,
+            source_type=source_type,
+            importer=importer,
+        )
+
+    savepoint = session.begin_nested()
+    try:
+        report = _run_import_records(
+            session,
+            selected,
+            source_type=source_type,
+            importer=importer,
+        )
+        report.dry_run = True
+        _redact_dry_run_writes(report)
+        return report
+    finally:
+        if savepoint.is_active:
+            savepoint.rollback()
+        session.expire_all()
+
+
+def _run_import_records(
+    session: Session,
+    selected: Sequence[ParsedRecord],
+    *,
+    source_type: str,
+    importer: str,
+) -> ImportReport:
+    """Execute one batch in order; the caller owns commit or rollback."""
+    report = ImportReport(total=len(selected), dry_run=False)
     if selected:
         report.format = selected[0].format
 
@@ -785,13 +823,21 @@ def import_records(
             session,
             parsed,
             report,
-            apply=apply,
+            apply=True,
             source_type=source_type,
             importer=importer,
         )
-    if apply:
-        session.flush()
+    session.flush()
     return report
+
+
+def _redact_dry_run_writes(report: ImportReport) -> None:
+    """Keep the historic dry-run response shape after savepoint simulation."""
+    for entry in report.sources:
+        entry.pop("source_id", None)
+        if entry.get("match_method") == "shell":
+            entry["paper_id"] = None
+            entry["note"] = "would create a shell paper (AWAITING_FILE)"
 
 
 def _match_explanation(result: matcher.MatchResult) -> dict[str, Any]:
