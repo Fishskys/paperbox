@@ -1,3 +1,3 @@
 """Application package for paperbox (REST API for the Hermes paper knowledge service)."""
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"

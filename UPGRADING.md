@@ -1,11 +1,11 @@
-# 升级指引（0.5.x → 0.7.0）
+# 升级指引（0.5.x → 0.7.1）
 
 本文件面向**已有部署的升级**。全新部署见 [`README.md`](README.md) 与
-[`UserManual.md` §1](UserManual.md#1-详细部署教程)；本文只讲“从旧版本换到 0.7.0
+[`UserManual.md` §1](UserManual.md#1-详细部署教程)；本文只讲“从旧版本换到 0.7.1
 需要多做/改写什么”。
 
-> **为什么单独写这份**：0.5.2 → 0.7.0 之间有几处**会让人踩坑的破坏性变更**（API key
-> 标识改 `prefix`、吊销即删除的迁移、`.env` 索引名仍钉在旧代），以及一个**只在旧索引上
+> **为什么单独写这份**：0.5.2 → 0.7.1 之间有几处**会让人踩坑的破坏性变更**（API key
+> 标识改 `prefix`、吊销即删除的迁移、论文级 ISSN 数据清理、`.env` 索引名仍钉在旧代），以及一个**只在旧索引上
 > 才会触发的对账器 bug**（0.7.0 已修）。这些分散在各版本 CHANGELOG 里，按升级顺序集中
 > 成一份，照着做即可。
 
@@ -41,13 +41,14 @@ uv run python scripts/check_consistency.py     # 三端只读对账，problems=0
 
 ## 1. 数据库迁移（`alembic upgrade head`）
 
-0.5.2 → 0.7.0 之间有 3 个迁移，其中一个是**破坏性**的，不能跳过：
+0.5.2 → 0.7.1 之间有 4 个迁移，包含不可逆的结构和数据清理，不能跳过：
 
 | 迁移 | 内容 | 影响 |
 |---|---|---|
 | `abc44f6` → 迁移 `9c1d4b7a2e01` | 删除 `api_keys.name`、`prefix` 上限 16 → 32 | 见第 2 节（key 标识改为 prefix） |
 | `23ff052` → 迁移 `8b4f0c2d6a17` | **吊销即删除**：去掉 `revoked_at` 列 | ⚠️ 迁移会**先删除所有 `revoked_at IS NOT NULL` 的行**，否则旧版“已吊销但留档”的钥匙会在升级后**复活可认证**。升级日志会打印 `api_keys: removed N retired key(s) …`，看到它属正常 |
 | `407581f` | 修上面那个迁移“会复活旧钥匙”的缺陷 | — |
+| `8b4f0c2d6a17` → 迁移 `c6e1a4b92f70` | 删除错误存入 `paper_identifiers` 的论文级 ISSN 及其来源声明 | **数据清理，不改表结构**；`venues.issn` 保留。日志会打印删除数量，删除的数据不会在 downgrade 时恢复 |
 
 > 若你的库是从很老版本一路升上来，迁移链会自动补齐中间缺失项；先 `alembic current`
 > 看一眼起点，再 `alembic upgrade head`。
@@ -144,12 +145,14 @@ uv run python scripts/create_index.py --index paper_chunks_v3 --migrate-from pap
 | 0.6.2 | 删除 `infra/docling/` 构建目录；compose 头部不再引用不入库的 `docker-compose.local.yml` | 以仓库 compose 内注释为准 |
 | 0.6.2 | `POST /api/search` 默认排除参考文献（`filters.include_references`，默认 `false`） | 引文类查询需要时置 `true` |
 | 0.7.0 | 三端对账器按 mapping 选可聚合字段、读失败不再当空（本次修复） | 见第 3 节；升级后 `check_consistency.py` 的 `errors` 应为空 |
+| 0.7.1 | 元数据精确匹配、覆盖与 dry-run 一致性修复；ISSN 回归 venue 层级 | 执行 `uv run alembic upgrade head` 清理历史论文级 ISSN；无需重建检索索引 |
 
 ---
 
 ## 5. 升级后自检清单
 
 - [ ] `alembic upgrade head` 退出码 0；日志若有 `api_keys: removed N retired key(s) …` 属正常。
+  0.7.1 还会打印 `metadata: removed N paper-level ISSN identifier(s) ...`，这是预期的数据清理。
 - [ ] `manage_keys.py list`：钥匙还在、`prefix` 未变。
 - [ ] `grep OPENSEARCH_INDEX .env`：确认它指向你**期望**的那一代索引（别停在旧名）。
 - [ ] `healthcheck.py`：六依赖 + 应用 + 索引 + 检索管道全绿（`degraded=false`；`docling`
