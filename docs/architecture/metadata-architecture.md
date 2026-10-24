@@ -288,7 +288,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | `conference_location` / `conference_dates` | `venue_editions.location` / `.dates` |
 | `citing_paper_count` / `download_count` / `insert_date` / `license` / `rank` | **不入结构化列**，只留 `raw` |
 
-**导入通道**：`POST /api/metadata/import`（multipart/JSON，`dry_run` **默认 true**）+ `scripts/import_metadata.py`；dry-run 在数据库 SAVEPOINT 内走与 apply 相同的逐条写入路径，整批完成后回滚，保证同一初始库状态下批内匹配决策和统计一致；
+**导入通道**：`POST /api/metadata/import`（multipart/JSON，`dry_run` **默认 true**）+ `scripts/import_metadata.py`；dry-run 先用有界批量查询预取已导入来源并直接报告 `unchanged`（不加载 `raw`），其余记录在数据库 SAVEPOINT 内走与 apply 相同的逐条写入路径，整批完成后回滚，保证同一初始库状态下批内匹配决策和统计一致；
 格式自动识别：含 `articles` → IEEE raw；JSON 数组含 `DOI`/`type` → CSL-JSON；否则本项目通用 JSON。
 
 ### 12.1 三种格式的字段清单（`app/services/metadata_import.py`）

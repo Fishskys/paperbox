@@ -429,6 +429,7 @@ def test_dry_run_and_apply_make_the_same_batch_decisions(db_session) -> None:
 
     assert preview.dry_run is True
     assert (preview.created_shell, preview.matched, preview.ambiguous) == (1, 1, 0)
+    assert [entry["paper_id"] for entry in preview.sources] == [None, None]
     assert db_session.query(Paper).count() == 0
     assert db_session.query(PaperSource).count() == 0
 
@@ -437,6 +438,42 @@ def test_dry_run_and_apply_make_the_same_batch_decisions(db_session) -> None:
     assert (applied.created_shell, applied.matched, applied.ambiguous) == (1, 1, 0)
     assert db_session.query(Paper).count() == 1
     assert db_session.query(PaperSource).count() == 2
+
+
+def test_dry_run_prefetches_an_already_imported_source(db_session, monkeypatch) -> None:
+    importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
+
+    def unexpected_lookup(*_args, **_kwargs):
+        raise AssertionError("an unchanged source should use the bulk-prefetched view")
+
+    monkeypatch.setattr(sources, "find_source", unexpected_lookup)
+
+    preview = importer.import_payload(db_session, IEEE_SAMPLE)
+
+    assert (preview.unchanged, preview.matched, preview.created_shell) == (1, 0, 0)
+    assert preview.sources[0]["note"] == "already imported"
+
+
+def test_dry_run_keeps_duplicate_source_refs_ordered(db_session) -> None:
+    record = {
+        "title": "One metadata record repeated in the same batch",
+        "authors": ["Alice Smith"],
+        "year": 2025,
+    }
+    payload = [record, dict(record)]
+
+    preview = importer.import_payload(db_session, payload)
+
+    assert (preview.created_shell, preview.unchanged, preview.ambiguous) == (1, 1, 0)
+    assert [entry["paper_id"] for entry in preview.sources] == [None, None]
+    assert db_session.query(Paper).count() == 0
+    assert db_session.query(PaperSource).count() == 0
+
+    applied = importer.import_payload(db_session, payload, apply=True)
+
+    assert (applied.created_shell, applied.unchanged, applied.ambiguous) == (1, 1, 0)
+    assert db_session.query(Paper).count() == 1
+    assert db_session.query(PaperSource).count() == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -708,6 +745,17 @@ def test_reimport_after_soft_delete_repoints_the_record(db_session) -> None:
     db_session.flush()
     # 模拟「删论文 → 重传 PDF」：身份已释放，新论文重新占用同一个 DOI。
     replacement = paper_with_doi(db_session, title=original.title, year=original.year)
+
+    preview = importer.import_payload(db_session, IEEE_SAMPLE)
+
+    assert preview.unchanged == 0
+    assert preview.matched == 1
+    source_paper_id_before_apply = (
+        db_session.query(PaperSource.paper_id)
+        .filter_by(source_type=sources.SOURCE_TYPE_IMPORT_FILE)
+        .scalar()
+    )
+    assert source_paper_id_before_apply == original.id
 
     again = importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
 

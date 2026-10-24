@@ -20,14 +20,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from datetime import date, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.db.models import Paper, PaperSource
 from app.services import metadata_identifiers as identifiers
 from app.services import metadata_matcher as matcher
 from app.services import metadata_merge as merge
@@ -39,6 +42,8 @@ logger = get_logger(__name__)
 FORMAT_IEEE_RAW = "ieee_raw"
 FORMAT_CSL_JSON = "csl_json"
 FORMAT_GENERIC = "generic"
+
+_SOURCE_PREFETCH_CHUNK_SIZE = 500
 
 #: IEEE ``index_terms`` keys -> ``papers_tags.kind``.
 IEEE_TAG_KINDS: dict[str, str] = {
@@ -758,6 +763,20 @@ class ImportReport:
         }
 
 
+@dataclass(frozen=True)
+class _ExistingSourceSnapshot:
+    """Small idempotency view used to avoid loading every source's raw JSON."""
+
+    paper_id: str | None
+    match_status: str
+    match_method: str | None
+    paper_deleted_at: datetime | None
+
+    @property
+    def is_unchanged(self) -> bool:
+        return bool(self.paper_id and self.paper_deleted_at is None)
+
+
 def import_records(
     session: Session,
     records: Sequence[ParsedRecord],
@@ -773,10 +792,11 @@ def import_records(
     source_ref)`` is already stored is counted as ``unchanged`` and left alone, so
     re-running the same import cannot duplicate anything.
 
-    A dry run executes the same ordered writes inside a database savepoint and
-    rolls that savepoint back. This matters for batches: record N must see shells,
-    sources and identifiers that records 1..N-1 would create, otherwise the dry
-    run and apply pass can make different matching decisions from the same state.
+    A dry run bulk-loads already imported source identities, then executes the
+    remaining ordered writes inside a database savepoint and rolls that savepoint
+    back. This matters for batches: record N must see shells, sources and
+    identifiers that records 1..N-1 would create, otherwise the dry run and apply
+    pass can make different matching decisions from the same state.
     """
     selected = list(records)
     if limit is not None:
@@ -796,6 +816,7 @@ def import_records(
             selected,
             source_type=source_type,
             importer=importer,
+            prefetch_unchanged=True,
         )
         report.dry_run = True
         _redact_dry_run_writes(report)
@@ -812,13 +833,35 @@ def _run_import_records(
     *,
     source_type: str,
     importer: str,
+    prefetch_unchanged: bool = False,
 ) -> ImportReport:
     """Execute one batch in order; the caller owns commit or rollback."""
     report = ImportReport(total=len(selected), dry_run=False)
     if selected:
         report.format = selected[0].format
 
+    source_ref_counts = Counter(record.source_ref for record in selected)
+    existing_sources = (
+        _prefetch_existing_sources(
+            session,
+            source_type,
+            [source_ref for source_ref, count in source_ref_counts.items() if count == 1],
+        )
+        if prefetch_unchanged
+        else {}
+    )
+
     for parsed in selected:
+        snapshot = existing_sources.get(parsed.source_ref)
+        if snapshot is not None and snapshot.is_unchanged:
+            _report_unchanged_source(
+                report,
+                parsed.source_ref,
+                paper_id=snapshot.paper_id,
+                match_status=snapshot.match_status,
+                match_method=snapshot.match_method,
+            )
+            continue
         _import_one(
             session,
             parsed,
@@ -831,12 +874,79 @@ def _run_import_records(
     return report
 
 
+def _prefetch_existing_sources(
+    session: Session,
+    source_type: str,
+    source_refs: Sequence[str],
+) -> dict[str, _ExistingSourceSnapshot]:
+    """Load the small source identity view in bounded queries.
+
+    Duplicate refs are deliberately excluded by the caller: their later
+    occurrences must observe a source created by an earlier record in the same
+    batch, so they continue through the ordered per-record lookup path.
+    """
+    normalized_type = (source_type or "").strip().lower()
+    snapshots: dict[str, _ExistingSourceSnapshot] = {}
+    for start in range(0, len(source_refs), _SOURCE_PREFETCH_CHUNK_SIZE):
+        batch = source_refs[start : start + _SOURCE_PREFETCH_CHUNK_SIZE]
+        rows = session.execute(
+            select(
+                PaperSource.source_ref,
+                PaperSource.paper_id,
+                PaperSource.match_status,
+                PaperSource.match_method,
+                Paper.deleted_at,
+            )
+            .outerjoin(Paper, Paper.id == PaperSource.paper_id)
+            .where(
+                PaperSource.source_type == normalized_type,
+                PaperSource.source_ref.in_(batch),
+            )
+        ).all()
+        for source_ref, paper_id, match_status, match_method, deleted_at in rows:
+            snapshots[source_ref] = _ExistingSourceSnapshot(
+                paper_id=paper_id,
+                match_status=match_status,
+                match_method=match_method,
+                paper_deleted_at=deleted_at,
+            )
+    return snapshots
+
+
+def _report_unchanged_source(
+    report: ImportReport,
+    source_ref: str,
+    *,
+    paper_id: str | None,
+    match_status: str,
+    match_method: str | None,
+) -> None:
+    report.unchanged += 1
+    report.sources.append(
+        {
+            "source_ref": source_ref,
+            "match_status": match_status,
+            "paper_id": paper_id,
+            "match_method": match_method,
+            "note": "already imported",
+        }
+    )
+
+
 def _redact_dry_run_writes(report: ImportReport) -> None:
     """Keep the historic dry-run response shape after savepoint simulation."""
+    simulated_shell_ids = {
+        entry.get("paper_id")
+        for entry in report.sources
+        if entry.get("source_id") is not None
+        and entry.get("match_method") == "shell"
+        and entry.get("paper_id") is not None
+    }
     for entry in report.sources:
-        entry.pop("source_id", None)
-        if entry.get("match_method") == "shell":
+        simulated_write = entry.pop("source_id", None) is not None
+        if entry.get("paper_id") in simulated_shell_ids:
             entry["paper_id"] = None
+        if simulated_write and entry.get("match_method") == "shell":
             entry["note"] = "would create a shell paper (AWAITING_FILE)"
 
 
@@ -869,15 +979,12 @@ def _import_one(
         # paper: a soft-deleted one released its identifiers (deletion frees
         # them) and the re-imported PDF matches a NEW paper -- the stale
         # pointer must not pin the record forever (review 2026-10-05, P1-6).
-        report.unchanged += 1
-        report.sources.append(
-            {
-                "source_ref": parsed.source_ref,
-                "match_status": existing.match_status,
-                "paper_id": existing.paper_id,
-                "match_method": existing.match_method,
-                "note": "already imported",
-            }
+        _report_unchanged_source(
+            report,
+            parsed.source_ref,
+            paper_id=existing.paper_id,
+            match_status=existing.match_status,
+            match_method=existing.match_method,
         )
         return
 
