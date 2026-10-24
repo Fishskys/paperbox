@@ -8,10 +8,11 @@ of decision 2::
 
     DOI > arXiv > normalized title + first author + year > file sha256
 
-Only ``doi`` and ``arxiv`` can be primary; everything else (IEEE article number,
-ISSN, sha256...) is context that helps matching but never names the paper. A
-paper with none of the two keeps whatever fingerprint the caller built, which is
-exactly the pre-existing behaviour for PDF-only ingests.
+Only ``doi`` and ``arxiv`` can be primary. IEEE article number and the other
+schemes below identify an individual paper but never become the fingerprint.
+ISSN is deliberately excluded: it identifies a serial publication and belongs
+on ``venues.issn``, so storing it in this globally unique table would let the
+first article monopolize the journal's ISSN.
 
 Normalization reuses :mod:`app.services.paper_service` so the values stored here
 are byte-identical to the ones the fingerprint has always been built from.
@@ -48,12 +49,11 @@ SCHEME_SEMANTIC_SCHOLAR = "semantic_scholar"
 SCHEME_URL = "url"
 SCHEME_SHA256 = "sha256"
 
-#: Open enum: adding a platform means adding a value, never a column.
+#: Paper-level open enum: adding a platform means adding a value, never a column.
 SCHEMES: tuple[str, ...] = (
     SCHEME_DOI,
     SCHEME_ARXIV,
     SCHEME_IEEE_ARTICLE_NUMBER,
-    SCHEME_ISSN,
     SCHEME_ISBN,
     SCHEME_PMID,
     SCHEME_OPENALEX,
@@ -67,6 +67,14 @@ PRIMARY_SCHEMES: tuple[str, ...] = (SCHEME_DOI, SCHEME_ARXIV)
 
 _ISSN_KEEP = re.compile(r"[^0-9xX]")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def normalize_issn(value: str | None) -> str | None:
+    """Normalize a venue ISSN without making it a paper identifier."""
+    if value is None:
+        return None
+    candidate = _ISSN_KEEP.sub("", str(value).strip()).upper()
+    return candidate or None
 
 
 def normalize_identifier(scheme: str, value: str | None) -> str | None:
@@ -90,7 +98,9 @@ def normalize_identifier(scheme: str, value: str | None) -> str | None:
     if key == SCHEME_IEEE_ARTICLE_NUMBER:
         digits = re.sub(r"[^0-9]", "", raw)
         return digits or None
-    if key == SCHEME_ISSN or key == SCHEME_ISBN:
+    if key == SCHEME_ISSN:
+        return normalize_issn(raw)
+    if key == SCHEME_ISBN:
         candidate = _ISSN_KEEP.sub("", raw).upper()
         return candidate or None
     if key == SCHEME_PMID:
@@ -207,10 +217,17 @@ def upsert_identifier(
     returned untouched). A value the *same* paper stores differently only in
     spelling also collapses: the normalized form is the identity.
     """
-    normalized = normalize_identifier(scheme, value)
+    key = (scheme or "").strip().lower()
+    if key == SCHEME_ISSN:
+        logger.warning(
+            "ISSN is venue metadata and cannot be stored as a paper identifier",
+            extra={"extra_fields": {"paper_id": paper_id, "value": str(value)}},
+        )
+        return None
+    normalized = normalize_identifier(key, value)
     if not normalized:
         return None
-    existing = find_identifier(session, scheme, normalized)
+    existing = find_identifier(session, key, normalized)
     if existing is not None:
         if existing.paper_id == paper_id:
             if first_source_id and not existing.first_source_id:
@@ -260,7 +277,7 @@ def upsert_identifier(
     row = PaperIdentifier(
         id=new_uuid(),
         paper_id=paper_id,
-        scheme=(scheme or "").strip().lower(),
+        scheme=key,
         value=str(value).strip(),
         normalized_value=normalized,
         first_source_id=first_source_id,
@@ -285,17 +302,24 @@ def replace_identifier(
     whichever came first. Only this path deletes identifier rows (a source stating
     a second DOI is a conflict the merge engine reports instead).
     """
-    normalized = normalize_identifier(scheme, value)
+    key = (scheme or "").strip().lower()
+    if key == SCHEME_ISSN:
+        logger.warning(
+            "ISSN is venue metadata and cannot replace a paper identifier",
+            extra={"extra_fields": {"paper_id": paper_id, "value": str(value)}},
+        )
+        return None
+    normalized = normalize_identifier(key, value)
     if not normalized:
         return None
     for row in identifiers_for_paper(session, paper_id):
-        if row.scheme == (scheme or "").strip().lower() and row.normalized_value != normalized:
+        if row.scheme == key and row.normalized_value != normalized:
             session.delete(row)
     session.flush()
     return upsert_identifier(
         session,
         paper_id=paper_id,
-        scheme=scheme,
+        scheme=key,
         value=value,
         first_source_id=first_source_id,
     )
@@ -466,6 +490,7 @@ __all__ = [
     "identifiers_for_paper",
     "mirror_legacy_columns",
     "normalize_identifier",
+    "normalize_issn",
     "primary_fingerprint",
     "primary_identifier",
     "refresh_primary",

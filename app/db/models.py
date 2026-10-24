@@ -546,11 +546,12 @@ class PaperSource(Base):
 # paper_identifiers (dedupe skeleton)
 # --------------------------------------------------------------------------- #
 class PaperIdentifier(Base):
-    """One normalized identifier of a paper (DOI, arXiv id, IEEE article number...).
+    """One normalized paper identifier (DOI, arXiv id, IEEE article number...).
 
     The partial unique index ``uq_paper_identifiers_scheme_value`` is the dedupe
     floor: one identifier belongs to exactly one paper, so two sources quoting the
-    same DOI cannot end up on two rows. ``is_primary`` marks the identifier that
+    same DOI cannot end up on two rows. Context shared by many papers, such as a
+    venue ISSN, must not be stored here. ``is_primary`` marks the identifier that
     feeds ``papers.fingerprint``.
     """
 
@@ -578,7 +579,7 @@ class PaperIdentifier(Base):
     paper_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
     )
-    #: ``doi`` / ``arxiv`` / ``ieee_article_number`` / ``issn`` / ``isbn`` /
+    #: ``doi`` / ``arxiv`` / ``ieee_article_number`` / ``isbn`` /
     #: ``pmid`` / ``openalex`` / ``semantic_scholar`` / ``url`` / ``sha256``.
     scheme: Mapped[str] = mapped_column(String(32), nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)

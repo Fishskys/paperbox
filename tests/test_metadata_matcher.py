@@ -124,7 +124,7 @@ def test_ieee_article_number_matches(db_session) -> None:
 
 def test_issn_does_not_identify_an_individual_paper(db_session) -> None:
     paper = make_paper(db_session)
-    ids.upsert_identifier(
+    row = ids.upsert_identifier(
         db_session,
         paper_id=paper.id,
         scheme=ids.SCHEME_ISSN,
@@ -136,6 +136,8 @@ def test_issn_does_not_identify_an_individual_paper(db_session) -> None:
         matcher.MatchInput(identifiers={ids.SCHEME_ISSN: "0018-9200"}),
     )
 
+    assert row is None
+    assert ids.identifiers_for_paper(db_session, paper.id) == []
     assert result.status == matcher.STATUS_UNMATCHED
     assert result.paper is None
 

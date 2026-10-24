@@ -164,7 +164,7 @@ def test_a_record_covers_every_mapped_field() -> None:
     assert values["paper_type"] == "journal"
     assert values["identifier:doi"] == DOI
     assert values["identifier:ieee_article_number"] == "7065247"
-    assert values["identifier:issn"] == "0018-9219"
+    assert "identifier:issn" not in values
     assert values["url"] == "https://ieeexplore.ieee.org/document/7065247"
 
 
@@ -338,13 +338,14 @@ def test_csl_json_is_parsed() -> None:
 
 def test_the_generic_shape_accepts_aliases() -> None:
     parsed = importer.parse_records(
-        [{"title": "T", "doi": "10.1/x", "year": "2015", "journal": "ISSCC", "keywords": ["a"]}]
+        [{"title": "T", "doi": "10.1/x", "year": "2015", "journal": "ISSCC", "issn": "1234-5678", "keywords": ["a"]}]
     )[0]
 
     assert parsed.format == importer.FORMAT_GENERIC
     assert parsed.values["identifier:doi"] == "10.1/x"
     assert parsed.values["year"] == 2015
-    assert parsed.values["venue"] == "ISSCC"
+    assert parsed.values["venue"] == {"name": "ISSCC", "issn": "1234-5678"}
+    assert "identifier:issn" not in parsed.values
     assert parsed.values["tag:author_terms"] == ["a"]
 
 
@@ -554,9 +555,8 @@ def test_apply_registers_the_identifiers_and_upgrades_the_fingerprint(db_session
 
     assert report.matched == 1
     rows = {row.scheme: row for row in ids.identifiers_for_paper(db_session, paper.id)}
-    assert set(rows) == {"doi", "ieee_article_number", "issn"}
+    assert set(rows) == {"doi", "ieee_article_number"}
     assert rows["doi"].is_primary is True
-    assert rows["issn"].is_primary is False
     assert paper.doi == DOI.casefold()
     assert paper.fingerprint == f"doi:{DOI.casefold()}"
 

@@ -332,8 +332,6 @@ def parse_ieee_record(record: Mapping[str, Any]) -> ParsedRecord:
         values["identifier:arxiv"] = arxiv_id
     if article_number not in (None, ""):
         values["identifier:ieee_article_number"] = str(article_number)
-    if issn:
-        values["identifier:issn"] = issn
     publication_date = _month_precision_date(record.get("publication_date"), year)
     if publication_date:
         values["publication_date"] = publication_date
@@ -479,8 +477,6 @@ def parse_csl_record(record: Mapping[str, Any]) -> ParsedRecord:
         values["authors"] = authors
     if doi:
         values["identifier:doi"] = doi
-    if issn:
-        values["identifier:issn"] = issn
     for key, target in (("volume", "volume"), ("issue", "issue"), ("page", "pages")):
         value = _text(record.get(key))
         if value:
@@ -557,7 +553,6 @@ _GENERIC_FIELDS: tuple[str, ...] = (
     "identifier:doi",
     "identifier:arxiv",
     "identifier:ieee_article_number",
-    "identifier:issn",
     "tag:ieee_terms",
     "tag:author_terms",
     "tag:dynamic_index_terms",
@@ -571,7 +566,6 @@ _GENERIC_ALIASES: dict[str, str] = {
     "arxiv": "identifier:arxiv",
     "article_number": "identifier:ieee_article_number",
     "ieee_article_number": "identifier:ieee_article_number",
-    "issn": "identifier:issn",
     "journal": "venue",
     "conference": "venue",
     "type": "paper_type",
@@ -592,6 +586,19 @@ def parse_generic_record(record: Mapping[str, Any]) -> ParsedRecord:
         if target in values and target == "pages":
             continue
         values[target] = value
+
+    # ISSN identifies the journal/proceedings series, not one article. Accept
+    # both the current top-level spelling and the old ``identifier:issn`` input,
+    # but fold either into the venue claim so it stays reusable across papers.
+    issn = _text(record.get("issn")) or _text(record.get("identifier:issn"))
+    if issn and values.get("venue"):
+        current_venue = values["venue"]
+        if isinstance(current_venue, Mapping):
+            venue = dict(current_venue)
+            venue.setdefault("issn", issn)
+            values["venue"] = venue
+        else:
+            values["venue"] = {"name": str(current_venue), "issn": issn}
 
     authors = values.get("authors") or []
     if isinstance(authors, str):

@@ -115,9 +115,9 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 |---|---|---|
 | `id` | UUID PK | |
 | `paper_id` | UUID NOT NULL，FK→`papers.id` | 非空：一条标识符必须属于某篇论文 |
-| `scheme` | VARCHAR(32) NOT NULL | 开放枚举 10 个：`doi` / `arxiv` / `ieee_article_number` / `issn` / `isbn` / `pmid` / `openalex` / `semantic_scholar` / `url` / `sha256`（`metadata_identifiers.py`） |
+| `scheme` | VARCHAR(32) NOT NULL | 论文级开放枚举：`doi` / `arxiv` / `ieee_article_number` / `isbn` / `pmid` / `openalex` / `semantic_scholar` / `url` / `sha256`（`metadata_identifiers.py`）；ISSN 属于 venue，不得写入本表 |
 | `value` | TEXT NOT NULL | 原样值 |
-| `normalized_value` | TEXT NOT NULL | 规范化值：DOI 去前缀小写、arXiv 去版本后缀、ISSN 去非数字、sha256 校验 64 hex |
+| `normalized_value` | TEXT NOT NULL | 规范化值：DOI 去前缀小写、arXiv 去版本后缀、sha256 校验 64 hex |
 | `first_source_id` | UUID，FK→`paper_sources.id`（ON DELETE SET NULL） | 谁先带来的；合并写 identifier 时透传 `source_id`，旧的无来源行在首次有来源的重述时补齐 |
 | `is_primary` | BOOLEAN NOT NULL，默认 `false` | 只有 `doi` / `arxiv` 可为真（`PRIMARY_SCHEMES`）；决定 `papers.fingerprint` |
 | `created_at` | DATETIME NOT NULL，默认 `now()` | |

@@ -87,7 +87,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | 列 | 说明 |
 |---|---|
 | `paper_id` | FK papers（非空） |
-| `scheme` | `doi` / `arxiv` / `ieee_article_number` / `issn` / `isbn` / `pmid` / `openalex` / `semantic_scholar` / `url` / `sha256` |
+| `scheme` | `doi` / `arxiv` / `ieee_article_number` / `isbn` / `pmid` / `openalex` / `semantic_scholar` / `url` / `sha256`；ISSN 是期刊/会议系列属性，只存 `venues.issn` |
 | `value` / `normalized_value` | 原样 + 规范化（复用 `paper_service.normalize_doi` / `normalize_arxiv_id`） |
 | `first_source_id` | FK paper_sources（谁最先带来它） |
 | `is_primary` | 决定 `papers.fingerprint`（按 `DOI > arXiv > 标题+首作者+年 > sha256`） |
@@ -273,7 +273,7 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 |---|---|
 | `doi` | `paper_identifiers(scheme=doi, is_primary)` + `papers.doi` |
 | `article_number` | `paper_identifiers(scheme=ieee_article_number)` |
-| `issn` | `paper_identifiers(scheme=issn)` + `venues.issn` |
+| `issn` | `venues.issn`；同一 ISSN 可被多篇论文复用，不进入全局唯一的 `paper_identifiers` |
 | `title` / `abstract` | `papers.title` / `papers.abstract`（+provenance） |
 | `publication_year` / `publication_date` | `papers.year` / `papers.publication_date`（月精度）+ `venue_editions.year` |
 | `publication_title` | `venues.name`；`kind` 由 `content_type` 推 |
@@ -301,12 +301,12 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 - 直接字段：`title` `abstract` `year` `authors` `venue` `volume` `issue` `pages`
   `publication_date` `paper_type` `language` `url`
-- 标识符：`identifier:doi` `identifier:arxiv` `identifier:ieee_article_number` `identifier:issn`
-  （**只有这 4 个**走 generic 解析；`pmid`/`openalex`/`semantic_scholar` 等 scheme 只存在于
+- 标识符：`identifier:doi` `identifier:arxiv` `identifier:ieee_article_number`
+  （**只有这 3 个**走 generic 解析；`pmid`/`openalex`/`semantic_scholar` 等 scheme 只存在于
   `paper_identifiers` 侧，导入时要用 IEEE/CSL 形状或手动 PATCH）
 - 标签：`tag:ieee_terms` `tag:author_terms` `tag:dynamic_index_terms` `tag:source_tag`
   （对应 `papers_tags.kind`）
-- 别名（`_GENERIC_ALIASES`）：`doi`→`identifier:doi`、`arxiv_id`/`arxiv`→`identifier:arxiv`、`article_number`/`ieee_article_number`→`identifier:ieee_article_number`、`issn`→`identifier:issn`、`journal`/`conference`→`venue`、`type`/`content_type`→`paper_type`、`start_page`→`pages`、`keywords`→`tag:author_terms`、`tags`→`tag:source_tag`
+- 别名（`_GENERIC_ALIASES`）：`doi`→`identifier:doi`、`arxiv_id`/`arxiv`→`identifier:arxiv`、`article_number`/`ieee_article_number`→`identifier:ieee_article_number`、`journal`/`conference`→`venue`、`type`/`content_type`→`paper_type`、`start_page`→`pages`、`keywords`→`tag:author_terms`、`tags`→`tag:source_tag`；顶层 `issn`（以及兼容读取的旧 `identifier:issn`）折叠进 venue 对象
 - 值形状：`authors` 可以是数组，也可以是 `;` 分隔的字符串；`venue` 可以是字符串（等价
   `{"name": …}`）或对象 `{"name", "year", "content_type", "issn", "publisher", "location",
   "dates", "publication_number", "is_number"}`；`year` 可以是 `2021` / `"2021"` / `"2021-05"` /

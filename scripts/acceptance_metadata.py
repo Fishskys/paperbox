@@ -321,8 +321,13 @@ def check_ieee_import(
     schemes = {row.scheme for row in identifiers.identifiers_for_paper(session, paper.id)}
     checker.check(
         "blank identifiers were filled in",
-        {"issn", "ieee_article_number"} <= schemes,
+        {"ieee_article_number"} <= schemes and "issn" not in schemes,
         f"schemes={sorted(schemes)}",
+    )
+    checker.check(
+        "ISSN is reusable venue metadata",
+        venue is not None and venue.issn == record.get("issn"),
+        f"venue_issn={venue.issn if venue else None}",
     )
     tag_kinds = {
         row.kind
