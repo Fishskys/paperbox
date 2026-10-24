@@ -576,7 +576,10 @@ def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
     start_page = xmp_text("startingPage")
     end_page = xmp_text("endingPage")
     pages = f"{start_page}-{end_page}" if start_page and end_page else start_page
-    publication_date = xmp_text("publicationDate") or _text(info.get("/CreationDate"))
+    # PDF Info /CreationDate is the time the file was produced, not the date the
+    # article was published. Keep it in raw["info"] for audit, but only an
+    # explicit bibliographic XMP field may become a publication-date claim.
+    publication_date = xmp_text("publicationDate")
     issns = _ISSN_IN_TEXT.findall(searchable)
     if xmp_text("issn"):
         issns.extend(_ISSN_IN_TEXT.findall(str(xmp_text("issn"))))

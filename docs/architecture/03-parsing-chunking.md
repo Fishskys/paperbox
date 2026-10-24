@@ -57,6 +57,7 @@
 | `_XMP_NS` / `_XMP_ACCESSORS` / `_XMP_LOCAL_NAMES` | 只认 `dc`/`prism`/`xmp`；本地名→pypdf accessor 兜底表；手解 16 个本地名（含 `doi`、`publicationName`、`startingPage`） |
 | `_DOI_IN_TEXT` / `_ARXIV_IN_TEXT` / `_ISBN_IN_TEXT` / `_ISSN_IN_TEXT` | 从元数据文本捞标识符 |
 | `EmbeddedMetadata` / `as_dict` / `is_empty` | 14 个可空字段 + `raw`；`as_dict` 只留非空值 |
+| 出版日期 | 只接受明确的 XMP/PRISM `publicationDate`；PDF Info `/CreationDate` 是文件制作时间，只保留在 `raw["info"]`，不得生成 `publication_date` 或 `year` 声明 |
 | `_xmp_packet` | `ElementTree.fromstring(xmp.stream.get_data())` → `simple`（普通值）/ `alt`（`rdf:Alt` 按 `xml:lang` 分桶） |
 | `_alt_value` / `_simple_value` | 语言优先序 `x-default` → `en-US` → `en` → 任意非空 |
 | `_split_authors` / `_split_keywords` | 作者列表保原样、字符串按 `;`/`and`/`&`/换行切（**不按逗号**）；关键词按 `,`/`;` 切 |

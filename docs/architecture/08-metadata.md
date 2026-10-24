@@ -297,6 +297,8 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 4. 主版本继续：`_reset_placeholder_title`→ `_backfill_metadata`→ `_restore_placeholder_title`→ 指纹升级（`sha256` 撞车则丢弃本次论文）→ 切块 → 嵌入 → `delete_by_paper_id` + `bulk_index_chunks` → `INDEXED`。
 5. `_backfill_metadata` 按层写声明：第 1 层 `pdf_embedded`（结构化，confidence 1.0）→ 第 2 层 `pdf_heuristic`（confidence 0.5），每层各自 `upsert_source` 后 `merge_values`。
 
+`pdf_embedded` 的出版日期只来自明确的 XMP/PRISM `publicationDate`。PDF Info `/CreationDate` 表示文件制作时间，只进入来源的原始快照，不生成 `publication_date` 或 `year` 声明。
+
 主版本四场景：
 
 | 场景 | 行为 |

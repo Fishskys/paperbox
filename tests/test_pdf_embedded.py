@@ -71,7 +71,9 @@ def test_info_dictionary_is_read() -> None:
     # not this paper's identity -- free-text guessing is gone.
     assert metadata.doi is None
     assert metadata.keywords == ["SRAM", "leakage", "low power"]
-    assert metadata.year == 2015
+    assert metadata.publication_date is None
+    assert metadata.year is None
+    assert metadata.raw["info"]["/CreationDate"] == "D:20150712090000Z"
     assert metadata.is_empty is False
 
 
