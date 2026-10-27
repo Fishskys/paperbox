@@ -178,16 +178,3 @@ def test_snapshot_reports_the_backlog_and_the_watermark():
         "depth": 3,
         "throttling_batch": False,
     }
-
-
-def test_defaults_come_from_settings():
-    admission = upload_admission.UploadAdmission()
-
-    from app.core.config import settings
-
-    assert admission.limit == settings.ingest_upload_concurrency
-    assert admission.high_watermark == settings.ingest_queue_high_watermark
-
-
-def test_module_level_singleton_is_reused():
-    assert upload_admission.get_admission() is upload_admission.get_admission()

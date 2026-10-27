@@ -6,7 +6,6 @@ import pytest
 
 from app.parsing.chunking import (
     MAX_TOKENS,
-    Chunk,
     chunk_document,
     estimate_tokens,
 )
@@ -267,12 +266,6 @@ def test_estimate_tokens_counts_cjk_realistically() -> None:
     # 混合文本 = 两个部分之和
     mixed = "a" * 40 + "存储器" * 8  # 40 latin + 24 cjk -> 10 + 30
     assert estimate_tokens(mixed) == 40
-
-
-def test_chunk_dataclass_defaults() -> None:
-    chunk = Chunk(chunk_index=0, text="hello", page_start=1, page_end=1)
-    assert chunk.token_count == 0
-    assert chunk.is_overlap is False
 
 
 def test_section_label_combines_number_and_title() -> None:

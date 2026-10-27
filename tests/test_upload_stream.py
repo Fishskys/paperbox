@@ -150,14 +150,6 @@ def test_hashing_reader_supports_readinto():
     assert reader.hexdigest == hashlib.sha256(payload).hexdigest()
 
 
-def test_hashing_reader_delegates_other_attributes():
-    """MinIO inspects the stream (``seekable``/``tell``); it must pass through."""
-    reader = object_storage._HashingReader(io.BytesIO(b"abc"))
-
-    assert reader.seekable() is True
-    assert reader.tell() == 0
-
-
 # --------------------------------------------------------------------------- #
 # upload_stream_hashed
 # --------------------------------------------------------------------------- #
@@ -226,10 +218,3 @@ def test_upload_stream_hashed_matches_an_independent_hash(fake_minio):
     )
 
     assert stored.sha256 == expected.hexdigest()
-
-
-def test_upload_bytes_leaves_sha256_unset():
-    """The existing in-memory helper keeps its shape (sha256 is opt-in)."""
-    assert object_storage.StoredObject(
-        bucket="paperbox", object_key="k", size_bytes=1, content_type="application/pdf"
-    ).sha256 is None

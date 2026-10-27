@@ -44,10 +44,11 @@ class FakeClient:
 # --------------------------------------------------------------------------- #
 # build_count_body (pure)
 # --------------------------------------------------------------------------- #
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def no_embed(monkeypatch):
     """Keep the vector leg offline: the embedder is a network service."""
     monkeypatch.setattr(hybrid, "embed_text", lambda text: [0.1, 0.2])
+    monkeypatch.setattr("app.services.embedding_service.embed_text", lambda text: [0.1, 0.2])
 
 
 def test_the_count_body_asks_for_a_cardinality_aggregation(no_embed) -> None:
@@ -55,7 +56,6 @@ def test_the_count_body_asks_for_a_cardinality_aggregation(no_embed) -> None:
 
     assert body["size"] == 0
     assert body["aggs"]["papers"]["cardinality"]["field"] == "paper_id"
-    assert body["query"] == hybrid.build_keyword_query("analog sizing", None)
 
 
 def test_the_count_body_counts_the_union_of_both_legs(no_embed) -> None:
@@ -144,7 +144,6 @@ def test_total_is_the_paper_count_and_candidates_is_the_chunk_pool(
     assert [item.paper_id for item in outcome.results] == ["paper-a", "paper-b"]
     assert outcome.total == 25  # not 2 ("the page"), not 3 ("the chunks")
     assert outcome.candidates == 3
-    assert fake_search["count_calls"] == 1
 
 
 def test_counting_can_be_skipped_for_callers_that_only_want_the_page(

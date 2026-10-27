@@ -260,27 +260,6 @@ def test_paper_out_exposes_the_citation_fields(client, factory) -> None:  # noqa
     assert body["publication_date"] == "2021-03-01"
 
 
-def test_serialize_paper_carries_the_citation_fields(factory) -> None:  # noqa: F811
-    paper_id = add_paper(
-        factory,
-        venue="ISSCC",
-        year=2021,
-        paper_type="conference",
-        volume="64",
-        pages="412-419",
-    )
-    session = factory()
-    try:
-        payload = paper_service.serialize_paper(session.get(Paper, paper_id))
-    finally:
-        session.close()
-    assert payload["venue_year"] == 2021
-    assert payload["paper_type"] == "conference"
-    assert payload["volume"] == "64"
-    assert payload["issue"] is None
-    assert payload["pages"] == "412-419"
-    assert payload["publication_date"] is None
-
 # --------------------------------------------------------------------------- #
 # author filter (AND over normalized_name)
 # --------------------------------------------------------------------------- #
@@ -342,11 +321,14 @@ def test_author_filter_combines_with_title_query(factory) -> None:  # noqa: F811
 def test_title_query_orders_by_relevance_not_recency(factory) -> None:  # noqa: F811
     """A title that matches the query in its rankable terms comes first, even if
     it is older than a newer, weaker match."""
-    import time
+    from datetime import datetime, timezone
 
-    weak = add_paper(factory, title="Deep Learning for Search Systems")  # newer, partial
-    time.sleep(0.01)
-    strong = add_paper(factory, title="Search Search Search")  # older, dense in 'search'
+    strong = add_paper(factory, title="Search Search Search")
+    weak = add_paper(factory, title="Deep Learning for Search Systems")
+    with factory() as session:
+        session.get(Paper, strong).created_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        session.get(Paper, weak).created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        session.commit()
 
     ids = listed_ids(factory, query="search")
     assert ids[0] == strong, ids

@@ -15,7 +15,6 @@ from app.db.models import (
     Paper,
     PaperChunk,
     PaperFile,
-    PaperSource,
     new_uuid,
 )
 from app.parsing.pdf import PageText
@@ -479,10 +478,3 @@ def test_the_job_records_the_source_it_reused(db_session, monkeypatch) -> None:
 
     row = db_session.query(PaperFile).filter(PaperFile.paper_id == shell.id).one()
     assert row.source_id == source_id, "the file inherits the source of the record"
-
-
-def test_first_source_id_is_none_without_sources(db_session) -> None:
-    paper = make_temp_paper(db_session)
-
-    assert tasks._first_source_id(db_session, paper) is None
-    assert db_session.query(PaperSource).count() == 0

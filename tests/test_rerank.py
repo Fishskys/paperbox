@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from app.core.config import settings
-from app.schemas.search import SearchResponse, SearchResult
+from app.schemas.search import SearchResult
 from app.search import hybrid
 from app.services import rerank_service
 from app.services.rerank_service import RerankScore
@@ -181,14 +181,16 @@ def test_is_available_false_on_error(monkeypatch) -> None:
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def rare_hits(monkeypatch):
-    """Replace the three retrieval legs with a deterministic candidate list."""
+    """Local candidates and reranker; native retrieval has its own test suite."""
+    monkeypatch.setattr(settings, "search_backend", "python")
+    monkeypatch.setattr(hybrid.rerank_service, "rerank_texts", lambda *a, **kw: None)
     state = {"keyword_size": None, "semantic_size": None}
 
     def fake_keyword(query, size, filters, *, client=None, index=None):
         state["keyword_size"] = size
         return [make_hit(f"k{i}", 1.0 - i / 100) for i in range(size)]
 
-    def fake_semantic(query, size, filters, *, client=None, index=None):
+    def fake_semantic(query, size, filters, *, client=None, index=None, query_vector=None):
         state["semantic_size"] = size
         return [make_hit(f"s{i}", 0.5 - i / 100) for i in range(size)]
 
@@ -301,79 +303,6 @@ def test_hybrid_mode_also_reranks(rare_hits, monkeypatch) -> None:
 # --------------------------------------------------------------------------- #
 # response contract
 # --------------------------------------------------------------------------- #
-def test_search_result_exposes_both_scores() -> None:
-    result = SearchResult(
-        paper_id="p1",
-        title="T",
-        score=0.8,
-        relevance="medium",
-        retrieval_score=0.3,
-        rerank_score=0.95,
-    )
-
-    payload = result.model_dump()
-
-    assert payload["retrieval_score"] == 0.3
-    assert payload["rerank_score"] == 0.95
-
-
-def test_search_result_scores_default_to_none() -> None:
-    result = SearchResult(paper_id="p1", title="T", score=0.5, relevance="low")
-
-    payload = result.model_dump()
-
-    assert payload["retrieval_score"] is None
-    assert payload["rerank_score"] is None
-
-
-def test_response_has_a_rerank_block() -> None:
-    response = SearchResponse(
-        query="q", mode="hybrid", total=1, candidates=3, took_ms=1.5
-    )
-
-    payload = response.model_dump()
-
-    assert payload["rerank"] == {"enabled": False, "model": None, "took_ms": None}
-    assert set(payload) == {
-        "query",
-        "rewritten_query",
-        "mode",
-        # ``backend`` (2026-10-01, M5): which hybrid fusion path produced this
-        # page -- "python" (two legs fused in-process) or "native" (one hybrid
-        # request fused by the search pipeline + collapse).
-        "backend",
-        "total",
-        "candidates",
-        "took_ms",
-        "rerank",
-        "rewrite",
-        # ``facets`` (2026-09-30, T-A3): null unless the caller asked for buckets.
-        "facets",
-        "results",
-    }
-
-
-def test_response_rerank_block_can_report_a_model() -> None:
-    from app.schemas.search import SearchRerankInfo
-
-    response = SearchResponse(
-        query="q",
-        mode="hybrid",
-        total=1,
-        candidates=3,
-        took_ms=2.0,
-        rerank=SearchRerankInfo(
-            enabled=True, model="Xenova/ms-marco-MiniLM-L-6-v2", took_ms=37
-        ),
-    )
-
-    assert response.model_dump()["rerank"] == {
-        "enabled": True,
-        "model": "Xenova/ms-marco-MiniLM-L-6-v2",
-        "took_ms": 37,
-    }
-
-
 def test_logged_result_shape_keeps_both_scores() -> None:
     """The search log stores the same score fields the client sees (P1 B)."""
     from app.services import search_pipeline

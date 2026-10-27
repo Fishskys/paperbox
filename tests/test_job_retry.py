@@ -232,6 +232,7 @@ def test_index_failure_also_restores_previous_chunks(factory, stubbed_pipeline, 
 def test_retry_reingests_when_nothing_was_stored(factory, stubbed_pipeline, monkeypatch):
     """Failed before STORED -> the download/store transaction is redone."""
     monkeypatch.setattr(tasks, "SessionLocal", factory)
+    monkeypatch.setattr(tasks.object_storage, "delete_object", lambda *a, **kw: None)
     job_id = make_job(factory)  # no paper: payload has object_key, no paper_id
     _fail_job(factory, job_id, progress=10.0)
     monkeypatch.setattr(

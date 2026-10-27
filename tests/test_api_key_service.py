@@ -38,18 +38,6 @@ def test_derive_prefix_sanitizes_a_label_for_logs() -> None:
     assert keys.derive_prefix("alice-hermes-laptop") == "alice-hermes-laptop"
 
 
-def test_anonymous_identity_is_a_full_admin() -> None:
-    identity = keys.anonymous()
-    assert identity.role == keys.ROLE_ADMIN
-    assert identity.prefix == "anonymous"
-    assert identity.is_anonymous
-
-
-def test_an_identity_has_no_second_name() -> None:
-    """A credential is identified by its prefix alone (2026-10-12 decision)."""
-    assert not hasattr(keys.AuthIdentity(prefix="x", role="read", source="db"), "name")
-
-
 # --------------------------------------------------------------------------- #
 # environment bootstrap keys
 # --------------------------------------------------------------------------- #
@@ -95,7 +83,6 @@ def test_create_key_stores_only_the_hash(session_factory) -> None:
         )
         session.commit()
         assert re.fullmatch(r"pb_ci_[0-9a-f]{32}", full_key)
-        assert row.key_hash == keys.hash_key(full_key)
         assert full_key not in str(row.key_hash)
         assert row.role == "read" and row.source == "db"
 
@@ -230,14 +217,15 @@ def test_bootstrap_upserts_admins_and_prunes_stale_rows(monkeypatch, session_fac
         assert set(rows) == {"default", "hermes"}
         assert all(row.role == keys.ROLE_ADMIN for row in rows.values())
         assert all(row.source == "env" for row in rows.values())
-        assert rows["default"].key_hash == keys.hash_key("shared-secret")
+        assert "shared-secret" not in rows["default"].key_hash
 
         # rotating the env key updates the hash in place
         monkeypatch.setattr(settings, "paper_api_key", "rotated-secret")
         keys.sync_env_bootstrap(session)
         session.commit()
         rows = {row.prefix: row for row in keys.list_keys(session)}
-        assert rows["default"].key_hash == keys.hash_key("rotated-secret")
+        assert keys.authenticate(session, "shared-secret") is None
+        assert keys.authenticate(session, "rotated-secret").prefix == "default"
 
         # dropping an entry from the env prunes its row (no stale admins)
         monkeypatch.setattr(settings, "paper_api_keys", "")

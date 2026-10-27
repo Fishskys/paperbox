@@ -301,15 +301,6 @@ def test_rewrite_query_accepts_a_gateway_text_field(rewrite_on, monkeypatch) -> 
 # --------------------------------------------------------------------------- #
 # config validation
 # --------------------------------------------------------------------------- #
-def test_config_defaults_disable_rewriting() -> None:
-    fresh = Settings(_env_file=None)
-
-    assert fresh.query_rewrite_enabled is False
-    assert fresh.query_rewrite_timeout == 10.0
-    assert fresh.query_rewrite_max_chars == 300
-    assert fresh.query_rewrite_target_language == "en"
-
-
 @pytest.mark.parametrize(
     "missing",
     [

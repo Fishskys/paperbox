@@ -72,27 +72,6 @@ def test_a_read_door_without_a_master_switch_is_silent(caplog, policy: str) -> N
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
-def test_the_master_switch_identity_is_the_anonymous_admin() -> None:
-    """``AUTH_ENABLED=false`` keeps resolving every caller to a full-access identity."""
-    identity = api_key_service.anonymous()
-    assert identity == api_key_service.AuthIdentity(
-        prefix=api_key_service.ANONYMOUS_PREFIX,
-        role=api_key_service.ROLE_ADMIN,
-        source=api_key_service.SOURCE_ANONYMOUS,
-        is_anonymous=True,
-    )
-    assert api_key_service.role_at_least(identity.role, api_key_service.ROLE_ADMIN)
-
-
-def test_the_open_read_identity_differs_only_by_tier() -> None:
-    """One shape, two tiers: the attribution stays ``anonymous`` either way."""
-    admin = api_key_service.anonymous()
-    reader = api_key_service.anonymous_reader()
-    assert (reader.prefix, reader.source) == (admin.prefix, admin.source)
-    assert reader.role == api_key_service.ROLE_READ
-    assert reader.is_anonymous is True
-
-
 def test_the_open_read_identity_only_satisfies_read() -> None:
     """It must never reach a write or admin gate (plan D2 invariant)."""
     reader = api_key_service.anonymous_reader()

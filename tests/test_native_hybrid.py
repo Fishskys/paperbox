@@ -141,16 +141,6 @@ def test_knn_k_follows_pagination_depth() -> None:
     assert clause["queries"][1]["knn"]["embedding"]["k"] == 50
 
 
-def test_pagination_depth_defaults_to_the_python_candidate_window() -> None:
-    """Same over-fetch factor as the Python path (``top_k * CANDIDATE_MULTIPLIER``)."""
-    body = native.build_native_body("q", VECTOR, size=10)
-
-    assert (
-        body["query"]["hybrid"]["pagination_depth"]
-        == 10 * hybrid.CANDIDATE_MULTIPLIER
-    )
-
-
 def test_filters_are_attached_to_the_clause_not_to_each_leg() -> None:
     clause = native.build_native_body(
         "q", VECTOR, {"year_from": 2020, "year_to": 2024}, size=5
@@ -621,15 +611,6 @@ def test_ensure_pipelines_dry_run_reports_without_writing() -> None:
 
     assert all(item["changed"] for item in report)
     assert client.transport.writes == []
-
-
-def test_the_rrf_pipeline_matches_the_app_side_rank_constant() -> None:
-    processor = native.PIPELINE_BODIES[native.PIPELINE_RRF]["phase_results_processors"][0]
-
-    assert processor["score-ranker-processor"]["combination"] == {
-        "technique": "rrf",
-        "rank_constant": hybrid.DEFAULT_RRF_K,
-    }
 
 
 def test_the_evidence_budget_matches_what_the_aggregation_keeps() -> None:

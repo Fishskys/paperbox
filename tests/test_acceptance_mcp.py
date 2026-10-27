@@ -40,14 +40,6 @@ def test_synthetic_pdf_is_a_readable_pdf() -> None:
     assert marker in reader.pages[0].extract_text()
 
 
-def test_synthetic_pdf_differs_per_marker() -> None:
-    assert acceptance.synthetic_pdf("one") != acceptance.synthetic_pdf("two")
-
-
-def test_synthetic_pdf_is_deterministic() -> None:
-    assert acceptance.synthetic_pdf("same") == acceptance.synthetic_pdf("same")
-
-
 def test_synthetic_pdf_escapes_parentheses() -> None:
     """A marker with PDF syntax characters must not break the content stream."""
     pypdf = pytest.importorskip("pypdf")

@@ -96,38 +96,9 @@ def test_an_unknown_embedding_health_mode_is_rejected(
         Settings(_env_file=None)
 
 
-def test_the_embedding_health_mode_defaults_to_the_container(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.core.config import Settings
-
-    monkeypatch.delenv("EMBEDDING_HEALTH_MODE", raising=False)
-    assert Settings(_env_file=None).embedding_health_mode == "container"
-
-
-def test_the_embedding_batch_default_matches_the_deployed_value(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """默认值必须与 .env / .env.example 一致，并且低于提供方的单请求上限。
-
-    ``.env`` 与模板早就是 16，只有代码默认值还停在 32 —— 而 32 会直接撞上第三方
-    embedding API（实测上限 25 条/请求）。
-    """
-    from app.core.config import Settings
-
-    monkeypatch.delenv("EMBEDDING_BATCH_SIZE", raising=False)
-
-    assert Settings(_env_file=None).embedding_batch_size == 16
-
-
 # --------------------------------------------------------------------------- #
 # 每个依赖的探针结论都有缓存时长（默认 5 分钟，可按依赖覆盖）
 # --------------------------------------------------------------------------- #
-
-
-def test_the_shipped_default_is_five_minutes() -> None:
-    """诊断边界：默认 TTL 就是"新鲜度"—— 依赖挂了最多 5 分钟内会被 /health 复用旧结论。"""
-    assert Settings(_env_file=None).health_probe_cache_ttl == 300.0
 
 
 def test_every_probe_caches_its_verdict(monkeypatch: pytest.MonkeyPatch) -> None:

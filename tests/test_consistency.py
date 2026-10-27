@@ -475,10 +475,6 @@ def client(factory):  # noqa: F811 - fixture comes from the import above
         app.dependency_overrides.clear()
 
 
-def test_the_default_checker_is_the_service_function() -> None:
-    assert consistency_api.get_checker() is consistency_service.check_consistency
-
-
 def test_the_endpoint_serves_the_report(client, factory) -> None:  # noqa: F811
     paper_id = add_paper(factory, chunks=2)
     storage = FakeStorage([object_key(paper_id)])

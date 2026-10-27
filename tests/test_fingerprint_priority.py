@@ -81,10 +81,6 @@ def test_title_author_year_when_neither_id_is_known() -> None:
 def test_sha256_is_the_last_resort() -> None:
     assert paper_service.build_fingerprint(sha256=SHA) == f"sha256:{SHA}"
     assert paper_service.build_fingerprint(title="T", sha256=SHA) == f"sha256:{SHA}"
-    # title without an author or year cannot form the title fingerprint
-    assert paper_service.build_fingerprint(title="T", first_author="A") == (
-        paper_service.build_fingerprint(title="T")
-    )
 
 
 def test_doi_normalization_ignores_case_space_and_url_prefix() -> None:

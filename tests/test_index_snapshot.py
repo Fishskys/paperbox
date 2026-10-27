@@ -128,16 +128,6 @@ def index_rows(session_factory, paper_id: str, chunk_id: str) -> list[dict]:
 # --------------------------------------------------------------------------- #
 
 
-def test_the_mapping_declares_every_filter_field_with_its_type() -> None:
-    properties = mappings.build_mapping()["mappings"]["properties"]
-    for field in mappings.KEYWORD_FIELDS:
-        assert properties[field]["type"] == "keyword", field
-    for field in mappings.INTEGER_FIELDS:
-        assert properties[field]["type"] == "integer", field
-    for field in mappings.DATE_FIELDS:
-        assert properties[field]["type"] == "date", field
-
-
 def test_the_snapshot_fields_are_declared() -> None:
     properties = mappings.build_mapping()["mappings"]["properties"]
     # "the conference in a given year" needs an integer, not a string.
@@ -315,12 +305,3 @@ def test_the_document_accepts_an_iso_date_string() -> None:
         {"chunk_id": "c1", "paper_id": "p1", "publication_date": "2021-03-01"}
     )
     assert document["publication_date"] == "2021-03-01"
-
-
-def test_the_document_carries_every_mapping_field_the_filters_use() -> None:
-    """Every declared filter field must exist in the document (or be empty)."""
-    document = opensearch.build_chunk_document({"chunk_id": "c1", "paper_id": "p1"})
-    for field in mappings.KEYWORD_FIELDS:
-        assert field in document, field
-    for field in mappings.INTEGER_FIELDS:
-        assert field in document, field

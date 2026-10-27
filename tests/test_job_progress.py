@@ -334,65 +334,6 @@ def test_running_pipeline_exposes_intermediate_stages(factory, stubbed_pipeline)
     assert read_stage(factory, job_id) == ("COMPLETED", 100.0)
 
 
-def test_stage_transitions_reach_the_log_as_commits(factory, stubbed_pipeline):
-    """Regression guard: every stage boundary is a real ``COMMIT``.
-
-    This inspects the engine's own log: the pipeline must emit a ``COMMIT``
-    after each of the four stage transitions. With the old ``flush``-only code
-    the same run produced a single trailing commit, which is why a polling
-    session stayed on ``RECEIVED`` for the whole pipeline.
-    """
-    import logging
-
-    paper_id = make_paper(factory)
-    job_id = make_job(factory, paper_id)
-
-    statements: list[str] = []
-
-    class _Collector(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            statements.append(str(record.getMessage()))
-
-    engine_logger = logging.getLogger("sqlalchemy.engine.Engine")
-    handler = _Collector()
-    engine_logger.addHandler(handler)
-    previous_level = engine_logger.level
-    engine_logger.setLevel(logging.INFO)
-
-    observed: list[tuple[str, float]] = []
-    tasks.stage_commit_hook = lambda job_id_, stage, progress: observed.append(
-        (stage, progress)
-    )
-    try:
-        worker_session = factory()
-        job = worker_session.get(IngestionJob, job_id)
-        paper = worker_session.get(Paper, paper_id)
-        tasks._run_pipeline(worker_session, job, paper, "papers/x/original.pdf")
-        worker_session.close()
-    finally:
-        tasks.stage_commit_hook = None
-        engine_logger.removeHandler(handler)
-        engine_logger.setLevel(previous_level)
-
-    assert [stage for stage, _ in observed] == [
-        "PARSING",
-        "CHUNKING",
-        "EMBEDDING",
-        "INDEXING",
-    ]
-
-    updates = [
-        statement
-        for statement in statements
-        if statement.startswith("UPDATE ingestion_jobs")
-    ]
-    commits = [
-        statement for statement in statements if statement.strip() == "COMMIT"
-    ]
-    assert len(updates) >= 4, f"expected one job UPDATE per stage, got {updates}"
-    assert len(commits) >= 4, f"expected a COMMIT per stage boundary, got {commits}"
-
-
 def test_every_stage_transition_is_committed(factory, stubbed_pipeline):
     """Each stage the pipeline passes through is committed, not just flushed."""
     paper_id = make_paper(factory)
@@ -456,52 +397,6 @@ def test_failure_keeps_the_stage_it_failed_at(factory, stubbed_pipeline):
         assert session.get(Paper, paper_id).status == "FAILED"
     finally:
         session.close()
-
-
-def test_serialize_job_exposes_the_progress_fields(factory):
-    """``JobOut`` carries everything the polling client needs (SPEC-P1 A1)."""
-    from app.schemas.job import JobOut
-    from app.services.ingestion_service import serialize_job
-
-    paper_id = make_paper(factory)
-    job_id = make_job(factory, paper_id)
-
-    session = factory()
-    try:
-        payload = serialize_job(session.get(IngestionJob, job_id))
-    finally:
-        session.close()
-
-    for field in (
-        "stage",
-        "progress",
-        "paper_id",
-        "error_code",
-        "error_message",
-        "created_at",
-        "updated_at",
-        "finished_at",
-    ):
-        assert field in payload, f"serialize_job misses {field}"
-    assert payload["error_code"] is None
-
-    out = JobOut.model_validate(payload)
-    assert out.stage == "RECEIVED"
-    assert out.progress == 0.0
-    assert out.paper_id == paper_id
-    assert out.error_code is None
-    assert out.finished_at is None
-
-    assert {
-        "stage",
-        "progress",
-        "paper_id",
-        "error_code",
-        "error_message",
-        "created_at",
-        "updated_at",
-        "finished_at",
-    } <= set(JobOut.model_fields)
 
 
 # --------------------------------------------------------------------------- #

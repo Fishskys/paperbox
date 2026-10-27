@@ -160,8 +160,9 @@ venues ──CASCADE──> venue_editions
 | 测试 | 覆盖 |
 |---|---|
 | `tests/test_deletion.py` | 删除顺序：OpenSearch → MinIO → PG 标记；用记录式 fake 调 `delete_paper` |
-| `tests/test_fingerprint_release.py` | `papers.fingerprint` 是**部分**唯一索引而非普通唯一约束（`Paper.__table_args__`） |
-| `tests/test_metadata_models.py` | 4 个部分唯一索引、14 张表的列与关系（纯 metadata 断言，不连库） |
+| `tests/test_review_fixes.py` | 重复指纹、重复标识符、多个主文件与多条 current 声明会被拒绝；验证实际写入结果 |
+| `tests/test_fingerprint_priority.py` | 指纹选择、重复识别和冲突时保护已有数据 |
+| `tests/test_ieee_import.py` | 软删除后重新导入能重新关联来源 |
 | `tests/test_index_migration.py` | cjk 分词字段、keyword/int/embedding 未变、`_reindex` body、别名切换 body 与闸门、迁移流程（fake client） |
 | `tests/test_primary_version.py` | 主版本优先级 `published_pdf > original > arxiv_pdf`、`is_primary` 转移 |
 | `tests/test_upload_stream.py` | `_HashingReader` 的 sha256、`upload_stream_hashed` 返回值 |
@@ -174,7 +175,8 @@ venues ──CASCADE──> venue_editions
 | `tests/test_ingest_compressed.py` | 解包安全（zip-slip/zip bomb/非 zip 415） |
 | `tests/test_bulk_ingest_dir.py` | 目录导入脚本的纯逻辑（候选过滤、429 退避、报告计数） |
 
-说明：`tests/test_metadata_models.py` 明确 "the real `alembic upgrade head` run is part of the acceptance walkthrough, not of the unit suite"——单元测试不验证真实迁移执行。
+单元测试验证数据操作行为，不验证 ORM 声明清单或真实 PostgreSQL 迁移执行；真实迁移需要独立验收。
+选择标准见[测试行为边界](testing-policy.md)。
 
 ## 8. 未做 / 已知缺口
 

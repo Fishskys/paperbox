@@ -45,11 +45,6 @@ def test_free_text_fields_use_the_cjk_analyzer(field: str) -> None:
     assert properties[field]["search_analyzer"] == "cjk"
 
 
-def test_cjk_is_the_shared_analyzer_constant() -> None:
-    assert mappings.TEXT_ANALYZER == "cjk"
-    assert set(mappings.ANALYZED_FIELDS) == {"title", "section_title", "text"}
-
-
 @pytest.mark.parametrize(
     "field",
     ["chunk_id", "paper_id", "authors", "venue", "doi", "arxiv_id", "tags", "section"],
@@ -346,15 +341,6 @@ def test_migrate_rejects_migrating_an_index_onto_itself() -> None:
 # --------------------------------------------------------------------------- #
 # CLI surface: defaults keep today's behaviour
 # --------------------------------------------------------------------------- #
-def test_defaults_still_target_the_configured_index_and_alias() -> None:
-    args = create_index.parse_args([])
-
-    assert args.index is None and args.alias is None
-    assert (args.index or opensearch.INDEX) == settings.opensearch_index
-    assert (args.alias or opensearch.ALIAS) == settings.opensearch_alias
-    assert args.migrate_from is None
-
-
 def test_cli_overrides_index_alias_and_migration_source() -> None:
     args = create_index.parse_args(
         ["--index", "paper_chunks_v2", "--alias", "other_alias", "--migrate-from", "paper_chunks_v1"]

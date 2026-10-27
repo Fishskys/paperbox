@@ -250,16 +250,6 @@ def test_restore_check_reports_a_missing_snapshot() -> None:
 # --------------------------------------------------------------------------- #
 # CLI defaults
 # --------------------------------------------------------------------------- #
-def test_cli_defaults_match_the_module_constants() -> None:
-    args = ss.parse_args([])
-    assert args.repo == ss.REPO
-    assert args.policy == ss.POLICY
-    assert args.location == ss.LOCATION
-    assert args.indices == ss.SNAPSHOT_INDICES
-    assert args.cron == ss.CREATION_CRON and args.timezone == ss.TIMEZONE
-    assert not args.list and not args.baseline and not args.restore_check and not args.dry_run
-
-
 def test_cli_lets_a_snapshot_be_triggered_soon_for_testing() -> None:
     args = ss.parse_args(["--cron", "* * * * *"])
     assert ss.build_policy_body(cron=args.cron)["creation"]["schedule"]["cron"]["expression"] == "* * * * *"

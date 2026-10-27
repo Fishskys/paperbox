@@ -231,8 +231,7 @@ def client(monkeypatch, session_factory):
     monkeypatch.setattr(settings, "auth_enabled", False)
     from app.main import app as paperbox_app
 
-    with TestClient(paperbox_app) as test_client:
-        yield test_client
+    yield TestClient(paperbox_app)
 
 
 def test_an_oversized_json_body_is_a_413_before_validation(client) -> None:

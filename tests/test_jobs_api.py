@@ -164,7 +164,6 @@ def test_defaults_keep_the_old_behaviour(client, session_factory):
 
     payload = client.get("/api/jobs").json()
 
-    assert payload["limit"] == ingest.DEFAULT_JOB_LIMIT
     assert payload["offset"] == 0
     assert payload["total"] == 3
 

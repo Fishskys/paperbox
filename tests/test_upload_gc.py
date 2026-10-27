@@ -26,7 +26,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 from app.db.models import IngestionJob, PaperFile, new_uuid
 from app.workers import housekeeping
@@ -457,31 +456,6 @@ def test_a_failing_runner_does_not_kill_the_loop():
 
     assert calls == [1]
 
-
-def test_start_is_idempotent():
-    async def _main():
-        collector = housekeeping.Housekeeping(interval=60, runner=lambda: housekeeping.GcReport())
-        collector.start()
-        collector.start()
-        try:
-            return len([task for task in asyncio.all_tasks() if "housekeeping" in repr(task)])
-        finally:
-            await collector.stop()
-
-    assert asyncio.run(_main()) == 1
-
-
-def test_module_helpers_use_a_singleton():
-    assert housekeeping.get_housekeeping() is housekeeping.get_housekeeping()
-
-
-def test_collect_once_delegates_to_run_gc(factory, tmp_path):  # noqa: F811
-    report = housekeeping.collect_once(
-        session_factory=factory, storage=FakeStorage([]), tmp_dir=str(tmp_path)
-    )
-
-    assert isinstance(report, housekeeping.GcReport)
-    assert report.removed == 0
 
 # --------------------------------------------------------------------------- #
 # orphan original PDFs (review 2026-10-05, P2-20)

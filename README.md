@@ -51,6 +51,9 @@ pre-commit install
 手动检查当前暂存内容使用 `pre-commit run`；检查全部已跟踪文件使用 `iyp check --tracked .`。
 仓库根目录的 `iyp.toml` 是团队共享的误报策略，只白名单文档和网络防护测试中的固定样例。
 
+测试只守 API/MCP/CLI 的可观察行为及数据完整性，选择标准见[测试行为边界](docs/architecture/testing-policy.md)。
+运行完整单元测试使用 `uv run pytest`；测试不连接真实依赖服务。
+
 > **已有部署升级**：从旧版本升到当前版本请读 [升级指引](UPGRADING.md)——按顺序覆盖 schema 迁移、破坏性配置变更（如 API key 标识改 `prefix`）与检索索引换代。
 
 > 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pypdf 解析，> 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成

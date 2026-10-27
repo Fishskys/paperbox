@@ -75,30 +75,6 @@ def test_a_structural_correction_replaces_the_identifier_and_the_mirror(db_sessi
 # --------------------------------------------------------------------------- #
 # field naming
 # --------------------------------------------------------------------------- #
-def test_identifier_and_tag_fields_are_namespaced() -> None:
-    assert prov.identifier_field("doi") == "identifier:doi"
-    assert prov.identifier_field("IEEE_Article_Number") == "identifier:ieee_article_number"
-    assert prov.tag_field("IEEE_TERMS") == "tag:ieee_terms"
-
-
-def test_field_names_round_trip() -> None:
-    assert prov.scheme_of_identifier_field("identifier:arxiv") == "arxiv"
-    assert prov.scheme_of_identifier_field("title") is None
-    assert prov.kind_of_tag_field("tag:author_terms") == "author_terms"
-    assert prov.kind_of_tag_field("abstract") is None
-
-
-def test_known_fields_cover_identifiers_and_tags() -> None:
-    fields = prov.known_fields()
-
-    assert "title" in fields and "venue" in fields and "authors" in fields
-    assert "identifier:doi" in fields
-    assert "tag:ieee_terms" in fields
-    assert prov.is_known_field("identifier:doi") is True
-    assert prov.is_known_field("tag:ieee_terms") is True
-    assert prov.is_known_field("nonsense") is False
-
-
 # --------------------------------------------------------------------------- #
 # record / current
 # --------------------------------------------------------------------------- #

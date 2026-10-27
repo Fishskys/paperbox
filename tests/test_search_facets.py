@@ -144,6 +144,7 @@ def test_empty_buckets_are_dropped() -> None:
 # --------------------------------------------------------------------------- #
 def _stub_search(monkeypatch, hits: list[Any], calls: list[dict[str, Any]]) -> None:
     """Replace the two hot spots so the service path runs without a cluster."""
+    monkeypatch.setattr("app.services.embedding_service.embed_text", lambda query: [0.1, 0.2])
 
     def fake_search_chunks(query, mode, top_k, filters, **kwargs):  # noqa: ANN001
         calls.append({"query": query, "kind": "chunks"})
@@ -218,28 +219,6 @@ def test_the_outcome_takes_facets_with_count_total_disabled(monkeypatch) -> None
 # --------------------------------------------------------------------------- #
 # API contract
 # --------------------------------------------------------------------------- #
-def test_the_request_schema_defaults_to_no_facets() -> None:
-    from app.schemas.search import SearchRequest
-
-    assert SearchRequest(query="x").facets is False
-
-
-def test_the_response_schema_carries_the_buckets() -> None:
-    from app.schemas.search import SearchResponse
-
-    payload = SearchResponse(
-        query="x",
-        mode="hybrid",
-        total=1,
-        candidates=1,
-        took_ms=1.0,
-        facets={"venue": [{"key": "ISSCC", "count": 4}], "year": [{"key": "2017", "count": 1}]},
-    )
-    dumped = payload.model_dump()
-    assert dumped["facets"]["venue"] == [{"key": "ISSCC", "count": 4}]
-    assert dumped["facets"]["paper_type"] == []
-
-
 @pytest.mark.parametrize("key", ["2017", "ISSCC"])
 def test_bucket_keys_stay_strings(key: str) -> None:
     from app.schemas.search import FacetBucket

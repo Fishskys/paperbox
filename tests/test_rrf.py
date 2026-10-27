@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.search.ranking import DEFAULT_RRF_K, ids_only, rrf_fuse, rrf_score
+from app.search.ranking import ids_only, rrf_fuse, rrf_score
 
 
 def test_single_list_keeps_its_order() -> None:
@@ -57,10 +57,6 @@ def test_non_string_ids_are_coerced() -> None:
 def test_k_parameter_changes_the_scale() -> None:
     assert rrf_fuse([["a"]], k=1)[0][1] == pytest.approx(0.5)
     assert rrf_score(0, k=1) == pytest.approx(0.5)
-
-
-def test_default_k_matches_spec() -> None:
-    assert DEFAULT_RRF_K == 60
 
 
 def test_invalid_arguments_rejected() -> None:

@@ -29,9 +29,49 @@ CLOSED_PORT_URL = "http://127.0.0.1:1"
 
 
 @pytest.fixture()
-def client() -> TestClient:
-    with TestClient(app) as test_client:
-        yield test_client
+def client(monkeypatch) -> TestClient:
+    specs = hs.health_specs()
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.port == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(
+            200,
+            json={"status": "ok", "loaded": True, "rerank_loaded": True, "dimension": 1024},
+        )
+
+    def local_specs():
+        return tuple(
+            replace(
+                item,
+                kind=hs.KIND_HTTP,
+                target=(
+                    (lambda: "https://dependency.test")
+                    if item.kind != hs.KIND_HTTP else item.target
+                ),
+                transport=httpx.MockTransport(answer),
+            )
+            for item in specs
+        )
+
+    monkeypatch.setattr(hs, "health_specs", local_specs)
+    return TestClient(app)
+
+
+@pytest.fixture()
+def isolated_lifespan(monkeypatch):
+    from app import main
+
+    async def stopped():
+        pass
+
+    monkeypatch.setattr(main.api_key_service, "startup_bootstrap", lambda: None)
+    monkeypatch.setattr(main.embedding_service, "check_dimension_consistency", lambda: None)
+    monkeypatch.setattr(main.job_queue, "start", lambda: None)
+    monkeypatch.setattr(main.job_queue, "recover", lambda: None)
+    monkeypatch.setattr(main.job_queue, "stop", stopped)
+    monkeypatch.setattr(main.housekeeping, "start", lambda: None)
+    monkeypatch.setattr(main.housekeeping, "stop", stopped)
 
 
 def spec(name: str) -> hs.ProbeSpec:
@@ -283,13 +323,8 @@ def test_the_api_service_declares_no_healthcheck() -> None:
     assert api["restart"] == "unless-stopped", "进程死了仍应被 compose 拉起来"
 
 
-def test_the_suite_pins_the_startup_probe_off() -> None:
-    """用例绝不连真实依赖：这个开关被 conftest 钉住，防止有人顺手改回去。"""
-    assert settings.health_probe_on_startup is False
-
-
 def test_the_lifespan_probes_every_dependency_once(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, isolated_lifespan,
 ) -> None:
     """启动探一次（并且只探一次），之后完全按需 —— 没有定时器。"""
     monkeypatch.setattr(settings, "health_probe_on_startup", True, raising=False)
@@ -308,7 +343,7 @@ def test_the_lifespan_probes_every_dependency_once(
 
 
 def test_the_lifespan_probe_is_off_when_the_switch_is_off(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, isolated_lifespan,
 ) -> None:
     monkeypatch.setattr(settings, "health_probe_on_startup", False, raising=False)
     calls: list[bool] = []
@@ -325,7 +360,9 @@ def test_the_lifespan_probe_is_off_when_the_switch_is_off(
     assert calls == []
 
 
-def test_a_broken_probe_never_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_broken_probe_never_stops_startup(
+    monkeypatch: pytest.MonkeyPatch, client, isolated_lifespan,
+) -> None:
     monkeypatch.setattr(settings, "health_probe_on_startup", True, raising=False)
 
     async def exploding(*, use_cache: bool = True):

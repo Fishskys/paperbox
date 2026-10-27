@@ -115,24 +115,6 @@ def test_the_cli_probes_the_api_itself() -> None:
     assert api.target().startswith("http://127.0.0.1:")
 
 
-def test_the_default_registry_is_the_endpoint_registry(monkeypatch) -> None:
-    """默认清单 = /health 的注册表 + api，没有第二份实现。"""
-    sentinel = spec("postgres", mock=transport(200))
-    monkeypatch.setattr(hs, "health_specs", lambda: (sentinel,))
-    captured: list[tuple] = []
-
-    async def fake_probe_all(specs=None, *, use_cache=True):
-        captured.append(tuple(specs or ()))
-        return ()
-
-    monkeypatch.setattr(hs, "probe_all", fake_probe_all)
-
-    healthcheck.main(with_extras=False)
-
-    names = [item.name for item in captured[0]]
-    assert names == ["postgres", "api"]
-
-
 def test_the_report_marks_a_cached_verdict(capsys: pytest.CaptureFixture) -> None:
     """缓存命中要标出来 —— 但 CLI 自己**不**吃缓存（它总是真探）。"""
     spec_with_ttl = replace(

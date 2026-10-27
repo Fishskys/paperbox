@@ -4,6 +4,15 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed
+
+- **测试以用户可观察行为为边界**：删除 ORM 声明、内部对象身份、常量互相比对、重复模型序列化等实现细节测试；
+  权限检查通过实际 HTTP 响应验证，保留去重、回滚、解析、检索、错误与数据保护场景。
+- **测试隔离真实应用后台服务**：健康路由和请求体限制测试不启动生产 lifespan，启动探针测试使用依赖替身，
+  避免单测触及真实服务并阻塞退出。测试选择标准见[测试行为边界](docs/architecture/testing-policy.md)。
+
 ## [0.7.1] - 2026-10-24
 
 ### Added

@@ -15,7 +15,6 @@ from app.core.config import settings
 from app.db.models import SearchQuery
 from app.services import search_log_service
 from app.services.search_log_service import (
-    RESULT_FIELDS,
     log_search,
     serialize_results,
     serialize_search_log,
@@ -74,21 +73,6 @@ def test_skips_non_dict_entries() -> None:
 
     assert [item["paper_id"] for item in summary] == ["p1", "p2"]
     assert [item["rank"] for item in summary] == [1, 2]
-
-
-def test_field_set_matches_result_fields() -> None:
-    summary = serialize_results([result("p1", 1.0)], 10)
-
-    assert set(summary[0]) == set(RESULT_FIELDS)
-    assert set(RESULT_FIELDS) == {
-        "paper_id",
-        "title",
-        "rank",
-        "score",
-        "retrieval_score",
-        "rerank_score",
-        "evidence_count",
-    }
 
 
 def test_evidence_count_from_evidence_list() -> None:

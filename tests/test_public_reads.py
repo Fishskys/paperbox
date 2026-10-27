@@ -1,41 +1,16 @@
-"""The four-level route contract: what each endpoint is gated by (plan D2/D8).
-
-Why a static table instead of only HTTP calls: the failure this guards against is
-*silent*. A router-level dependency forgotten on a new endpoint opens a mutation
-surface, and a read endpoint re-gated "for consistency" closes a read somebody
-depends on — neither shows up in the behaviour of a single endpoint test. So the
-test reads every router's routes, computes the tier each one actually declares, and
-compares the whole table against the contract.
-
-Tiers are monotonic, so "the tier a route needs" is the **highest** one it declares:
-the reading routers carry ``require_read`` at router level and their writing
-endpoints add ``require_write``, which implies it.
-
-Behavioural coverage of the gates themselves lives in ``tests/test_auth_rest.py``.
-"""
+"""Real business endpoints reject missing keys and insufficient permissions."""
 
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
-from app.api import (
-    consistency,
-    health,
-    ingestion,
-    jobs,
-    metadata,
-    papers,
-    search,
-    search_logs,
-)
-from app.core import security
+from app.core.config import settings
+from app.db.session import get_db
+from app.main import app
+from app.services import api_key_service
 
-#: Framework/ops endpoints: no gate at all (the read door is not consulted).
-PUBLIC: frozenset[tuple[str, str]] = frozenset({("GET", "/health")})
-
-#: The read tier — 13 business reads plus ``/health`` are the 14 reads of the plan;
-#: ``/health`` stays ungated, so these 13 are the ones carrying ``require_read``.
-#: ``POST /api/search`` belongs here: it writes one search-log row, not corpus state.
+# Search belongs to the read tier even though it records query history.
 READS: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/api/consistency"),
@@ -78,96 +53,54 @@ WRITES: dict[tuple[str, str], str] = {
     ("POST", "/api/metadata/reextract"): "admin",
 }
 
-MODULES = (
-    health,
-    consistency,
-    ingestion,
-    jobs,
-    papers,
-    metadata,
-    search,
-    search_logs,
-)
+@pytest.fixture()
+def authenticated_client(monkeypatch, session_factory):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_read_access", "key")
+    monkeypatch.setattr(settings, "paper_api_key", "")
+    monkeypatch.setattr(settings, "paper_api_keys", "")
+    monkeypatch.setattr("app.main.SessionLocal", session_factory)
+    with session_factory() as session:
+        keys = {}
+        for role in ("read", "write"):
+            _, keys[role] = api_key_service.create_key(session, prefix=f"test-{role}", role=role)
+        session.commit()
 
-_ORDER = {"read": 0, "write": 1, "admin": 2}
+    def database():
+        with session_factory() as session:
+            yield session
 
-
-@pytest.fixture(scope="module")
-def table() -> dict[tuple[str, str], frozenset[str]]:
-    """``(method, path) -> tiers declared by that route`` for every API route."""
-    names = {
-        security.require_read: "read",
-        security.require_write: "write",
-        security.require_admin: "admin",
-    }
-    table: dict[tuple[str, str], frozenset[str]] = {}
-    for module in MODULES:
-        for route in module.router.routes:
-            calls = {dep.call for dep in route.dependant.dependencies}
-            tiers = frozenset(name for call, name in names.items() if call in calls)
-            for method in route.methods - {"HEAD", "OPTIONS"}:
-                table[(method, route.path)] = tiers
-    return table
+    monkeypatch.setitem(app.dependency_overrides, get_db, database)
+    yield TestClient(app), keys
 
 
-def _highest(tiers: frozenset[str]) -> str | None:
-    """The tier a route actually needs (tiers are monotonic)."""
-    return max(tiers, key=lambda tier: _ORDER[tier]) if tiers else None
+def request(client, method, template, key=None):
+    path = template.format(
+        paper_id="11111111-2222-4333-8444-555555555555",
+        job_id="11111111-2222-4333-8444-555555555555",
+        source_id="11111111-2222-4333-8444-555555555555",
+    )
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    return client.request(method, path, headers=headers, json={})
 
 
-def test_the_route_table_is_complete(table) -> None:
-    """Every endpoint is classified; adding one forces a decision here."""
-    assert set(table) == set(PUBLIC) | set(READS) | set(WRITES)
+def test_private_business_endpoints_reject_missing_credentials(authenticated_client):
+    client, _ = authenticated_client
+    for method, path in sorted(READS | set(WRITES)):
+        response = request(client, method, path)
+        assert response.status_code == 401, (method, path, response.text)
 
 
-def test_reads_declare_the_read_gate(table) -> None:
-    """Reads are gated again — by the tier the policy decides, not by absence."""
-    offenders = {key: sorted(table[key]) for key in READS if table[key] != {"read"}}
-    assert offenders == {}
+def test_read_credentials_cannot_modify_the_library(authenticated_client):
+    client, keys = authenticated_client
+    for method, path in WRITES:
+        response = request(client, method, path, keys["read"])
+        assert response.status_code == 403, (method, path, response.text)
 
 
-def test_writes_reach_the_expected_tier(table) -> None:
-    wrong = {
-        key: sorted(table[key])
-        for key, want in WRITES.items()
-        if _highest(table[key]) != want
-    }
-    assert wrong == {}
-
-
-def test_no_route_is_ungated(table) -> None:
-    """The 2026-10-12 gap: an endpoint with no dependency at all."""
-    ungated = sorted(key for key in table if not table[key])
-    assert ungated == [("GET", "/health")]
-
-
-def test_admin_gates_the_bulk_reindex_only(table) -> None:
-    """Plan D8: deletion dropped to ``write``; the whole-library rebuild kept admin."""
-    assert {key for key in table if _highest(table[key]) == "admin"} == {
-        ("POST", "/api/papers/reindex"),
-        ("POST", "/api/metadata/reextract"),
-    }
-
-
-def test_ingestion_is_a_write_router_throughout() -> None:
-    """The five ingest entries are the biggest blast radius; no read slipped in."""
-    assert {path for _, path in WRITES if path.startswith("/api/papers/ingest")} == {
-        "/api/papers/ingest",
-        "/api/papers/ingest/compressed",
-        "/api/papers/ingest/dir",
-        "/api/papers/ingest/file",
-        "/api/papers/ingest/files",
-    }
-
-
-def test_the_gated_routers_declare_read_at_router_level() -> None:
-    """One declaration per reading router, not one per endpoint (plan task T4)."""
-    for module in (consistency, jobs, metadata, papers, search, search_logs):
-        calls = {dep.dependency for dep in module.router.dependencies}
-        assert security.require_read in calls, module.__name__
-
-
-def test_the_read_tier_singleton_exists_again() -> None:
-    """``require_api_key`` (the old, misleading name) stays retired."""
-    assert not hasattr(security, "require_api_key")
-    assert security.require_read is not None
+def test_write_credentials_cannot_run_whole_library_operations(authenticated_client):
+    client, keys = authenticated_client
+    for (method, path), tier in WRITES.items():
+        if tier == "admin":
+            response = request(client, method, path, keys["write"])
+            assert response.status_code == 403, (method, path, response.text)

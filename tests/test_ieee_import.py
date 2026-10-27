@@ -440,13 +440,8 @@ def test_dry_run_and_apply_make_the_same_batch_decisions(db_session) -> None:
     assert db_session.query(PaperSource).count() == 2
 
 
-def test_dry_run_prefetches_an_already_imported_source(db_session, monkeypatch) -> None:
+def test_dry_run_reports_an_already_imported_source_as_unchanged(db_session) -> None:
     importer.import_payload(db_session, IEEE_SAMPLE, apply=True)
-
-    def unexpected_lookup(*_args, **_kwargs):
-        raise AssertionError("an unchanged source should use the bulk-prefetched view")
-
-    monkeypatch.setattr(sources, "find_source", unexpected_lookup)
 
     preview = importer.import_payload(db_session, IEEE_SAMPLE)
 

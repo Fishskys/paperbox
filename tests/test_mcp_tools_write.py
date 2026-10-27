@@ -127,10 +127,15 @@ def _job(**overrides) -> JobOut:
 def mcp_session(monkeypatch, session_factory):
     """A paper with two chunks and an original file, served by an SQLite session.
 
-    Only the repository/engine boundary is stubbed (``SessionLocal``), so the tools
-    exercise the real services -- the same ones the REST endpoints call.
+    Database and external storage/index boundaries are local replacements;
+    the tools exercise the real metadata and ingestion services.
     """
     monkeypatch.setattr(tools_write, "SessionLocal", session_factory)
+    monkeypatch.setattr("app.services.object_storage.list_objects", lambda *a, **kw: [])
+    monkeypatch.setattr(
+        "app.search.opensearch.bulk_update_documents",
+        lambda documents, **kw: {"updated": len(documents), "failed": 0},
+    )
     monkeypatch.setattr(
         tools_write.paper_service, "original_file", lambda paper: _record(paper.id)
     )

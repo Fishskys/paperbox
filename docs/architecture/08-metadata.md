@@ -375,17 +375,19 @@ CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_m
 
 ## 6. 测试位置与覆盖
 
-| 测试文件 | 行数 | 覆盖 |
-|---|---|---|
-| `tests/test_metadata_models.py` | 229 | 表名、服务依赖的列、四个部分唯一索引（纯模型断言，不连 PostgreSQL） |
-| `tests/test_metadata_identifiers.py` | 378 | 标识符阶梯 `DOI > arXiv > 标题+首作者+年 > sha256`；IEEE `article_number` 落在标识符表 |
-| `tests/test_metadata_matcher.py` | 284 | 第 1–3 步可自动挂；仅标题命中**不得**自动挂（转复核） |
-| `tests/test_metadata_merge.py` | 356 | R2 三条分支：填空 / 结构化覆盖启发式 / 结构化对结构化留现值并登记冲突 |
-| `tests/test_metadata_api.py` | 480 | HTTP 契约：`dry_run` 默认、415、人工归属两侧不存在时 404 |
-| `tests/test_metadata_scripts.py` | 407 | 回填幂等、从不改指纹、CLI 报告（session 打桩到 SQLite） |
-| `tests/test_awaiting_file.py` | 475 | 元数据先建壳 → PDF 到达复用同一 `paper_id` |
-| `tests/test_manual_metadata.py` | 404 | `manual` 编辑立即生效且可回滚 |
-| `tests/test_primary_version.py` | 229 | 主版本优先级；非主版本不解析；`needs_reindex` 标志 |
+| 测试文件 | 覆盖 |
+|---|---|
+| `tests/test_review_fixes.py` | 重复标识符、多个主文件、多条 current 声明通过实际写入验证约束 |
+| `tests/test_metadata_identifiers.py` | 标识符归一化、主标识符选择、幂等写入与镜像一致性 |
+| `tests/test_metadata_matcher.py` | 强身份唯一命中、弱证据与冲突身份不误合并 |
+| `tests/test_metadata_merge.py` | 填空、按来源权威级别覆盖、保留同级冲突和人工决定 |
+| `tests/test_metadata_api.py` | HTTP 契约：`dry_run` 默认、415、人工归属两侧不存在时 404 |
+| `tests/test_metadata_scripts.py` | 回填幂等、从不改指纹、CLI 报告（session 打桩到 SQLite） |
+| `tests/test_awaiting_file.py` | 元数据先建壳 → PDF 到达复用同一 `paper_id` |
+| `tests/test_manual_metadata.py` | `manual` 编辑立即生效且可回滚 |
+| `tests/test_primary_version.py` | 主版本优先级；非主版本不解析；`needs_reindex` 标志 |
+
+测试选择标准见[测试行为边界](testing-policy.md)。
 
 真机验收：`uv run python scripts/acceptance_metadata.py --cleanup`（需 API 已启动），7 项见 [#4.8](#48-脚本)，实测数字在 `docs/progress/project.md` [#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21)。
 

@@ -14,14 +14,9 @@ import logging
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import CHUNK_MODES, Settings
+from app.core.config import Settings
 from app.parsing.chunking import (
-    CHUNK_MODE_LENGTH,
-    CHUNK_MODE_SEMANTIC,
-    CHUNK_MODES as CHUNKING_MODES,
     MAX_TOKENS,
-    SEMANTIC_MIN_TOKENS,
-    SEMANTIC_SIMILARITY_THRESHOLD,
     chunk_document,
     cosine_similarity,
     similarity_dips,
@@ -486,23 +481,6 @@ def test_vector_count_mismatch_degrades_to_length_mode(
 # --------------------------------------------------------------------------- #
 # configuration contract
 # --------------------------------------------------------------------------- #
-
-
-def test_config_and_chunking_agree_on_chunk_modes() -> None:
-    """``config.CHUNK_MODES`` is duplicated on purpose -- keep it in sync."""
-    assert CHUNKING_MODES == CHUNK_MODES
-    assert CHUNK_MODE_LENGTH in CHUNK_MODES
-    assert CHUNK_MODE_SEMANTIC in CHUNK_MODES
-
-
-def test_config_semantic_defaults_match_the_chunking_constants() -> None:
-    """The deployed defaults are the constants, or the A/B tune is meaningless."""
-    assert Settings.model_fields["chunk_semantic_threshold"].default == (
-        SEMANTIC_SIMILARITY_THRESHOLD
-    )
-    assert Settings.model_fields["chunk_semantic_min_tokens"].default == (
-        SEMANTIC_MIN_TOKENS
-    )
 
 
 @pytest.mark.parametrize(
