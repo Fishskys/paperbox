@@ -1,4 +1,4 @@
-"""External metadata import: IEEE raw JSON, CSL-JSON and the generic shape.
+"""External metadata import: IEEE, CSL and generic records in JSON or JSONL.
 
 One importer for every source file, because the *storage model* does not care
 which platform produced a record (decision 1). The format is detected from the
@@ -190,13 +190,36 @@ def records_from_payload(payload: Any) -> tuple[str, list[dict[str, Any]]]:
     return detected, records
 
 
-def load_payload(data: bytes | str) -> Any:
-    """Parse JSON bytes/text (accepts a UTF-8 BOM and a bare list)."""
+def load_payload(data: bytes | str, *, jsonl: bool = False) -> Any:
+    """Read JSON or one object per JSONL line, then reuse the record parsers.
+
+    A filename/media-type hint preserves list semantics for single-line JSONL.
+    Multiple JSON values are also recognized without a hint. All lines are read
+    before importing, so malformed input cannot leave partially imported data.
+    """
     if isinstance(data, bytes):
         text = data.decode("utf-8-sig", errors="replace")
     else:
         text = data.lstrip("\ufeff")
-    return json.loads(text)
+    if not jsonl:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            if exc.msg != "Extra data":
+                raise
+
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(text.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSONL at line {line_number}: {exc.msg}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"invalid JSONL at line {line_number}: expected an object")
+        records.append(record)
+    return records
 
 
 # --------------------------------------------------------------------------- #
@@ -1189,13 +1212,14 @@ def import_file(
     importer: str = "metadata_import",
     limit: int | None = None,
 ) -> ImportReport:
-    """Read a JSON file and import it."""
+    """Read a JSON/JSONL file and reuse the same metadata import pipeline."""
     from pathlib import Path
 
-    data = Path(path).read_bytes()
+    path = Path(path)
+    data = path.read_bytes()
     return import_payload(
         session,
-        load_payload(data),
+        load_payload(data, jsonl=path.suffix.lower() in (".jsonl", ".ndjson")),
         apply=apply,
         source_type=source_type,
         importer=importer,

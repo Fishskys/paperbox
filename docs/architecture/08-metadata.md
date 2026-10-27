@@ -331,7 +331,18 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 单篇与全库的 reextract 共用 `app/services/metadata_reextract.py` 的实现（同一份三层发现 + R2 合并），只是作用范围与权限不同（对齐 `papers/{id}/reindex`(write) vs `papers/reindex`(admin) 的惯例）。两者都**不重解析正文、不重切块、不重嵌入**，`refresh_index`（默认 true）只重写受影响论文的索引元数据快照。
 
-契约：请求体既不是 multipart 也不是 JSON → 415（`_payload_from_request`）；`source_type` 非法 → 422；同一记录重复导入计入 `unchanged`，不产生第二行来源。
+契约：请求体支持 multipart 文件、`application/json`，以及 JSONL 的 `application/x-ndjson`、
+`application/ndjson`、`application/jsonl`，其它类型 → 415（`_payload_from_request`）；
+`source_type` 非法 → 422；同一记录重复导入计入 `unchanged`，不产生第二行来源。
+
+#### JSONL 输入
+
+`metadata_import.load_payload` 统一解码 JSON/JSONL；`.jsonl` / `.ndjson` 后缀或 JSONL 媒体类型
+明确指定逐行读取，未指定时也能识别多条连续的 JSON 对象。每个非空行必须是一个对象，支持 UTF-8 BOM、
+CRLF、空行与无换行的末行。解码结果交给原有 `parse_records_tolerant`、匹配和导入服务，
+IEEE 嵌套作者、来源原文、dry-run、去重及 limit 行为与 JSON 一致。
+JSONL 语法错误或非对象行在开始导入前被拒绝，API 返回 422 并标明物理行号；
+可解码记录的字段错误仍进入 `failures`，不影响其它记录按现有规则处理。
 
 IEEE Xplore 的 `issue` 偶尔采用“期号: 专题名”（如 `1: Single-Photon Technologies and Applications`）。`parse_ieee_record` 只把冒号前的数字期号写入 `papers.issue`，完整标签仍原样保存在 `paper_sources.raw`；该规则不对 CSL-JSON 或通用 JSON 做任意截断。
 
@@ -382,6 +393,7 @@ CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_m
 | `tests/test_metadata_matcher.py` | 强身份唯一命中、弱证据与冲突身份不误合并 |
 | `tests/test_metadata_merge.py` | 填空、按来源权威级别覆盖、保留同级冲突和人工决定 |
 | `tests/test_metadata_api.py` | HTTP 契约：`dry_run` 默认、415、人工归属两侧不存在时 404 |
+| `tests/test_metadata_jsonl.py` | 真实样例的 JSON/JSONL 预览与跨格式去重、API/CLI 导入、坏行无部分写入 |
 | `tests/test_metadata_scripts.py` | 回填幂等、从不改指纹、CLI 报告（session 打桩到 SQLite） |
 | `tests/test_awaiting_file.py` | 元数据先建壳 → PDF 到达复用同一 `paper_id` |
 | `tests/test_manual_metadata.py` | `manual` 编辑立即生效且可回滚 |

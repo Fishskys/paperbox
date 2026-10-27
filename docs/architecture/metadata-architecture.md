@@ -288,14 +288,18 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | `conference_location` / `conference_dates` | `venue_editions.location` / `.dates` |
 | `citing_paper_count` / `download_count` / `insert_date` / `license` / `rank` | **不入结构化列**，只留 `raw` |
 
-**导入通道**：`POST /api/metadata/import`（multipart/JSON，`dry_run` **默认 true**）+ `scripts/import_metadata.py`；dry-run 先用有界批量查询预取已导入来源并直接报告 `unchanged`（不加载 `raw`），其余记录在数据库 SAVEPOINT 内走与 apply 相同的逐条写入路径，整批完成后回滚，保证同一初始库状态下批内匹配决策和统计一致；
-格式自动识别：含 `articles` → IEEE raw；JSON 数组含 `DOI`/`type` → CSL-JSON；否则本项目通用 JSON。
+**导入通道**：`POST /api/metadata/import`（multipart 文件或 JSON/JSONL 请求体，`dry_run` **默认 true**）+ `scripts/import_metadata.py`；dry-run 先用有界批量查询预取已导入来源并直接报告 `unchanged`（不加载 `raw`），其余记录在数据库 SAVEPOINT 内走与 apply 相同的逐条写入路径，整批完成后回滚，保证同一初始库状态下批内匹配决策和统计一致。
+JSONL 每个非空行是一条论文对象；`load_payload` 解码为列表后，复用 JSON 的记录识别、匹配和写入流程。
+文件后缀 `.jsonl` / `.ndjson` 或 JSONL 媒体类型用于明确指定逐行读取，单行文件也保留列表语义。
+输入规则、媒体类型与错误处理统一见[JSONL 输入](08-metadata.md#jsonl-输入)。
+记录格式自动识别：含 `articles`，或带有至少两个 IEEE 专有字段的文章对象 → IEEE raw；
+数组含 `DOI`/`type` → CSL-JSON；否则本项目通用 JSON。
 
 ### 12.1 三种格式的字段清单（`app/services/metadata_import.py`）
 
 | 格式 | 识别规则（`detect_format`） | 顶层形状 |
 |---|---|---|
-| `ieee_raw` | 对象里有 `articles` 数组 | `{"articles": [ {…}, … ]}` |
+| `ieee_raw` | `articles` 数组，或文章对象带有至少两个 IEEE 专有字段 | `{"articles": [ {…}, … ]}`、单篇对象或文章数组 |
 | `csl_json` | 数组里有元素带 `DOI` 或 `type` | `[ {…}, … ]` |
 | `generic` | 其余（对象或数组都行） | `[ {…} ]` 或单个 `{…}` |
 

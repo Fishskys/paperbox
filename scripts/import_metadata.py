@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Import external metadata from a JSON file (IEEE raw / CSL-JSON / generic).
+"""Import external metadata from a JSON/JSONL file (IEEE / CSL / generic).
 
     uv run python scripts/import_metadata.py ieee.json                 # dry run
     uv run python scripts/import_metadata.py ieee.json --apply
+    uv run python scripts/import_metadata.py ieee.jsonl --apply
     uv run python scripts/import_metadata.py ieee.json --apply --report logs/eval/ieee-report.json
 
 The format is detected from the payload. A dry run (the default) matches and
@@ -69,7 +70,7 @@ def print_report(report: importer.ImportReport, path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", type=Path, help="JSON file to import")
+    parser.add_argument("path", type=Path, help="JSON or JSONL file to import")
     parser.add_argument("--apply", action="store_true", help="write the changes")
     parser.add_argument("--limit", type=int, default=None, help="import at most N records")
     parser.add_argument(

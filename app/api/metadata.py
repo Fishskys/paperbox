@@ -49,7 +49,11 @@ router = APIRouter(
     dependencies=[Depends(require_read)],
 )
 
-UNSUPPORTED_MEDIA = "send the records as multipart/form-data (file) or application/json"
+JSONL_MEDIA_TYPES = {"application/x-ndjson", "application/ndjson", "application/jsonl"}
+UNSUPPORTED_MEDIA = (
+    "send the records as multipart/form-data (file), application/json, "
+    "application/x-ndjson or application/jsonl"
+)
 SOURCE_NOT_FOUND = "source not found"
 PAPER_NOT_FOUND = "paper not found"
 
@@ -64,9 +68,10 @@ def _load_source(session: Session, source_id: str):
 
 
 async def _payload_from_request(request: Request) -> Any:
-    """Read the records from a multipart upload or a JSON body."""
-    content_type = (request.headers.get("content-type") or "").lower()
-    if "multipart/form-data" in content_type:
+    """Read JSON/JSONL files or request bodies through the shared loader."""
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    jsonl = content_type in JSONL_MEDIA_TYPES
+    if content_type == "multipart/form-data":
         form = await request.form()
         upload = form.get("file")
         if upload is None or not hasattr(upload, "read"):
@@ -75,24 +80,22 @@ async def _payload_from_request(request: Request) -> Any:
                 detail="multipart request must carry a 'file' part",
             )
         data = await upload.read()
-        try:
-            return importer.load_payload(data)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"invalid JSON: {exc}",
-            ) from exc
-    if "application/json" in content_type:
-        try:
-            return await request.json()
-        except Exception as exc:  # noqa: BLE001 - a malformed body is the client's fault
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"invalid JSON: {exc}",
-            ) from exc
-    raise HTTPException(
-        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=UNSUPPORTED_MEDIA
-    )
+        filename = (getattr(upload, "filename", None) or "").lower()
+        file_type = (getattr(upload, "content_type", None) or "").split(";", 1)[0].strip().lower()
+        jsonl = filename.endswith((".jsonl", ".ndjson")) or file_type in JSONL_MEDIA_TYPES
+    elif content_type == "application/json" or jsonl:
+        data = await request.body()
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=UNSUPPORTED_MEDIA
+        )
+    try:
+        return importer.load_payload(data, jsonl=jsonl)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid JSON/JSONL: {exc}",
+        ) from exc
 
 
 @router.post("/import", response_model=ImportReportOut, dependencies=[Depends(require_write)])
@@ -107,7 +110,7 @@ async def import_metadata(
     ),
     session: Session = Depends(get_db),
 ) -> ImportReportOut:
-    """Import external metadata (IEEE raw JSON / CSL-JSON / this project's shape).
+    """Import IEEE, CSL or generic metadata records from JSON or JSONL.
 
     Format is detected from the payload. Nothing is written unless ``apply=true``
     or ``dry_run=false``; re-importing the same record is a no-op either way

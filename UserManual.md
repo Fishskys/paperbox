@@ -463,7 +463,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 |---|---|
 | 基址 | `http://<host>:8077`（默认端口 8077） |
 | 鉴权 | **四档模型**：`public`（无凭据）与三档密钥 `read < write < admin`，详见 [#2.1.1](#211-端点--最低密钥档位auth_enabledtrue-时)。默认（`AUTH_READ_ACCESS=public`）读接口**不读凭证**：不带 key 直接 200，带了无效 key 也照答 200；改为 `key` 后读接口与写接口同一套规矩（缺凭证 401、凭证不匹配 403）。`AUTH_ENABLED=true` 时写接口要 `Authorization: Bearer ***、凭证不匹配 403、档位不足 403（detail 含 `insufficient role`）。key 来自 `api_keys` 表（`scripts/manage_keys.py`）或 env 引导密钥，MCP 与 REST 共用同一套 |
-| 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data` |
+| 请求体 | JSON（`Content-Type: application/json`），上传类接口用 `multipart/form-data`；元数据导入另支持 JSONL 请求体，见[元数据](#27-元数据) |
 | 交互式文档 | `GET /docs`（OpenAPI 3.1，可直接试调）；**MCP 端点 `/mcp` 不在里面**（挂载而非路由，见 [#1.7](#17-mcp-接入让-agent-直接查读论文)） |
 | 错误体 | `{"detail": "..."}`（422 校验错误为 FastAPI 默认结构，含 `loc`/`msg`/`type`） |
 | 幂等性 | 建索引、建快照、清理解包目录等运维接口可重复执行 |
@@ -616,9 +616,22 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 裁决「采纳被拒值」：把某字段回滚到那条历史主张（即当前被顶掉的值） | `paper_id`（**必填**）；body `field`（**必填**）、`provenance_id`（**必填**，来自 GET metadata 的账本或 `/api/metadata/review`） |
 | POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把这条分歧标成已裁决，从此不进复核清单 | `paper_id`（**必填**）；body `field`（**必填**）、`provenance_id`（**必填**） |
 | GET | `/api/metadata/review` | 待复核清单（冲突 / 歧义） | `status`（可重复）、`limit`（默认 50） |
-| POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL-JSON / 通用 JSON） | `source_type`（默认 `import_file`）、`dry_run`（默认 `true`，只看不写）、`apply`、`limit` |
+| POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL / 通用结构，支持 JSON 和 JSONL） | `source_type`（默认 `import_file`）、`dry_run`（默认 `true`，只看不写）、`apply`、`limit` |
 | POST | `/api/metadata/apply` | 提交复核决定 | body `entries`（复核条目）、`mode`（`fill` 默认 / `overwrite`）、`fields`（限定字段） |
 | POST | `/api/metadata/sources/{source_id}/attach` | 把某条来源记录挂到指定论文 | `source_id`（路径，**必填**）；body `paper_id`（**必填**） |
+
+导入支持直接发送 JSON，或通过 multipart 的 `file` 字段上传 `.json` / `.jsonl` / `.ndjson` 文件。
+直接发送 JSONL 使用 `Content-Type: application/x-ndjson`、`application/ndjson` 或 `application/jsonl`。
+每行必须是一个论文元数据对象；支持 UTF-8 BOM、CRLF 和空行，末行不要求换行。
+JSONL 解码成记录列表后复用 IEEE、CSL 和通用记录的解析流程。语法错误或非对象记录返回 422 并标明物理行号，
+整份文件校验完才开始导入，因此此类错误不会留下部分写入；字段语义错误仍按逐条失败记录在导入报告中。
+
+命令行导入同样支持 JSONL，默认预览：
+
+```bash
+uv run python scripts/import_metadata.py tests/metadata/ieee_metadata_example.jsonl
+uv run python scripts/import_metadata.py tests/metadata/ieee_metadata_example.jsonl --apply
+```
 
 > 元数据改动**不会自动改变检索过滤结果**：过滤读的是索引里的元数据快照。
 > 只改元数据用 `uv run python scripts/refresh_index_metadata.py`（秒级）；要连向量一起重算才用 `reindex`。
