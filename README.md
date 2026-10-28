@@ -56,7 +56,7 @@ pre-commit install
 
 > **已有部署升级**：从旧版本升到当前版本请读 [升级指引](UPGRADING.md)——按顺序覆盖 schema 迁移、破坏性配置变更（如 API key 标识改 `prefix`）与检索索引换代。
 
-> 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pypdf 解析，> 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成
+> 只解析 PDF 时无需额外服务：默认解析后端 docling 是可选的独立服务，未配置地址时会自动降级为内置的 pymupdf 解析，> 并把降级原因记进账本。Windows 开发机上依赖服务跑在 WSL2 里，把第 1 步换成
 > `wsl -e bash -lc "cd /mnt/<盘>/.../paperbox/infra && docker compose up -d"` 即可。
 
 ### 可选：让 Agent 通过 MCP 接入
@@ -115,7 +115,7 @@ MCP 端点与 REST **同进程、共用配置/鉴权/日志**：检索与读正�
 | 环节 | 做什么 | 用什么实现 |
 |---|---|---|
 | 采集与上传 | 五种入口接收 PDF、算指纹判重、落 staging | FastAPI 路由 + 进程内优先级队列（`app/workers/queue.py`），单 worker 跑流水线 |
-| 解析 | PDF → 结构化 markdown（页码 / 章节 / 表格） | 远端 **docling-serve**（主）与内置 **pypdf**（降级）双后端，产物缓存到 MinIO 可重放 |
+| 解析 | PDF → 结构化 markdown（页码 / 章节 / 表格） | 远端 **docling-serve**（主）与内置 **pymupdf**（降级）双后端，产物缓存到 MinIO 可重放 |
 | 切块 | 切成约 400 token 的块，带页码与章节标题 | 定长与「语义低谷」两种策略（`app/parsing/chunking.py`） |
 | 向量化 | 文本 → 1024 维向量 | 独立推理容器（fastembed / `intfloat/multilingual-e5-large`），单队列限批 |
 | 精排 | 查询-候选交叉编码重排 | 同一容器内的交叉编码器（可换任意 ONNX 模型，现用 int8 多语言档） |

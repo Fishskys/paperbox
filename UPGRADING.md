@@ -1,5 +1,13 @@
 # 升级指引（0.5.x → 0.7.1）
 
+## 本地 PDF 后端更新（Unreleased）
+
+执行 `uv sync --locked` 安装 PyMuPDF；Docling 继续作为默认解析后端，本地降级改为 PyMuPDF。
+建议将显式 `PARSER_BACKEND=pypdf` 改为 `pymupdf`；旧值仍兼容，新产物记录真实的 `pymupdf` 版本。
+`PDF_PROCESS_TIMEOUT=120` 限制单次本地处理；原始 PDF 与历史来源不改写，正文缓存版本更新为 4。
+无需为该后端切换迁移数据库。需要更新既有正文时显式运行重索引，旧 `pypdf` 来源过滤仍保留。
+PyMuPDF 的发布许可为 AGPL 或商业许可，部署分发应采用适用的授权。
+
 本文件面向**已有部署的升级**。全新部署见 [`README.md`](README.md) 与
 [`UserManual.md` §1](UserManual.md#1-详细部署教程)；本文只讲“从旧版本换到 0.7.1
 需要多做/改写什么”。

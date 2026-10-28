@@ -18,7 +18,7 @@
 - **核心定位**：`个人/团队的论文知识服务：无前端、纯 REST API（可选 MCP），供 Hermes 等 Agent 调用 —— 五种入口导入 PDF → 原件进 MinIO、元数据进 PostgreSQL、解析成带页码与章节的结构化 markdown → 切块向量化 → OpenSearch 全文+向量检索 → /api/search 论文级聚合与 evidence。`
 - **核心技术栈**：
   - **语言与运行时**：`Python 3.12（依赖与虚拟环境一律走 uv，以 uv.lock 为准）；uvicorn 单 worker（导入流水线跑在应用进程内）`
-  - **核心框架**：`FastAPI 0.141 + Pydantic 2.13（REST，/api/**）、MCP 2.3（/mcp，默认关闭）、SQLAlchemy 2.0 + Alembic（psycopg 3）、opensearch-py、minio-py、pypdf（降级解析后端）、docling-serve（主解析后端，可选 profile）`
+  - **核心框架**：`FastAPI 0.141 + Pydantic 2.13（REST，/api/**）、MCP 2.3（/mcp，默认关闭）、SQLAlchemy 2.0 + Alembic（psycopg 3）、opensearch-py、minio-py、PyMuPDF（降级解析后端）、docling-serve（主解析后端，可选 profile）`
   - **存储与中间件**：`PostgreSQL 15.2（元数据）、OpenSearch 3.6（CJK bigram 全文 + kNN 向量，别名切换做迁移）、MinIO（PDF 原件与解析产物）、独立推理容器（intfloat/multilingual-e5-large，1024 维，兼做交叉编码精排）`
 
 ### 1.2 目录结构与权责边界
@@ -31,7 +31,7 @@ paperbox/
 │   ├── db/                 # 数据库模型与会话
 │   ├── services/           # 应用服务层：业务用例编排（导入 / 解析 / 元数据 / 检索 / 重索引…）
 │   ├── search/             # 检索实现：引擎侧原生检索、应用侧融合、排序与索引映射
-│   ├── parsing/            # 解析后端与切块：docling 客户端、pypdf、markdown 方言、页布局
+│   ├── parsing/            # 解析后端与切块：docling 客户端、PyMuPDF、markdown 方言、页布局
 │   ├── schemas/            # 契约：Pydantic 请求/响应模型
 │   ├── workers/            # 进程内优先级队列与流水线任务
 │   ├── mcp/                # MCP 端点与工具（读 6 + 写 4），直调 service 层
@@ -52,7 +52,7 @@ paperbox/
 - `app/api/`：只负责协议解析、鉴权与参数校验，业务判断一律下沉 `app/services/`。
 - `app/services/`：业务用例编排的唯一入口；路由、MCP 工具、后台任务都调它，不各自实现一遍。
 - `app/search/`：检索细节都在这里（引擎侧原生检索 `native.py` 为默认路径，应用侧双路融合 `hybrid.py` 为可切换实现）。
-- `app/parsing/`：解析后端与切块的边界，主后端 docling、降级后端 pypdf 都要能产出同一套 markdown 方言。
+- `app/parsing/`：解析后端与切块的边界，主后端 docling、降级后端 PyMuPDF 都要能产出同一套 markdown 方言。
 - `app/workers/`：进程内优先级队列与流水线，单 worker 消费，不要把长任务塞进请求线程。
 - `app/mcp/`：与 REST 同进程、共用配置/鉴权/日志，工具直调 service 层，避免两套实现。
 - `tests/`：单元测试严禁连 PostgreSQL / OpenSearch / MinIO（内存 SQLite 与替身）；真机验证只能放 `scripts/`。

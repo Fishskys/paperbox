@@ -7,14 +7,12 @@ on ``pypdf`` only: the MVP deliberately avoids heavyweight layout/OCR stacks.
 
 from __future__ import annotations
 
-import io
 import re
 from dataclasses import dataclass
 from typing import Iterable
 from xml.etree import ElementTree
 
-from pypdf import PdfReader
-from pypdf.errors import PdfReadError
+from app.parsing.mupdf import invoke
 
 from app.core.logging import get_logger
 from app.parsing.text import strip_control_chars
@@ -36,6 +34,7 @@ class PageText:
 
     page: int
     text: str
+    heading_levels: dict[str, int] | None = None
 
     @property
     def is_blank(self) -> bool:
@@ -91,36 +90,8 @@ def extract_pages(data: bytes) -> list[PageText]:
         PdfParseError: when the payload is empty, not a PDF, encrypted with a
             password we do not have, or otherwise unreadable.
     """
-    if not data:
-        raise PdfParseError("empty PDF payload")
-    try:
-        reader = PdfReader(io.BytesIO(data))
-    except PdfReadError as exc:
-        raise PdfParseError(f"invalid PDF: {exc}") from exc
-    except Exception as exc:
-        raise PdfParseError(f"invalid PDF: {exc}") from exc
-
-    if getattr(reader, "is_encrypted", False):
-        try:
-            unlocked = reader.decrypt("")
-        except Exception as exc:  # pragma: no cover - exotic encryption
-            raise PdfParseError(f"encrypted PDF: {exc}") from exc
-        if not unlocked:
-            raise PdfParseError("encrypted PDF: password required")
-
-    try:
-        count = len(reader.pages)
-    except Exception as exc:
-        raise PdfParseError(f"cannot read PDF page tree: {exc}") from exc
-
-    pages: list[PageText] = []
-    for index in range(count):
-        try:
-            page = reader.pages[index]
-        except Exception as exc:  # pragma: no cover - malformed page tree
-            raise PdfParseError(f"cannot read page {index + 1}: {exc}") from exc
-        pages.append(PageText(page=index + 1, text=_page_text(page)))
-    return pages
+    return [PageText(page=item["page"], text=normalize_page_text(item["text"]))
+            for item in invoke("pages", data)]
 
 
 def extract_text(pages: Iterable[PageText]) -> str:
@@ -493,6 +464,35 @@ def _ieee_article_number(
     return None
 
 
+class _RawXmp:
+    """Raw XML packet plus the optional fields used by metadata policy."""
+
+    def __init__(self, packet: str):
+        self.packet = packet.encode("utf-8")
+        self.stream = self
+        self.pdf_keywords = None
+        self.custom_properties = {}
+        simple, _ = _xmp_packet(self)
+        self.dc_creator = simple.get("creator")
+        if b"<!DOCTYPE" in self.packet[:2048].upper():
+            return
+        try:
+            root = ElementTree.fromstring(self.packet)
+        except ElementTree.ParseError:
+            return
+        self.pdf_keywords = root.findtext(".//{http://ns.adobe.com/pdf/1.3/}Keywords")
+        prefix = "{http://ns.adobe.com/pdfx/1.3/}"
+        for element in root.iter():
+            if str(element.tag).startswith(prefix) and element.text:
+                self.custom_properties[str(element.tag)[len(prefix):]] = element.text
+            for key, value in element.attrib.items():
+                if key.startswith(prefix):
+                    self.custom_properties[key[len(prefix):]] = value
+
+    def get_data(self):
+        return self.packet
+
+
 def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
     """Read the Info dictionary and the XMP packet of a PDF (discovery layer 1).
 
@@ -500,31 +500,18 @@ def extract_embedded_metadata(data: bytes) -> EmbeddedMetadata:
     an unreadable PDF returns an empty :class:`EmbeddedMetadata` (the caller still
     has the first-page heuristics as layer 2).
     """
-    if not data:
-        return EmbeddedMetadata(raw={})
     try:
-        reader = PdfReader(io.BytesIO(data))
+        raw = invoke("metadata", data)
     except Exception as exc:  # noqa: BLE001 - metadata is best effort
         logger.debug("cannot read embedded metadata: %s", exc)
         return EmbeddedMetadata(raw={})
-    if getattr(reader, "is_encrypted", False):
-        try:
-            reader.decrypt("")
-        except Exception:  # noqa: BLE001
-            return EmbeddedMetadata(raw={})
+    return embedded_metadata_from_sources(raw["info"], raw["xmp"])
 
-    info: dict[str, object] = {}
-    try:
-        raw_info = reader.metadata or {}
-        info = {str(key): _text(value) for key, value in raw_info.items()}
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("cannot read the PDF info dictionary: %s", exc)
 
-    xmp = None
-    try:
-        xmp = reader.xmp_metadata
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("cannot read the PDF XMP packet: %s", exc)
+def embedded_metadata_from_sources(raw_info: dict, packet: str) -> EmbeddedMetadata:
+    """Apply bibliographic policy independently of a PDF reader implementation."""
+    info = {str(key): _text(value) for key, value in raw_info.items()}
+    xmp = _RawXmp(packet) if packet else None
 
     simple: dict[str, list[str]] = {}
     alt: dict[str, dict[str, str]] = {}
@@ -658,51 +645,11 @@ def extract_sized_lines(data: bytes, page_index: int = 0) -> list[SizedLine]:
     uses this instead of guessing from line lengths. Returns an empty list when
     the page has no usable text layer.
     """
-    if not data:
-        return []
     try:
-        reader = PdfReader(io.BytesIO(data))
-        if page_index >= len(reader.pages):
-            return []
-        page = reader.pages[page_index]
+        content = invoke("lines" if page_index == 0 else "layout", data)
+        lines = content["lines"] if page_index == 0 else content[page_index]["lines"]
+        return [SizedLine(text=normalize_page_text(line["text"]), size=line["size"])
+                for line in lines if line["text"].strip()]
     except Exception as exc:  # noqa: BLE001 - metadata extraction is best effort
         logger.warning("sized line extraction failed: %s", exc)
         return []
-
-    fragments: list[tuple[str, float]] = []
-
-    def visitor(text, cm, tm, font_dict, font_size) -> None:  # noqa: ANN001, ARG001
-        if text:
-            try:
-                size = float(font_size or 0.0)
-            except (TypeError, ValueError):
-                size = 0.0
-            fragments.append((text, size))
-
-    try:
-        page.extract_text(visitor_text=visitor)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("visitor text extraction failed: %s", exc)
-        return []
-
-    lines: list[SizedLine] = []
-    buffer: list[str] = []
-    sizes: list[float] = []
-
-    def flush() -> None:
-        if buffer:
-            text = re.sub(r"\s+", " ", "".join(buffer)).strip()
-            if text:
-                lines.append(SizedLine(text=text, size=max(sizes) if sizes else 0.0))
-        buffer.clear()
-        sizes.clear()
-
-    for text, size in fragments:
-        for index, piece in enumerate(text.split("\n")):
-            if index > 0:
-                flush()
-            if piece.strip():
-                buffer.append(piece)
-                sizes.append(size)
-    flush()
-    return lines

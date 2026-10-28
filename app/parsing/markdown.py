@@ -432,7 +432,7 @@ def prepare_docling_markdown(
 def _render_block(block: PageBlock, out: list[str], headings: list[tuple[int, str]]) -> bool:
     """Append one page block to ``out``; returns True when it was a table."""
     if block.kind == "heading":
-        level = heading_level(block.number, block.title or block.text)
+        level = block.level or heading_level(block.number, block.title or block.text)
         if level is None:
             return False
         out.extend(["", "#" * level + " " + block.text, ""])

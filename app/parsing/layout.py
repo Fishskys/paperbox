@@ -23,12 +23,10 @@ Two design rules keep the repair safe:
 
 from __future__ import annotations
 
-import io
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from pypdf import PdfReader
 
 from app.core.logging import get_logger
 from app.parsing.pdf import PageText
@@ -221,81 +219,19 @@ def _mult(m1: list[float], m2: list[float]) -> list[float]:
 
 
 def extract_page_layouts(data: bytes) -> list[PageLayout]:
-    """``(page, width, fragments)`` for every page of ``data``.
+    """Return native whole-line coordinates without executing MuPDF in this thread."""
+    from app.parsing.mupdf import invoke
 
-    Coordinates come from ``visitor_operand_after`` -- the *live* text matrix at
-    the moment text is shown -- and **not** from ``visitor_text``. Measured on
-    pypdf 6.18: ``visitor_text`` hands over a memoised matrix that lags one
-    text-show operation behind, so on a two-column page the second column comes
-    back as ``(0, 0)``, i.e. exactly the fragments this module exists for.
-    ``visitor_operand_after`` also exposes the ``Tj``/``TJ`` operands, so the text
-    and its position stay together.
-
-    Never raises: a page whose text layer cannot be visited yields no fragments,
-    which means "do not reorder this page".
-    """
-    layouts: list[PageLayout] = []
-    if not data:
-        return layouts
     try:
-        reader = PdfReader(io.BytesIO(data))
-        if getattr(reader, "is_encrypted", False):
-            reader.decrypt("")
-    except Exception as exc:  # noqa: BLE001 - reordering is best effort
-        logger.warning("cannot read PDF coordinates: %s", exc)
-        return layouts
-
-    for index in range(len(reader.pages)):
-        layout = PageLayout(page=index + 1, width=0.0)
-        try:
-            page = reader.pages[index]
-            layout.width = float(page.mediabox.width)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cannot read page %d geometry: %s", index + 1, exc)
-            layouts.append(layout)
-            continue
-
-        font_size = [12.0]
-
-        def emit(text: str, cm_matrix: list[float], tm_matrix: list[float]) -> None:
-            if not text or not text.strip():
-                return
-            matrix = _mult(list(tm_matrix), list(cm_matrix))
-            try:
-                x = float(matrix[4])
-                y = float(matrix[5])
-                scale = abs(float(matrix[0])) or 1.0
-            except (TypeError, ValueError, IndexError):  # pragma: no cover
-                return
-            size = max(1.0, font_size[0] * scale)
-            layout.fragments.extend(_split_fragment(text, x, y, size, index + 1))
-
-        def operand_after(operator, operands, cm_matrix, tm_matrix) -> None:  # noqa: ANN001
-            try:
-                if operator == b"Tf" and len(operands) >= 2:
-                    font_size[0] = abs(float(operands[1])) or 12.0
-                elif operator in (b"Tj", b"'", b'"') and operands:
-                    emit(_operand_text(operands[0]), cm_matrix, tm_matrix)
-                elif operator == b"TJ" and operands:
-                    items = operands[0]
-                    if isinstance(items, (list, tuple)):
-                        emit(_tj_text(items), cm_matrix, tm_matrix)
-            except Exception as exc:  # noqa: BLE001 - one bad operand is not fatal
-                logger.debug("cannot read a text operand on page %d: %s", index + 1, exc)
-
-        try:
-            layout.text = page.extract_text(extraction_mode="layout")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cannot read page %d layout text: %s", index + 1, exc)
-        try:
-            # Two passes on purpose: the layout-mode text and the operand visitor do
-            # not combine -- pypdf's layout mode never calls the visitor, so asking
-            # for both at once yields a page with text and no coordinates.
-            page.extract_text(visitor_operand_after=operand_after)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cannot visit page %d text: %s", index + 1, exc)
-        layouts.append(layout)
-    return layouts
+        records = invoke("layout", data)
+    except Exception:
+        return []
+    return [PageLayout(page=index + 1, width=record["width"],
+                       fragments=[TextFragment(line["text"], round(line["bbox"][0], 1),
+                                               record["height"] - line["bbox"][3], line["size"], index + 1)
+                                  for line in record["lines"]],
+                       text="\n".join(line["text"] for line in record["lines"]))
+            for index, record in enumerate(records)]
 
 
 def _median(values: list[float]) -> float:
@@ -649,45 +585,10 @@ def looks_multi_column(
 
 
 def reorder_pages(pages: list[PageText], data: bytes) -> LayoutReport:
-    """Replace two-column page text with left-column-then-right-column text.
+    """Preserve page content while ordering native whole-line regions."""
+    from app.parsing.native_layout import prepare_pages as prepare_native
 
-    Pages without a trustworthy gutter keep the original text (rule 1); when such
-    a page looks like it interleaves two columns it is listed in
-    ``unverified_pages`` so the caller can record the warning (rule 2).
-    """
-    report = LayoutReport(pages=list(pages))
-    layouts = extract_page_layouts(data)
-    if len(layouts) != len(pages):
-        report.failed = True
-        report.unverified_pages = [page.page for page in pages]
-        report.warnings.append(
-            f"coordinates cover {len(layouts)} of {len(pages)} pages; order not verified"
-        )
-        return report
-
-    for index, page in enumerate(pages):
-        layout = layouts[index]
-        outcome = reorder_fragments(layout.fragments, width=layout.width)
-        report.columns.append(outcome.columns)
-        if outcome.applied:
-            reordered = reorder_page_text(layout.text)
-            if reordered is not None and same_content(reordered, page.text):
-                report.pages[index] = PageText(page=page.page, text=reordered)
-                report.reordered_pages += 1
-                continue
-            report.unverified_pages.append(page.page)
-            report.warnings.append(
-                f"page {page.page}: two columns detected but the page text could not "
-                "be put back in order; content-stream order kept"
-            )
-            continue
-        if looks_multi_column(layout.fragments, width=layout.width):
-            report.unverified_pages.append(page.page)
-            report.warnings.append(
-                f"page {page.page}: two columns detected but not repaired; "
-                "content-stream order kept"
-            )
-    return report
+    return prepare_native(data, pages)[1]
 
 
 # --------------------------------------------------------------------------- #
@@ -803,9 +704,9 @@ def prepare_pages(
     fragment coordinates of *all* lines, so the strip has to come last -- else a
     header that was removed from the text would be re-emitted by the reorder.
     """
-    reordered = reorder_pages(pages, data)
-    stripped = strip_running_lines(reordered.pages)
-    return stripped.pages, reordered, stripped
+    from app.parsing.native_layout import prepare_pages as prepare_native
+
+    return prepare_native(data, pages)
 
 
 __all__ = [

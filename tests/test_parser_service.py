@@ -134,7 +134,7 @@ def test_docling_markdown_is_scrubbed_of_control_characters() -> None:
 def test_default_backend_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "parser_backend", "pypdf")
     bundle = parser_service.parse_pdf(_pdf_bytes(), filename="a.pdf")
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert "chopping" in bundle.markdown
 
 
@@ -160,7 +160,7 @@ def test_explicit_pypdf_never_calls_docling() -> None:
     bundle = parser_service.parse_pdf(
         _pdf_bytes(), filename="a.pdf", backend="pypdf", converter=crash
     )
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert "chopping" in bundle.markdown
 
 
@@ -176,7 +176,7 @@ def test_falls_back_to_pypdf_when_docling_is_unavailable() -> None:
         backend="docling",
         converter=_always_raises(DoclingUnavailable("connection refused")),  # type: ignore[arg-type]
     )
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert "chopping" in bundle.markdown
     assert bundle.degraded_reason is not None
     assert "docling" in bundle.degraded_reason
@@ -190,7 +190,7 @@ def test_docling_failed_also_falls_back() -> None:
         backend="docling",
         converter=_always_raises(DoclingFailed("400 client error")),  # type: ignore[arg-type]
     )
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert "DoclingFailed" in (bundle.degraded_reason or "")
 
 

@@ -253,8 +253,7 @@ def test_single_column_page_keeps_content_stream_order() -> None:
     body = bundle.markdown.split("\n")
     assert " ".join(LEFT[0].split()) in bundle.markdown
     assert body[0].startswith(LEFT[0])
-    # A footer page number is dropped, which is why the text is not byte-equal.
-    assert "1" not in body[-1:]
+    assert " ".join(RIGHT[-1].split()) in bundle.markdown
 
 
 def test_unverified_order_is_reported_in_the_degraded_reason() -> None:

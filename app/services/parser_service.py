@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from app.core.config import PARSER_BACKENDS, settings
 from app.core.logging import get_logger
-import pypdf
+from importlib.metadata import version
 from app.parsing import markdown as markdown_dialect
 from app.parsing.docling_client import (
     FORMULA_FALLBACK_REASON,
@@ -41,7 +41,6 @@ from app.parsing.docling_client import (
     version_from_server,
 )
 from app.parsing.markdown import ParseBundle
-from app.parsing.pdf import extract_pages
 from app.services.object_storage import ObjectNotFound, ObjectStorageError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -64,7 +63,7 @@ DOCLING_BACKEND = "docling"
 #: 3 = control characters are stripped from both backends' markdown
 #:     (``app.parsing.text``): an entry cached before that still holds the NULs
 #:     its PDF encoded, and replaying it would fail the chunk insert again.
-PARSE_CACHE_VERSION = 3
+PARSE_CACHE_VERSION = 4
 PARSE_MARKDOWN_ARTIFACT = "document.md"
 PARSE_JSON_ARTIFACT = "document.json"
 PARSE_META_ARTIFACT = "parse-meta.json"
@@ -205,11 +204,11 @@ def parse_pdf(
                 "parser backend fell back to pypdf",
                 extra={"extra_fields": {"filename": filename, "reason": reason}},
             )
-            bundle = _parse_with_pypdf(data)
+            bundle = _parse_with_pymupdf(data)
             bundle.degraded_reason = _merge_reasons(reason, bundle.degraded_reason)
             _report_degradation(bundle, on_degrade)
             return bundle
-    bundle = _parse_with_pypdf(data)
+    bundle = _parse_with_pymupdf(data)
     _report_degradation(bundle, on_degrade)
     return bundle
 
@@ -257,7 +256,7 @@ def _resolve_backend(backend: str | None) -> str:
         raise ValueError(
             f"unknown parser backend {backend!r}; choose from {sorted(PARSER_BACKENDS)}"
         )
-    return resolved
+    return "pymupdf" if resolved == "pypdf" else resolved
 
 
 def _parse_with_docling(
@@ -308,18 +307,16 @@ def _docling_convert(data: bytes, *, filename: str, page_range: str | None) -> D
     return convert_markdown(data, filename=filename, page_range=page_range)
 
 
-def _parse_with_pypdf(data: bytes) -> ParseBundle:
+def _parse_with_pymupdf(data: bytes) -> ParseBundle:
     started = time.perf_counter()
-    pages = extract_pages(data)
-    bundle = markdown_dialect.render_markdown(
-        pages,
-        pdf_bytes=data,
-        backend="pypdf",
-        # Same shape as docling's string ("docling 2.130.0"): the stamp has to be
-        # able to say *which* pypdf produced these chunks.
-        parser_version=f"pypdf {pypdf.__version__}",
-        timings={"extract_s": round(time.perf_counter() - started, 4)},
-    )
+    from app.parsing.mupdf import invoke
+    from app.parsing.markdown import PageSpan
+
+    raw = invoke("parse", data)
+    raw["spans"] = [PageSpan(**span) for span in raw["spans"]]
+    raw["headings"] = [tuple(heading) for heading in raw["headings"]]
+    raw["parser_version"] = f"pymupdf {version('pymupdf')}"
+    bundle = ParseBundle(**raw)
     bundle.timings["total_s"] = round(time.perf_counter() - started, 4)
     return bundle
 

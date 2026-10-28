@@ -12,7 +12,7 @@ from collections import Counter, OrderedDict
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
-from app.parsing.pdf import EmbeddedMetadata, PageText
+from app.parsing.pdf import EmbeddedMetadata, PageText, SizedLine
 from app.services.paper_service import normalize_arxiv_id, normalize_doi
 
 _ARXIV_IN_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/([A-Za-z0-9.\-/]+)", re.IGNORECASE)
@@ -176,7 +176,6 @@ def detect_title(
     joined. Without font information the first plausible line above the author
     block wins - not the longest one, since licence banners are usually wider.
     """
-    from app.parsing.pdf import SizedLine  # local import to avoid a cycle
 
     if sized_lines:
         usable = [
@@ -263,7 +262,6 @@ def detect_authors(pages: Sequence[PageText], title: str | None = None) -> list[
         stripped = line.strip()
         if not stripped:
             continue
-        folded = stripped.casefold()
         if (
             _ABSTRACT_MARKER.match(stripped)
             or _AUTHOR_BLOCK_END.match(stripped)
@@ -452,17 +450,22 @@ def extract_metadata(
 
     ``pdf_bytes`` (when given) enables font-size based title detection.
     """
-    from app.parsing.pdf import extract_sized_lines
 
     ordered = list(pages)
     sized_lines = None
+    byline = None
     if pdf_bytes:
         try:
-            sized_lines = extract_sized_lines(pdf_bytes, 0)
+            from app.parsing.mupdf import invoke
+            from app.services.pdf_byline import extract_byline
+
+            content = invoke("lines", pdf_bytes)
+            sized_lines = [SizedLine(line["text"], line["size"]) for line in content["lines"]]
+            byline = extract_byline(content) if content["lines"] else []
         except Exception:  # noqa: BLE001 - metadata extraction is best effort
             sized_lines = None
     title = detect_title(ordered, sized_lines=sized_lines)
-    authors = detect_authors(ordered, title=title)
+    authors = detect_authors(ordered, title=title) if byline is None else byline
     result: "OrderedDict[str, object]" = OrderedDict()
     result["title"] = title
     result["abstract"] = detect_abstract(ordered)

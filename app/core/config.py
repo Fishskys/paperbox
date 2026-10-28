@@ -36,7 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Accepted values of ``PARSER_BACKEND``. ``docling`` is the new primary backend,
 #: ``pypdf`` the degradation backend (and the default until the acceptance run).
-PARSER_BACKENDS = frozenset({"pypdf", "docling"})
+PARSER_BACKENDS = frozenset({"pypdf", "pymupdf", "docling"})
 
 #: Accepted values of ``SEARCH_BACKEND`` (plan section 7, M5). ``native`` = one ``hybrid``
 #: request fused by the ``paperbox-rrf60`` search pipeline and collapsed to papers
@@ -302,6 +302,8 @@ class Settings(BaseSettings):
     #: automatically whenever docling is unreachable, with the reason recorded in
     #: the degradation ledger. One key flips the whole pipeline back (plan section 6.1).
     parser_backend: str = Field(default="docling", alias="PARSER_BACKEND")
+    pdf_process_timeout: int = Field(default=120, ge=1, le=3600, alias="PDF_PROCESS_TIMEOUT")
+    pdf_process_concurrency: int = Field(default=2, ge=1, le=8, alias="PDF_PROCESS_CONCURRENCY")
     #: Parses allowed to run at once. Keep at 1: docling is CPU-bound and its
     #: container is deliberately capped, so a second concurrent parse only makes
     #: both slower and walks into the memory ceiling the caps exist for.

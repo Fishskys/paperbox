@@ -23,7 +23,7 @@ PARSE_PREFIX = f"papers/{PAPER_ID}/extracted/parsed"
 MARKDOWN_KEY = f"{PARSE_PREFIX}/docling/document.md"
 JSON_KEY = f"{PARSE_PREFIX}/docling/document.json"
 META_KEY = f"{PARSE_PREFIX}/parse-meta.json"
-PYPdf_MARKDOWN_KEY = f"{PARSE_PREFIX}/pypdf/document.md"
+PYPdf_MARKDOWN_KEY = f"{PARSE_PREFIX}/pymupdf/document.md"
 
 DOCLING_VERSION = "docling-serve 1.35.0 / docling 2.130.0"
 
@@ -165,20 +165,20 @@ def test_a_clean_parse_writes_markdown_json_and_meta() -> None:
     assert meta["timings"]["docling_s"] == pytest.approx(0.0, abs=1.0)
 
 
-def test_pypdf_artifacts_carry_no_docling_json() -> None:
+def test_native_artifacts_carry_no_docling_json() -> None:
     store = FakeStore()
     bundle = parser_service.parse_paper_file(
         PAPER_ID,
         SMOKE_PDF.read_bytes(),
         filename="smoke.pdf",
-        backend="pypdf",
+        backend="pymupdf",
         store=store,
     )
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert bundle.cache_hit is False
     assert set(store.objects) == {PYPdf_MARKDOWN_KEY, META_KEY}
     meta = store.meta()
-    assert meta["backend"] == "pypdf"
+    assert meta["backend"] == "pymupdf"
     assert meta["artifacts"]["json"] is None
     assert meta["page_count"] == bundle.page_count
 
@@ -245,11 +245,11 @@ def test_a_degraded_parse_is_stored_but_never_replayed() -> None:
         store=store,
         version_probe=lambda: DOCLING_VERSION,
     )
-    assert first.backend == "pypdf"
+    assert first.backend == "pymupdf"
     assert first.degraded_reason is not None
     assert first.degraded_reason.startswith("docling unavailable")
     assert store.meta()["degraded_reason"] == first.degraded_reason
-    assert store.meta()["backend"] == "pypdf"
+    assert store.meta()["backend"] == "pymupdf"
 
     second = parser_service.parse_paper_file(
         PAPER_ID,
@@ -287,15 +287,15 @@ def test_the_other_backends_artifacts_are_not_served() -> None:
         PAPER_ID,
         SMOKE_PDF.read_bytes(),
         filename="smoke.pdf",
-        backend="pypdf",
+        backend="pymupdf",
         store=store,
     )
 
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert bundle.cache_hit is False
     assert PYPdf_MARKDOWN_KEY in store.objects
     assert MARKDOWN_KEY in store.objects, "the other backend's artifact is left alone"
-    assert store.meta()["backend"] == "pypdf"
+    assert store.meta()["backend"] == "pymupdf"
 
 
 def test_the_option_fingerprint_is_recorded_in_the_meta() -> None:

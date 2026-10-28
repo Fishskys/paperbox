@@ -406,12 +406,12 @@ def test_docling_failure_reports_through_the_sink(monkeypatch) -> None:
     bundle = parser_service.parse_pdf(
         pdf_bytes(), filename="a.pdf", backend="docling", on_degrade=sink
     )
-    assert bundle.backend == "pypdf"
+    assert bundle.backend == "pymupdf"
     assert bundle.degraded_reason
     # A docling outage costs both: docling itself, and the formulas pypdf can
     # only render as text.
     assert sorted(sink.codes) == ["docling_unavailable", "formulas_as_text"]
-    assert {call[2]["backend"] for call in sink.calls} == {"pypdf"}
+    assert {call[2]["backend"] for call in sink.calls} == {"pymupdf"}
     assert all(call[2]["reason"] == bundle.degraded_reason for call in sink.calls)
 
 

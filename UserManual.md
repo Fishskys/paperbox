@@ -26,7 +26,7 @@
 | [uv](https://docs.astral.sh/uv/) | 必需 | 管理 Python 环境（`uv sync` 按锁文件建 `.venv`），不要用 `pip install` |
 | 系统内存 | ≥ 8 GB（推荐 16 GB） | 四个容器常驻约 6–7 GB（embedding 冷启动后 ~4 GB、OpenSearch ~1.3 GB） |
 | 磁盘 | ≥ 10 GB | 含容器镜像（OpenSearch ~1 GB、embedding 镜像 ~1 GB）与数据目录 |
-| 可选：docling-serve | 非必需 | 第二解析后端，用来更好地处理双栏/表格论文；不部署则自动降级为内置 pypdf 解析 |
+| 可选：docling-serve | 非必需 | 第二解析后端，用来更好地处理双栏/表格论文；不部署则自动降级为内置 pymupdf 解析 |
 
 ### 1.2 部署步骤（默认配置，无需改任何配置项）
 
@@ -159,11 +159,11 @@ uv run python scripts/healthcheck.py
 
 | 变量名 | 作用 | 默认值 | 可选值 / 说明 |
 |---|---|---|---|
-| `PARSER_BACKEND` | 解析后端 | `docling` | `docling` / `pypdf`；docling 不可达时**自动降级**为 pypdf 并写降级账本 |
+| `PARSER_BACKEND` | 解析后端 | `docling` | `docling` / `pymupdf`；docling 不可达时**自动降级**为 pymupdf 并写降级账本 |
 | `PARSER_CONCURRENCY` | 并发解析数 | `1` | `>0`；docling 是 CPU 密集型，保持 1 |
 | `PARSER_CACHE` | 解析产物是否缓存到对象存储 | `true` | `true`/`false`；命中即重放（不重复调用解析服务） |
 | `PARSER_MAX_PAGES` | 只解析前 N 页 | `0`（整篇） | `>0` 时仅作用于 docling，且该次解析**不进缓存**，降级账本记 `pagination_truncated` |
-| `DOCLING_URL` | docling-serve 地址 | 空 | **空 = 关闭 docling 后端**（立即降级 pypdf，不会等待超时） |
+| `DOCLING_URL` | docling-serve 地址 | 空 | **空 = 关闭 docling 后端**（立即降级 pymupdf，不会等待超时） |
 | `DOCLING_TIMEOUT` | 客户端读超时（秒） | `660` | **必须大于** `DOCLING_DOCUMENT_TIMEOUT` |
 | `DOCLING_DOCUMENT_TIMEOUT` | 服务端单文档超时（秒） | `600` | 服务端默认无期限，会让一篇论文长时间占满 CPU |
 | `DOCLING_MAX_RETRIES` | 瞬时失败重试次数 | `1` | 只对 5xx/超时/空 body 重试；4xx 不重试 |
@@ -686,8 +686,8 @@ uv run python scripts/import_metadata.py tests/metadata/ieee_metadata_example.js
 
 | 降级码 | 含义 | 影响 |
 |---|---|---|
-| `docling_unavailable` | 指定的 docling 后端不可达，已用内置 pypdf 解析 | 双栏/表格论文的阅读顺序与结构可能不如 docling |
-| `docling_rejected` | docling 服务端以 4xx 拒绝请求（401/404/413、preset 未开等）——是**配置错误**而非宕机，已用内置 pypdf 解析 | 与 `docling_unavailable` 同，但排障方向不同：检查 `DOCLING_*` 配置与镜像能力，而不是网络 |
+| `docling_unavailable` | 指定的 docling 后端不可达，已用内置 pymupdf 解析 | 双栏/表格论文的阅读顺序与结构可能不如 docling |
+| `docling_rejected` | docling 服务端以 4xx 拒绝请求（401/404/413、preset 未开等）——是**配置错误**而非宕机，已用内置 pymupdf 解析 | 与 `docling_unavailable` 同，但排障方向不同：检查 `DOCLING_*` 配置与镜像能力，而不是网络 |
 | `formulas_as_text` | 公式未转 LaTeX（开关关闭，或服务端在公式上失败后自动去掉公式重试） | 正文里的公式以纯文本形式出现 |
 | `table_structure_lost` | 表格未能保持结构 | 表格内容仍在正文，但行列表格结构丢失 |
 | `reading_order_unverified` | 阅读顺序未经校验（降级解析侧） | 双栏论文可能出现段落顺序错乱 |
@@ -745,7 +745,7 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 
 **Q10 解析一篇论文很慢（几十秒到几分钟）？**
 先看是不是开着公式转 LaTeX（`DOCLING_FORMULA_ENRICHMENT=true` 会数倍增加耗时）；
-再确认 `DOCLING_URL` 是否指向一个真实运行的 docling 服务 —— 指向了不存在的主机会等待超时后才降级，把地址留空则**立即**降级为 pypdf。
+再确认 `DOCLING_URL` 是否指向一个真实运行的 docling 服务 —— 指向了不存在的主机会等待超时后才降级，把地址留空则**立即**降级为 pymupdf。
 
 **Q11 中文检索效果不好？**
 中文最大的瓶颈在检索前的查询改写。开启 `QUERY_REWRITE_ENABLED=true`（需配好 `QUERY_REWRITE_URL` / `MODEL` / `API_KEY`）
@@ -754,14 +754,14 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 
 **Q12 应用启动直接报错退出？**
 看日志首行。最常见是 `QUERY_REWRITE_ENABLED=true` 但 `QUERY_REWRITE_URL` / `MODEL` / `API_KEY` 有缺（这是刻意的
-「不许静默失效」）；其次是 `PARSER_BACKEND` / `SEARCH_BACKEND` 填了非法值（只接受 `docling|pypdf` 与 `native|python`）。
+「不许静默失效」）；其次是 `PARSER_BACKEND` / `SEARCH_BACKEND` 填了非法值（只接受 `docling|pymupdf` 与 `native|python`）。
 
 **Q13 想换精排模型或向量模型？**
 精排：改 `RERANK_MODEL`（写根 `.env`，改完重启应用）；非内置档的 `RERANK_MODEL_FILE` 与限批 `RERANK_MAX_BATCH` 是**容器侧键**（写 `infra/.env`），然后重建容器并重启应用；只改一边会出现「容器跑新模型、响应报旧模型名」。
 向量：换模型必须**新建索引**并切换别名（向量维度/空间不可原地替换），然后重算向量（`reindex`）。
 
 **Q14 机器内存吃紧 / 容器被 OOM-kill？**
-按影响顺序调：`RERANK_MAX_BATCH`（精排激活内存≈候选数 × 文本长度）、`ORT_THREADS`、`MAX_BATCH`、`INFERENCE_QUEUE_DEPTH`；docling 容器另设 `DOCLING_MEM_LIMIT` / `DOCLING_CPUS`（宁可它被杀，应用会降级 pypdf）。
+按影响顺序调：`RERANK_MAX_BATCH`（精排激活内存≈候选数 × 文本长度）、`ORT_THREADS`、`MAX_BATCH`、`INFERENCE_QUEUE_DEPTH`；docling 容器另设 `DOCLING_MEM_LIMIT` / `DOCLING_CPUS`（宁可它被杀，应用会降级 pymupdf）。
 
 **Q15 客户端连 MCP 报 421 / "Invalid Host header"？**
 客户端的 `Host` 不在 `MCP_ALLOWED_HOSTS` 里。把**该客户端实际访问用的 IP/主机名**加进去 ——

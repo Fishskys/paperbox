@@ -202,6 +202,7 @@ class PageBlock:
     lines: list[str] = field(default_factory=list)
     number: str | None = None
     title: str | None = None
+    level: int | None = None
 
 
 def page_blocks(page: PageText, *, min_table_rows: int = 2) -> list[PageBlock]:
@@ -251,7 +252,10 @@ def page_blocks(page: PageText, *, min_table_rows: int = 2) -> list[PageBlock]:
             index = cursor
             continue
 
-        heading = _match_heading(line)
+        level = (page.heading_levels or {}).get(line.strip())
+        heading = _match_heading(line) if page.heading_levels is None or level else None
+        if level and heading is None:
+            heading = (None, line.strip())
         if heading is not None:
             flush()
             number, title = heading
@@ -262,6 +266,7 @@ def page_blocks(page: PageText, *, min_table_rows: int = 2) -> list[PageBlock]:
                     text=f"{number} {title}".strip() if number else title,
                     number=number,
                     title=title,
+                    level=level,
                 )
             )
             index += 1
