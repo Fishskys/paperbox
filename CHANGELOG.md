@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-28
+
 ### Added
 
 - **元数据导入支持 JSONL/NDJSON**：API 文件上传、JSONL 请求体和 CLI 文件导入按行读取论文对象，
