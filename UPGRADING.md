@@ -1,5 +1,9 @@
 # 升级指引（0.5.x → 0.7.1）
 
+## 图片功能（Unreleased）
+
+停应用并备份后执行 `uv sync --locked`、`uv run alembic upgrade head`。迁移 `f2a8c7d9e401` 新增图片批次、图片、资产表和论文 revision，不改已有 PDF/正文。安装 Java 21 后运行 `uv run python scripts/build_pdffigures2.py`；Docker 镜像随附 JRE/JAR。默认只显式提取，不自动回填。降级前先删除图片对象，避免删除账本后留下孤儿对象。配置与 API 见[图片架构](docs/architecture/12-paper-figures.md)。
+
 ## 本地 PDF 后端更新（Unreleased）
 
 执行 `uv sync --locked` 安装 PyMuPDF；Docling 继续作为默认解析后端，本地降级改为 PyMuPDF。

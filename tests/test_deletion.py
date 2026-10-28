@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from app.api import papers as papers_api
 from app.search.opensearch import SearchIndexError
 from app.services import object_storage
+from app.services import figure_service
 
 
 class FakeSession:
@@ -64,6 +65,7 @@ def env(monkeypatch):
     monkeypatch.setattr(papers_api.opensearch, "delete_by_paper_id", fake_delete_chunks)
     monkeypatch.setattr(papers_api.object_storage, "delete_prefix", fake_delete_prefix)
     monkeypatch.setattr(papers_api.papers, "soft_delete_paper", fake_soft_delete)
+    monkeypatch.setattr(figure_service, "invalidate_for_purge", lambda *_: None)
     return state
 
 

@@ -1,5 +1,16 @@
 # paperbox 应用容器（只打包应用本身；PG/OpenSearch/MinIO/Embedding 是外部依赖，见 infra/）
-FROM python:3.12-slim
+FROM docker.io/library/eclipse-temurin:21-jdk-jammy AS figure-builder
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY scripts/build_pdffigures2.py /tmp/build_pdffigures2.py
+RUN python3 /tmp/build_pdffigures2.py --output /opt/pdffigures2/pdffigures2.jar
+
+FROM docker.io/library/eclipse-temurin:21-jre-jammy AS java-runtime
+FROM docker.io/library/python:3.12-slim
+COPY --from=java-runtime /opt/java/openjdk /opt/java/openjdk
+COPY --from=figure-builder /opt/pdffigures2 /opt/pdffigures2
+ENV JAVA_HOME=/opt/java/openjdk \
+    PATH="/opt/java/openjdk/bin:$PATH" \
+    PDFFIGURES2_JAR=/opt/pdffigures2/pdffigures2.jar
 
 # 依赖与虚拟环境统一由 uv 管理（与本机开发环境同一套 pyproject/uv.lock）
 # Pinned (review 2026-10-05, P3): a floating tag made every rebuild a

@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.core.logging import get_logger
-from app.db.models import Paper, PaperChunk, PaperFile
+from app.db.models import Paper, PaperChunk, PaperFile, FigureExtractionRun
 from app.db.session import SessionLocal
 from app.search import opensearch
 from app.services import object_storage
@@ -197,6 +197,7 @@ class ConsistencyReport:
     #: True when the id lists above hit :data:`PARSER_PAPER_ID_LIMIT`.
     parser_backends_paper_ids_truncated: bool = False
     checked_at: str = ""
+    figure_objects_total: int = 0
 
     @property
     def consistent(self) -> bool:
@@ -228,6 +229,7 @@ class ConsistencyReport:
                 "orphan_objects": self.orphan_objects_total,
                 "orphan_documents": self.orphan_documents_total,
                 "cache_objects": self.cache_objects_total,
+                "figure_objects": self.figure_objects_total,
             },
             "parser_backends": {
                 "papers": dict(sorted(self.parser_backends_papers.items())),
@@ -264,6 +266,7 @@ class _PaperRow:
     deleted: bool
     parser_backend: str | None = None
     parser_version: str | None = None
+    figure_prefixes: tuple[str, ...] = ()
 
 
 def _load_papers(
@@ -298,6 +301,15 @@ def _load_papers(
                 parser_version=version,
             )
         files: dict[str, list[str]] = {}
+        from dataclasses import replace
+        prefixes: dict[str, list[str]] = {}
+        for paper_id, run_id in session.execute(select(FigureExtractionRun.paper_id, FigureExtractionRun.id).where(
+            FigureExtractionRun.is_current.is_(True) | FigureExtractionRun.cleanup_pending.is_(True) | FigureExtractionRun.status.in_(("queued", "running"))
+        )):
+            prefixes.setdefault(str(paper_id), []).append(f"papers/{paper_id}/figures/{run_id}/")
+        for paper_id, owned in prefixes.items():
+            if paper_id in papers:
+                papers[paper_id] = replace(papers[paper_id], figure_prefixes=tuple(owned))
         for paper_id, object_key in session.execute(
             select(PaperFile.paper_id, PaperFile.object_key).where(
                 PaperFile.deleted_at.is_(None)
@@ -547,7 +559,8 @@ def _compare_paper(
     # drift: they never get a ``paper_files`` row. Split them out before the
     # comparison and report their count instead of calling them orphans.
     cache_objects = {key for key in all_objects if CACHE_SEGMENT in key}
-    actual = all_objects - cache_objects
+    managed_figures = {key for key in all_objects if key.startswith(row.figure_prefixes)} if row.figure_prefixes and not row.deleted else set()
+    actual = all_objects - cache_objects - managed_figures
 
     # The embedding model must be one per paper across both sides: vectors from
     # different models are not comparable. Rows/documents written before the
@@ -773,6 +786,8 @@ def check_consistency(
         orphan_documents=orphan_documents[:ORPHAN_SAMPLE],
         orphan_documents_total=len(orphan_documents),
         cache_objects_total=cache_objects_total,
+        figure_objects_total=sum(1 for paper_id, keys in objects_per_paper.items() for key in keys
+                                 if paper_id in papers and papers[paper_id].figure_prefixes and key.startswith(papers[paper_id].figure_prefixes)),
         parser_backends_papers=_census(
             row.parser_backend for row in papers.values() if not row.deleted
         ),

@@ -52,6 +52,7 @@ class ConsistencyTotalsOut(BaseModel):
     #: Parse-cache objects (``papers/<id>/extracted/...``): legitimate, counted,
     #: never a problem. Added 2026-09-30 together with the checker fix.
     cache_objects: int = 0
+    figure_objects: int = 0
 
 
 class ParserBackendsOut(BaseModel):

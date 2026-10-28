@@ -122,6 +122,22 @@ class BrokenStorage:
         raise RuntimeError("minio is down")
 
 
+def test_registered_figures_are_counted_but_unknown_generations_remain_orphans(session_factory):
+    from app.db.models import FigureExtractionRun
+    paper_id = add_paper(session_factory, status="PENDING")
+    run_id = new_uuid()
+    with session_factory() as session:
+        session.add(FigureExtractionRun(id=run_id, paper_id=paper_id, options_hash="f" * 64, options={}, bucket="test",
+                                       status="partial", expected_revision=0, is_current=True))
+        session.commit()
+    known = f"papers/{paper_id}/figures/{run_id}/manifest.json"
+    unknown = f"papers/{paper_id}/figures/{new_uuid()}/stray.pdf"
+    report = run(session_factory, FakeStorage([object_key(paper_id), known, unknown]), FakeClient())
+    assert report.figure_objects_total == 1
+    problem = next(row for row in report.problems if row.paper_id == paper_id)
+    assert problem.orphan_objects == [unknown]
+
+
 class FakeIndices:
     def __init__(self, exists: bool = True, mapping: dict | None = None) -> None:
         self._exists = exists

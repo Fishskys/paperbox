@@ -3,6 +3,8 @@
 本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.7.1**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
+论文图片功能需先迁移数据库并准备 Java 21/JAR，部署、配置及预览消费契约见[论文图片](docs/architecture/12-paper-figures.md)。默认显式提取，自动候选标为需要复核；区域 PDF 保留原生质量但不是脱敏文件。图片修改接口需要 write 权限。
+
 - 第 1 章 详细部署教程：应用配置 + 四个容器的配置（全部以表格给出：变量名 / 作用 / 默认值 / 可选值）
 - 第 2 章 API：全部接口的说明、端点与参数
 - 第 3 章 常见问题：各种状态码与错误符号的含义，以及使用过程中会遇到的问题
@@ -604,6 +606,11 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | GET | `/api/jobs/queue` | 队列状态：在跑数、高/低优先级排队数、并发上限 | 无 |
 | GET | `/api/jobs/{job_id}` | 单个作业的阶段、进度与失败归因 | `job_id`（路径，**必填**） |
 | POST | `/api/jobs/{job_id}/retry` | 重试失败作业（返回 202） | `job_id`（路径，**必填**） |
+| GET | `/api/papers/{paper_id}/figures` | 图片列表，含图注、页码、parts、预览与下载 URL | `limit`、`offset`、可选 `generation_id`；批次变化 409 |
+| GET | `/api/papers/{paper_id}/figures/{figure_id}` | 当前批次图片详情 | 论文和图片 UUID |
+| GET | `/api/papers/{paper_id}/figures/{figure_id}/file` | 原生 PDF、PNG、缩略图，支持 ETag | `variant=native/preview/thumbnail`、`part=1`、`disposition=inline/attachment` |
+| POST | `/api/papers/{paper_id}/figures/extract` | 后台提取，202；当前结果可复用则 200 | JSON `force=false`；无 PDF 409，缺工具/队列未启动 503 |
+| DELETE | `/api/papers/{paper_id}/figures`、`/figures/{figure_id}` | 全部或单图删除，write 权限 | 支持 `dry_run=true`；存储不可用时返回 cleanup_pending，可重试 |
 
 作业阶段（`stage`）按顺序为：`RECEIVED` → `QUEUED` → `DOWNLOADING` → `STORED` → `PARSING` → `CHUNKING` → `EMBEDDING` → `INDEXING` → `COMPLETED`，任一步失败变 `FAILED` 并带 `error_code` / `error_message`。
 

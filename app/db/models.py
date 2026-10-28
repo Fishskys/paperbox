@@ -29,6 +29,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -136,6 +137,7 @@ class Paper(TimestampMixin, Base):
     #: the index documents so a mixed library is visible instead of silent.
     parser_backend: Mapped[str | None] = mapped_column(String(16), index=True)
     parser_version: Mapped[str | None] = mapped_column(String(64))
+    figure_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -869,7 +871,69 @@ class ApiKey(TimestampMixin, Base):
         return f"<ApiKey prefix={self.prefix} role={self.role} source={self.source}>"
 
 
+class FigureExtractionRun(TimestampMixin, Base):
+    __tablename__ = "figure_extraction_runs"
+    __table_args__ = (
+        Index("uq_figure_run_current", "paper_id", unique=True, postgresql_where=text("is_current")),
+        Index("uq_figure_run_active", "paper_id", unique=True, postgresql_where=text("status IN ('queued', 'running')")),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    paper_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    job_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("ingestion_jobs.id", ondelete="SET NULL"))
+    source_file_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("paper_files.id", ondelete="SET NULL"))
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+    options_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    options: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    bucket: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    expected_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    cleanup_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    warnings: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaperFigure(TimestampMixin, Base):
+    __tablename__ = "paper_figures"
+    __table_args__ = (UniqueConstraint("run_id", "ordinal", name="uq_paper_figure_ordinal"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("figure_extraction_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    paper_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    label_raw: Mapped[str | None] = mapped_column(String(128))
+    figure_number: Mapped[str | None] = mapped_column(String(64))
+    caption_text: Mapped[str] = mapped_column(Text, nullable=False)
+    parts: Mapped[list] = mapped_column(JSONB, nullable=False)
+    match_status: Mapped[str] = mapped_column(String(32), nullable=False, default="needs_review")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleanup_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+
+
+class PaperFigureAsset(TimestampMixin, Base):
+    __tablename__ = "paper_figure_assets"
+    __table_args__ = (UniqueConstraint("figure_id", "role", "part_index", name="uq_figure_asset_role_part"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    figure_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("paper_figures.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    part_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    dpi: Mapped[float | None] = mapped_column(Float)
+
+
 __all__ = [
+    "FigureExtractionRun",
+    "PaperFigure",
+    "PaperFigureAsset",
     "ApiKey",
     "Base",
     "Author",

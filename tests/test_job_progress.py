@@ -33,6 +33,9 @@ from app.db.models import (
     PaperDegradation,
     PaperFieldProvenance,
     PaperFile,
+    FigureExtractionRun,
+    PaperFigure,
+    PaperFigureAsset,
     PaperIdentifier,
     PaperSource,
     PaperTag,
@@ -85,6 +88,9 @@ def factory():
         VenueEdition.__table__,
         PaperTag.__table__,
         PapersTag.__table__,
+        FigureExtractionRun.__table__,
+        PaperFigure.__table__,
+        PaperFigureAsset.__table__,
     )
     for table in tables:
         columns = [c._copy() for c in table.columns]

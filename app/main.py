@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app import __version__
 from app.api import ingestion as ingestion_api
 from app.api import jobs as jobs_api
+from app.api import figures as figures_api
 from app.api import health as health_api
 from app.api import consistency as consistency_api
 from app.api import metadata as metadata_api
@@ -303,6 +304,7 @@ app.include_router(health_api.router)
 app.include_router(consistency_api.router)
 app.include_router(ingestion_api.router)
 app.include_router(jobs_api.router)
+app.include_router(figures_api.router)
 app.include_router(papers_api.router)
 app.include_router(metadata_api.router)
 app.include_router(search_api.router)

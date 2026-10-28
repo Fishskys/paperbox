@@ -625,6 +625,13 @@ def _run_pipeline(
     job.finished_at = now
     paper.status = paper_service.STATUS_INDEXED
     session.commit()
+    if settings.figure_auto_extract:
+        from app.services.figure_service import request_extraction
+        try:
+            request_extraction(session, paper.id)
+        except Exception:
+            session.rollback()
+            logger.exception("could not schedule optional figure extraction", extra={"extra_fields": {"paper_id": paper.id}})
 
 
 def _upgrade_fingerprint(

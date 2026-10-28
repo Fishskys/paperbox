@@ -51,6 +51,12 @@ logger = get_logger(__name__)
 KIND_INGEST = "ingest"
 KIND_REINDEX = "reindex"
 KIND_RETRY = "retry"
+KIND_FIGURES = "figures"
+
+
+def _run_figures(job_id):
+    from app.workers.figure_tasks import run
+    run(job_id)
 
 #: Priority classes. A single-file upload is a human waiting on the answer; a
 #: multi-file upload is a folder dump that can afford to wait. Lower wins.
@@ -61,6 +67,7 @@ DEFAULT_PRIORITY = PRIORITY_INTERACTIVE
 Runner = Callable[[str], None]
 
 DEFAULT_RUNNERS: dict[str, Runner] = {
+    KIND_FIGURES: _run_figures,
     KIND_INGEST: tasks.run_ingestion_job,
     KIND_REINDEX: tasks.run_reindex_job,
     KIND_RETRY: tasks.run_retry_job,
@@ -82,6 +89,8 @@ class _Item:
 def kind_for_payload(payload: Mapping[str, object] | None) -> str:
     """Pick the runner for a recovered job from its stored payload."""
     source_type = str((payload or {}).get("source_type") or "").lower()
+    if source_type == KIND_FIGURES:
+        return KIND_FIGURES
     return KIND_REINDEX if source_type == SOURCE_TYPE_REINDEX else KIND_INGEST
 
 
@@ -106,6 +115,7 @@ class IngestQueue:
         self._running: dict[str, str] = {}
         #: Monotonic tie-breaker: ``(priority, seq)`` keeps FIFO inside a class.
         self._seq = 0
+        self._deferred = []
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -120,12 +130,15 @@ class IngestQueue:
         """Create the worker coroutines (must run inside the event loop)."""
         if self.started:
             return
+        from app.workers.figure_tasks import start
+        start()
         loop = asyncio.get_running_loop()
         with self._lock:
             self._loop = loop
             self._queue = asyncio.PriorityQueue()
             self._pending.clear()
             self._running.clear()
+            self._deferred.clear()
             self._seq = 0
             self._workers = [
                 loop.create_task(self._worker(index), name=f"paperbox-ingest-{index}")
@@ -141,6 +154,8 @@ class IngestQueue:
         to completion (threads are not cancellable); its job row stays in an
         in-flight stage and :meth:`recover` marks it ``INTERRUPTED`` next start.
         """
+        from app.workers.figure_tasks import cancel_all
+        cancel_all()
         with self._lock:
             workers, self._workers = self._workers, []
             self._loop = None
@@ -167,6 +182,8 @@ class IngestQueue:
         job_id: str,
         kind: str = KIND_INGEST,
         priority: int = DEFAULT_PRIORITY,
+        *,
+        allow_inline: bool = True,
     ) -> bool:
         """Hand one job to the workers.
 
@@ -193,6 +210,8 @@ class IngestQueue:
                 seq = self._seq
                 self._pending[job_id] = (kind, int(priority))
         if not live:
+            if not allow_inline:
+                return False
             logger.warning(
                 "ingest queue is not running; executing job %s inline", job_id
             )
@@ -242,6 +261,8 @@ class IngestQueue:
         session = SessionLocal()
         try:
             requeue, interrupted = ingest.recover_jobs(session)
+            from app.services.figure_service import recover
+            recover(session)
         finally:
             session.close()
         for job_id, payload in requeue:
@@ -304,8 +325,13 @@ class IngestQueue:
         if queue is None:  # pragma: no cover - start() always creates it
             return
         while True:
-            _, _, item = await queue.get()
+            entry = await queue.get()
+            _, _, item = entry
             with self._lock:
+                if item.kind == KIND_FIGURES and list(self._running.values()).count(KIND_FIGURES) >= settings.figure_extract_concurrency:
+                    self._deferred.append(entry)
+                    queue.task_done()
+                    continue
                 self._pending.pop(item.job_id, None)
                 self._running[item.job_id] = item.kind
             try:
@@ -330,6 +356,9 @@ class IngestQueue:
             finally:
                 with self._lock:
                     self._running.pop(item.job_id, None)
+                    deferred, self._deferred = self._deferred, []
+                    for waiting in deferred:
+                        queue.put_nowait(waiting)
                 queue.task_done()
 
     def _hand_off(self, entry: tuple[int, int, _Item]) -> None:

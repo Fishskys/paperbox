@@ -10,8 +10,8 @@
 
 做：
 
-- PostgreSQL 是元数据的事实源（`app/db/session.py`），承载 14 张表（`app/db/models.py`），软删除只改 `deleted_at`；
-- MinIO 存原文 PDF 与上传暂存对象，键布局由 `app/services/object_storage.py` 统一构造，API 只经 `GET /api/papers/{id}/file` 转发（`app/services/object_storage.py`）；
+- PostgreSQL 是元数据和图片账本的事实源，模型定义见 `app/db/models.py`，连接由 `app/db/session.py` 管理；
+- MinIO 存原文 PDF、上传暂存、正文缓存与图片，文件通过论文和图片 API 代理返回，客户端不直连 MinIO；
 - OpenSearch 存 chunk 级文档（含 1024 维向量），全部读写走别名 `paper_chunks_current`（`app/search/opensearch.py`）；
 - **三端一致性对账（只读）**：`GET /api/consistency` + `scripts/check_consistency.py` 逐篇核对「`paper_files.object_key` ↔ MinIO 对象」与「chunk 行 ↔ 索引文档」，报出缺失/孤儿/删除残留；**解析产物（`papers/<id>/extracted/...`，即 `PARSER_CACHE`）单独计成 `cache_objects`/`cache_objects_total`，永不算 problem**（它从不登记 `paper_files`）；不写任何一端，某个 store 连不上只记进 `errors` 并继续回答另外两端（`app/services/consistency_service.py`）。加 `?parser_papers=true`（或 `check_consistency.py --parser-papers`）时另外按解析戳给出**存活论文 id 清单**（`_census_ids`，上限 `PARSER_PAPER_ID_LIMIT`）——那是 `scripts/reindex.py --parser-backend <name>` 的工作清单，默认报告仍是摘要。
 - 清理职责：`DELETE /api/papers/{id}` 先删索引文档与对象再置 `deleted_at`（`app/api/papers.py` → `paper_service.purge_paper`）；`app/workers/housekeeping.py` 回收 `uploads/` 残留与解包目录；`scripts/purge_deleted.py` 补历史遗留。
@@ -20,7 +20,7 @@
 
 - 不做跨存储事务：PG、OpenSearch、MinIO 三步顺序执行、各自幂等，任一步失败就返回 503 让调用方整体重试（`app/api/papers.py` 的 `rollback_paper_metadata()`）；
 - 不用 DB 触发器维护时间戳：`updated_at` 靠 SQLAlchemy `onupdate`，裸 SQL 更新不会刷新（`app/db/models.py`）；
-- 不存 extracted/figures 产物：`build_extracted_key`/`build_figure_key` 已定义但本仓库无调用方（grep 全仓无引用）；
+- 派生正文保存在 extracted 缓存，图片按批次保存在 figures 并由独立账本管理，发布与删除规则见[论文图片](12-paper-figures.md)；
 - 不让客户端直连 MinIO（无 presign 对外，`presigned_get_url` 注释为内部调试）。
 
 ## 2. 关键文件与函数（文件 → 函数/类 → 作用）
@@ -48,7 +48,7 @@
 
 ## 3. 数据结构（表/字段/索引）
 
-`models.py` 文档字符串写的是"9 + 4 = 13 张"（`app/db/models.py`），实际定义 **14** 张：第 14 张是 `search_queries`（`app/db/models.py`）。下表按 14 张全列。
+表结构以 `app/db/models.py` 和 Alembic head 为准；图片新增的三张表、论文 revision 与对象键布局见[论文图片](12-paper-figures.md#数据与发布)。下表介绍核心论文与元数据表。
 
 | 表 | 列（类型 / 可空 / 默认） | 索引与约束 |
 |---|---|---|
@@ -181,7 +181,7 @@ venues ──CASCADE──> venue_editions
 ## 8. 未做 / 已知缺口
 
 - 文档与代码冲突（以代码为准）：`models.py` 说 "9 + 4 = 13 张"表，实际 14 张；`mappings.py` 提到索引名，运行时一律由 `OPENSEARCH_INDEX` 决定（`.env.example` 与工作树 `.env` 均为 `paper_chunks_v3`）。
-- `build_extracted_key` / `build_figure_key` / `papers/<id>/supplementary/` 只是预留布局，无任何调用方（`object_storage.py`）。
+- extracted 保存正文解析缓存；figures 按批次保存原生区域 PDF 和预览，见[论文图片](12-paper-figures.md)。supplementary 的具体对象由文件账本管理。
 - **备份只覆盖 OpenSearch**：快照仓库（`paperbox_backup`）不包含 PostgreSQL 与 MinIO 原件 —— PG 在 WSL 的 ext4（`paperbox-data/` 备份不覆盖），MinIO 的对象要靠 `mc mirror` 或冻结的 PDF 副本。
 - `papers.deleted_at` 之外没有清理机制：`paper_chunks` 行软删后长期保留，仅 `scripts/purge_deleted.py` 处理 OpenSearch/MinIO 遗留，需要人工触发。
 - `search_queries` 无分区、无 TTL、无清理脚本（仅 `app/services/search_log_service.py` 写入）——是否另有保留策略未确认。

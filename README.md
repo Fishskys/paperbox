@@ -116,6 +116,7 @@ MCP 端点与 REST **同进程、共用配置/鉴权/日志**：检索与读正�
 |---|---|---|
 | 采集与上传 | 五种入口接收 PDF、算指纹判重、落 staging | FastAPI 路由 + 进程内优先级队列（`app/workers/queue.py`），单 worker 跑流水线 |
 | 解析 | PDF → 结构化 markdown（页码 / 章节 / 表格） | 远端 **docling-serve**（主）与内置 **pymupdf**（降级）双后端，产物缓存到 MinIO 可重放 |
+| 图片 | figure 图号、图注、预览与原生区域 PDF | **PDFFigures2 + PyMuPDF**，后台显式提取，自动结果需要复核；[部署与接口](docs/architecture/12-paper-figures.md) |
 | 切块 | 切成约 400 token 的块，带页码与章节标题 | 定长与「语义低谷」两种策略（`app/parsing/chunking.py`） |
 | 向量化 | 文本 → 1024 维向量 | 独立推理容器（fastembed / `intfloat/multilingual-e5-large`），单队列限批 |
 | 精排 | 查询-候选交叉编码重排 | 同一容器内的交叉编码器（可换任意 ONNX 模型，现用 int8 多语言档） |
@@ -167,6 +168,10 @@ paperbox/
 | 论文 | DELETE | `/api/papers/{paper_id}` | 删除论文（软删） |
 | 论文 | GET | `/api/papers/{paper_id}/chunks` | 该论文的切块 |
 | 论文 | GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件 |
+| 图片 | GET | `/api/papers/{paper_id}/figures`、`/figures/{figure_id}` | 图片列表、图注、页码与预览地址 |
+| 图片 | GET | `/api/papers/{paper_id}/figures/{figure_id}/file` | 原生区域 PDF、PNG 或缩略图 |
+| 图片 | POST | `/api/papers/{paper_id}/figures/extract` | 后台提取，force 重提取 |
+| 图片 | DELETE | `/api/papers/{paper_id}/figures`、`/figures/{figure_id}` | 整批或单图删除 |
 | 论文 | GET | `/api/papers/{paper_id}/degradations` | 该论文的解析降级记录 |
 | 论文 | POST | `/api/papers/reindex` | **批量/整库重建**（自动检测换模型、换解析器、未决降级、缺 chunk；默认只报告） |
 | 论文 | POST | `/api/papers/{paper_id}/reindex` | 重建该论文的切块与向量 |

@@ -304,6 +304,17 @@ class Settings(BaseSettings):
     parser_backend: str = Field(default="docling", alias="PARSER_BACKEND")
     pdf_process_timeout: int = Field(default=120, ge=1, le=3600, alias="PDF_PROCESS_TIMEOUT")
     pdf_process_concurrency: int = Field(default=2, ge=1, le=8, alias="PDF_PROCESS_CONCURRENCY")
+    pdffigures2_jar: str = Field(default="data/tools/pdffigures2/pdffigures2.jar", alias="PDFFIGURES2_JAR")
+    pdffigures2_java: str = Field(default="java", alias="PDFFIGURES2_JAVA")
+    figure_auto_extract: bool = Field(default=False, alias="FIGURE_AUTO_EXTRACT")
+    figure_extract_concurrency: int = Field(default=1, ge=1, le=4, alias="FIGURE_EXTRACT_CONCURRENCY")
+    figure_extract_timeout: int = Field(default=600, ge=1, le=3600, alias="FIGURE_EXTRACT_TIMEOUT")
+    figure_render_dpi: int = Field(default=300, ge=72, le=600, alias="FIGURE_RENDER_DPI")
+    figure_render_max_dpi: int = Field(default=600, ge=72, le=1200, alias="FIGURE_RENDER_MAX_DPI")
+    figure_max_pixels: int = Field(default=40_000_000, ge=1, alias="FIGURE_MAX_PIXELS")
+    figure_thumbnail_max_edge: int = Field(default=480, ge=32, le=2048, alias="FIGURE_THUMBNAIL_MAX_EDGE")
+    figure_max_per_paper: int = Field(default=200, ge=1, le=1000, alias="FIGURE_MAX_PER_PAPER")
+    figure_max_temp_bytes: int = Field(default=1_073_741_824, ge=1024, alias="FIGURE_MAX_TEMP_BYTES")
     #: Parses allowed to run at once. Keep at 1: docling is CPU-bound and its
     #: container is deliberately capped, so a second concurrent parse only makes
     #: both slower and walks into the memory ceiling the caps exist for.

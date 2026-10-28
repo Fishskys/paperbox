@@ -372,6 +372,8 @@ def purge_paper(session: Session, paper: Paper) -> PurgeOutcome:
     from app.services import object_storage
 
     removed_chunks = opensearch.delete_by_paper_id(paper.id)
+    from app.services.figure_service import invalidate_for_purge
+    invalidate_for_purge(session, paper)
     removed_objects = object_storage.delete_prefix(paper.id)
     soft_delete_paper(session, paper)
     session.commit()

@@ -61,10 +61,18 @@ def retry_job(
     response is the reset job (``QUEUED``); poll ``GET /api/jobs/{id}`` as with
     any ingestion.
     """
-    if ingestion_service.get_job(session, job_id) is None:
+    existing = ingestion_service.get_job(session, job_id)
+    if existing is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="job not found"
         )
+    if existing.kind == "figures":
+        from app.services.figure_service import request_extraction, FigureError
+        try:
+            request_extraction(session, existing.paper_id, force=True, retry_job=existing)
+        except FigureError as exc:
+            raise HTTPException(exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+        return JobOut.model_validate(ingestion_service.serialize_job(existing))
     prepared = ingestion_service.prepare_retry(session, job_id)
     if prepared is None:
         raise HTTPException(
