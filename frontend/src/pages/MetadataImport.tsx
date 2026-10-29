@@ -11,7 +11,8 @@ import {
 } from "antd";
 import { Check, FileJson, ScanLine, UploadCloud, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import MetadataReview from "../MetadataReview";
 import { ApiError, errorMessage, request } from "../api";
 import { Blank, Failure, PageHeader } from "../components";
 import type { MetadataImportReport, MetadataSource } from "../contracts";
@@ -36,7 +37,7 @@ const fieldLabels: Record<string, string> = {
   source_type: "来源类型",
 };
 
-export default function MetadataImport() {
+function MetadataUpload({ onReview }: { onReview: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [report, setReport] = useState<MetadataImportReport | null>(null);
   const [error, setError] = useState("");
@@ -92,11 +93,6 @@ export default function MetadataImport() {
   }
   return (
     <>
-      <PageHeader
-        title="元数据导入"
-        description="外部元数据与来源记录"
-        actions={<Link to="/library">论文库</Link>}
-      />
       <div className="metadata-upload">
         <Upload.Dragger
           accept=".json,.jsonl,.ndjson"
@@ -329,10 +325,13 @@ export default function MetadataImport() {
             ]}
           />
           {!report.dry_run && (
-            <Link className="inline" to="/library">
-              <Check size={16} />
-              查看论文库
-            </Link>
+            <div className="metadata-actions">
+              <Link className="inline" to="/library">
+                <Check size={16} />
+                查看论文库
+              </Link>
+              <Button onClick={onReview}>复核元数据</Button>
+            </div>
           )}
         </>
       )}
@@ -359,6 +358,42 @@ export default function MetadataImport() {
           }))}
         />
       </Drawer>
+    </>
+  );
+}
+
+export default function MetadataImport() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "review" ? "review" : "import";
+  function switchTab(value: string) {
+    const next = new URLSearchParams(params);
+    if (value === "review") next.set("tab", "review");
+    else next.delete("tab");
+    setParams(next);
+  }
+  return (
+    <>
+      <PageHeader
+        title="元数据导入"
+        description="外部元数据与来源记录"
+        actions={<Link to="/library">论文库</Link>}
+      />
+      <Tabs
+        activeKey={tab}
+        onChange={switchTab}
+        items={[
+          {
+            key: "import",
+            label: "导入与报告",
+            children: <MetadataUpload onReview={() => switchTab("review")} />,
+          },
+          {
+            key: "review",
+            label: "元数据复核",
+            children: <MetadataReview active={tab === "review"} />,
+          },
+        ]}
+      />
     </>
   );
 }

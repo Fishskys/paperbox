@@ -93,6 +93,21 @@ try {
       `Paper count changed during preview: ${before} -> ${after}`,
     );
   if (errors.length) throw new Error(errors.join("\n"));
+  const pendingReview = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/metadata/review",
+  );
+  await page.getByRole("tab", { name: "元数据复核", exact: true }).click();
+  const reviewResponse = await pendingReview;
+  const review = await reviewResponse.json();
+  if (
+    !reviewResponse.ok() ||
+    !Array.isArray(review.items) ||
+    !Array.isArray(review.conflicts)
+  )
+    throw new Error(`Review unavailable: HTTP ${reviewResponse.status()}`);
+  await page
+    .getByRole("heading", { name: "待复核来源", exact: true })
+    .waitFor();
   await mkdir(resolve(root, "logs/codex"), { recursive: true });
   await page.screenshot({
     path: resolve(root, "logs/codex/webui-metadata-live.png"),
@@ -105,6 +120,11 @@ try {
       papers_before: before,
       papers_after: after,
       reports,
+      review: {
+        status: reviewResponse.status(),
+        sources: review.items.length,
+        conflicts: review.conflicts.length,
+      },
     }),
   );
 } finally {

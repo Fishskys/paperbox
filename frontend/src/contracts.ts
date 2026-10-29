@@ -136,6 +136,25 @@ export type MetadataImportReport = {
   dry_run: boolean;
   format: string;
 };
+export type ReviewSource = {
+  source_id: string;
+  source_type: string;
+  source_ref: string;
+  match_status: string;
+  match_method?: string | null;
+};
+export type MetadataConflict = {
+  paper_id: string;
+  field: string;
+  kept: unknown;
+  rejected: unknown;
+  provenance_id?: string | null;
+};
+export type MetadataReviewReport = {
+  total: number;
+  items: ReviewSource[];
+  conflicts: MetadataConflict[];
+};
 export type Consistency = {
   consistent: boolean;
   checked_at: string;

@@ -589,6 +589,10 @@ h1 {
 .metadata-detail {
   font-size: 12px;
 }
+.metadata-paper-picker {
+  width: 100%;
+  margin: 16px 0;
+}
 .metadata-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
