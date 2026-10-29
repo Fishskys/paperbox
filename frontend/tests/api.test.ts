@@ -6,14 +6,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("API boundary", () => {
+  it("recognizes an HTML gateway failure without pretending the API is online", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("<h1>Bad Gateway</h1>", { status: 502 }),
+        ),
+    );
+    await expect(request("/api/papers")).rejects.toThrow(
+      "后端不可达或网关异常",
+    );
+  });
   it("keeps credentials in request headers and preserves status errors", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ detail: "insufficient role" }), {
-          status: 403,
-        }),
-      );
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "insufficient role" }), {
+        status: 403,
+      }),
+    );
     vi.stubGlobal("fetch", fetcher);
     setCredential("test-only");
     await expect(request("/api/papers")).rejects.toMatchObject({ status: 403 });
@@ -28,14 +39,12 @@ describe("API boundary", () => {
   it("retains retry-after from backpressure responses", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response('{"detail":"busy"}', {
-            status: 429,
-            headers: { "Retry-After": "5" },
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        new Response('{"detail":"busy"}', {
+          status: 429,
+          headers: { "Retry-After": "5" },
+        }),
+      ),
     );
     await expect(request("/api/papers")).rejects.toEqual(
       new ApiError(429, "busy", "5"),

@@ -7,6 +7,23 @@ const health = {
   dependencies: {},
 };
 
+test("a running gateway with an absent API is shown as disconnected", async ({
+  page,
+}) => {
+  await page.route("**/health", (route) =>
+    route.fulfill({
+      status: 502,
+      contentType: "text/html",
+      body: "<h1>Bad Gateway</h1>",
+    }),
+  );
+  await page.goto("/system/status");
+  await expect(
+    page.getByText("后端不可达或网关异常，请检查 API 服务"),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "API 不可达" })).toBeVisible();
+});
+
 test("status is on demand and navigation fits a mobile viewport", async ({
   page,
 }) => {

@@ -72,6 +72,24 @@ export function detailMessage(payload: unknown): string {
   return "服务未能完成请求";
 }
 
+export function checkResponse(
+  status: number,
+  payload: unknown,
+  retryAfter: string | null = null,
+) {
+  const gatewayFailure = status >= 500 && payload === null;
+  markConnection(gatewayFailure ? "offline" : "online");
+  if (status < 200 || status >= 300) {
+    throw new ApiError(
+      status,
+      gatewayFailure
+        ? "后端不可达或网关异常，请检查 API 服务"
+        : detailMessage(payload),
+      retryAfter,
+    );
+  }
+}
+
 export async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -88,14 +106,12 @@ export async function request<T>(
         ...options.headers,
       },
     });
-    markConnection("online");
     const payload: unknown = await response.json().catch(() => null);
-    if (!response.ok)
-      throw new ApiError(
-        response.status,
-        detailMessage(payload),
-        response.headers.get("Retry-After"),
-      );
+    checkResponse(
+      response.status,
+      payload,
+      response.headers.get("Retry-After"),
+    );
     return payload as T;
   } catch (error) {
     if (error instanceof ApiError || options.signal?.aborted) throw error;

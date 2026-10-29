@@ -1,7 +1,7 @@
 import {
   ApiError,
   authHeaders,
-  detailMessage,
+  checkResponse,
   errorMessage,
   markConnection,
 } from "./api";
@@ -56,17 +56,16 @@ export const sendFile: Sender = (file, progress) =>
         progress(Math.round((event.loaded / event.total) * 100));
     };
     xhr.onload = () => {
-      markConnection("online");
-      if (xhr.status >= 200 && xhr.status < 300)
-        resolve(xhr.response as BatchAccepted);
-      else
-        reject(
-          new ApiError(
-            xhr.status,
-            detailMessage(xhr.response),
-            xhr.getResponseHeader("Retry-After"),
-          ),
+      try {
+        checkResponse(
+          xhr.status,
+          xhr.response,
+          xhr.getResponseHeader("Retry-After"),
         );
+        resolve(xhr.response as BatchAccepted);
+      } catch (error) {
+        reject(error);
+      }
     };
     xhr.onerror = xhr.ontimeout = () => {
       markConnection("offline");
