@@ -12,6 +12,18 @@
 name: paperbox-app
 
 services:
+  webui:
+    profiles: [webui]
+    build: ./frontend
+    image: paperbox/webui:0.1.0
+    restart: unless-stopped
+    ports:
+      - "${WEBUI_PORT:-8089}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PAPERBOX_API_UPSTREAM: ${WEBUI_API_UPSTREAM:-http://api:8077}
+    # No depends_on: the static UI must start without starting the API.
   api:
     build: .
     image: paperbox/api:0.7.1

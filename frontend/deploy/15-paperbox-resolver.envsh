@@ -1,0 +1,18 @@
+#!/bin/sh
+# Resolve the API at request time so the UI can start while the API is absent.
+export PAPERBOX_DNS_RESOLVER="${PAPERBOX_DNS_RESOLVER:-$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf)}"
+
+# Container host gateways may exist only in /etc/hosts, outside the DNS service.
+for gateway_host in host.docker.internal host.containers.internal; do
+    case "$PAPERBOX_API_UPSTREAM" in
+        "http://$gateway_host:"*|"https://$gateway_host:"*)
+            gateway_ip=$(awk -v host="$gateway_host" '{ for (i=2; i<=NF; i++) if ($i == host) { print $1; exit } }' /etc/hosts)
+            if [ -n "$gateway_ip" ]; then
+                api_scheme=${PAPERBOX_API_UPSTREAM%%://*}
+                api_address=${PAPERBOX_API_UPSTREAM#*://}
+                api_port=${api_address#*:}
+                export PAPERBOX_API_UPSTREAM="$api_scheme://$gateway_ip:$api_port"
+            fi
+            ;;
+    esac
+done

@@ -56,3 +56,26 @@ Node.js 要求 `20.19+`（20 系列）、`22.13+`（22 系列）或 `24+`，依�
 `PAPERBOX_API_TARGET` 可由进程环境或前端 `.env.local` 配置；API 启停方式保持独立。
 `vite preview` 只用于本地检查构建产物，不用于正式部署。
 浏览器测试使用拦截响应，不写真实论文库；单元测试验证请求与错误契约。
+
+## 独立部署
+
+根 compose 中 `webui` 属于可选 profile，没有 `depends_on`，不会自动启动或停止 API：
+
+```bash
+docker compose --profile webui up -d --build webui
+docker compose --profile webui stop webui
+```
+
+默认访问 `http://localhost:8089`。根 `.env` 的 `WEBUI_PORT` 控制端口，
+`WEBUI_API_UPSTREAM` 默认 `http://api:8077`，适合 API 与 WebUI 同在该 compose 网络。
+API 运行在宿主机时改成 `http://host.docker.internal:8077`。
+前端镜像采用 Node 构建、Nginx 运行，运行阶段不需要 Python、Node 或论文存储依赖。
+API 镜像构建上下文排除 `frontend/`，不会携带前端依赖或构建产物。
+Nginx 提供 SPA 深层路径回退、静态资源缓存和 API 反向代理，保留客户端 Authorization。
+API 域名在请求时解析，因此 API 尚未启动时页面仍可打开，对应业务请求返回网关错误。
+默认 DNS 读取容器 `/etc/resolv.conf`；特殊网络可用容器环境变量 `PAPERBOX_DNS_RESOLVER` 覆盖。
+反向代理的单请求上传上限为 200 MB，实际接收仍受 paperbox 自身的文件大小与队列限制。
+
+在仓库根执行 `node scripts/check_webui.mjs` 可对已运行服务执行只读浏览器验收，
+默认地址 `http://127.0.0.1:5173`，可通过 `WEBUI_URL` 覆盖；用于匿名可读的部署，需要库中已有可读 PDF。
+截图写入 `logs/codex/`，覆盖桌面、小屏和真实 PDF 画布；该脚本不创建或修改后端数据。
