@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 
 let credential = '';
 let revision = 0;
@@ -10,6 +10,10 @@ export function useConnection() { return useSyncExternalStore(subscribe, () => c
 export function useCredentialRevision() { return useSyncExternalStore(subscribe, () => revision); }
 export function setCredential(value: string) { credential = value.trim(); revision++; notify(); }
 export function authHeaders(): Record<string, string> { return credential ? { Authorization: `Bearer ${credential}` } : {}; }
+export function useAuthHeaders() {
+  const key = useSyncExternalStore(subscribe, () => credential);
+  return useMemo(() => { const headers: Record<string, string> = {}; if (key) headers.Authorization = `Bearer ${key}`; return headers; }, [key]);
+}
 export function markConnection(value: typeof connection) { connection = value; notify(); }
 
 export class ApiError extends Error {
