@@ -48,6 +48,7 @@ npm test
 npm run build
 npx playwright install chromium
 npm run test:e2e
+npx playwright test --config playwright.production.config.ts
 ```
 
 Node.js 要求 `20.19+`（20 系列）、`22.13+`（22 系列）或 `24+`，依赖固定于 `package-lock.json`。

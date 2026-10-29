@@ -12,14 +12,5 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: { port: 5173, strictPort: true, proxy },
     preview: { port: 4173, strictPort: true, proxy },
-    build: {
-      rolldownOptions: {
-        output: {
-          codeSplitting: {
-            groups: [{ name: "vendor", test: /node_modules/, maxSize: 350000 }],
-          },
-        },
-      },
-    },
   };
 });
