@@ -22,8 +22,8 @@ for (const role of ["read", "write", "admin"] as const) {
       role === "read"
         ? ["检索", "阅读"]
         : role === "write"
-          ? ["检索", "阅读", "导入"]
-          : ["检索", "阅读", "导入", "系统管理"],
+          ? ["检索", "阅读", "导入", "论文管理"]
+          : ["检索", "阅读", "导入", "论文管理", "系统管理"],
     );
     if (role !== "admin") {
       await expect(
@@ -69,13 +69,11 @@ test("credential downgrade exits protected pages and clearing it restores the pr
   await expect(
     page.getByRole("heading", { name: "元数据导入", exact: true }),
   ).toBeVisible();
-  await page
-    .locator("input[type=file]")
-    .setInputFiles({
-      name: "private.json",
-      mimeType: "application/json",
-      buffer: Buffer.from("[]"),
-    });
+  await page.locator("input[type=file]").setInputFiles({
+    name: "private.json",
+    mimeType: "application/json",
+    buffer: Buffer.from("[]"),
+  });
   await page.getByRole("button", { name: "连接与外观设置" }).click();
   await page.getByLabel("API key", { exact: true }).fill("test-read-key");
   await page.getByRole("button", { name: /^应\s*用$/ }).click();
@@ -93,6 +91,7 @@ test("credential downgrade exits protected pages and clearing it restores the pr
     "检索",
     "阅读",
     "导入",
+    "论文管理",
     "系统管理",
   ]);
   await page.getByRole("link", { name: "元数据导入", exact: true }).click();

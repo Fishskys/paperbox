@@ -1,4 +1,14 @@
 import { authHeaders, checkResponse } from "./api";
+import type { Paper } from "./contracts";
+
+export function hasOriginal(paper: Paper) {
+  if (!paper.files) return paper.status !== "AWAITING_FILE";
+  return paper.files.some(
+    (file) =>
+      file.mime_type === "application/pdf" ||
+      /\.pdf$/i.test(file.storage_key || ""),
+  );
+}
 
 export async function downloadPaper(id: string, signal?: AbortSignal) {
   const response = await fetch(`/api/papers/${encodeURIComponent(id)}/file`, {

@@ -1,0 +1,123 @@
+import { createRequire } from "node:module";
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+
+const require = createRequire(
+  new URL("../frontend/package.json", import.meta.url),
+);
+const { chromium, expect } = require("@playwright/test");
+const keys = JSON.parse(process.env.PAPERBOX_UI_TEST_KEYS || "{}");
+if (!["read", "write", "admin"].every((role) => keys[role]))
+  throw new Error(
+    "Run through scripts/check_webui_permissions.py to create temporary test keys",
+  );
+const origin = process.env.WEBUI_URL || "http://127.0.0.1:5173";
+const output = resolve(import.meta.dirname, "../logs/codex");
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch();
+try {
+  const page = await browser.newPage();
+  const reports = [];
+  await page.goto(`${origin}/library`);
+  async function applyRole(role) {
+    await page.getByRole("button", { name: "连接与外观设置" }).click();
+    await page.getByLabel("API key", { exact: true }).fill(keys[role]);
+    const pending = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/auth/context",
+    );
+    await page.getByRole("button", { name: /^应\s*用$/ }).click();
+    const response = await pending;
+    if (!response.ok() || (await response.json()).role !== role)
+      throw new Error(`Effective ${role} identity did not resolve`);
+    return response;
+  }
+  for (const role of ["admin", "read", "write"]) {
+    const response = await applyRole(role);
+    const groups =
+      role === "read"
+        ? ["检索", "阅读"]
+        : role === "write"
+          ? ["检索", "阅读", "导入", "论文管理"]
+          : ["检索", "阅读", "导入", "论文管理", "系统管理"];
+    await expect(page.locator(".sidebar .nav-group-title")).toHaveText(groups);
+    await page.getByRole("link", { name: "论文库", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "论文库", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "导入论文", exact: true }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^管理论文 / })).toHaveCount(
+      0,
+    );
+    if (role !== "admin") {
+      await page.goto(`${origin}/system/status`);
+      await expect(page).toHaveURL(/\/search$/);
+    }
+    if (role === "read") {
+      for (const path of ["/manage/library", "/imports/metadata"]) {
+        await page.goto(`${origin}${path}`);
+        await expect(page).toHaveURL(/\/search$/);
+      }
+    }
+    if (role === "write") {
+      await applyRole(role);
+      const listing = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/api/papers",
+      );
+      await page.getByRole("link", { name: "论文库管理", exact: true }).click();
+      const paperList = await (await listing).json();
+      await expect(
+        page.getByRole("heading", { name: "论文库管理", exact: true }),
+      ).toBeVisible();
+      const manage = page.getByRole("button", { name: /^管理论文 / }).first();
+      if (paperList.total > 0) {
+        await expect(manage).toBeVisible();
+        await manage.click();
+        const drawer = page.getByRole("dialog", {
+          name: "管理论文",
+          exact: true,
+        });
+        await expect(drawer.getByLabel("标题", { exact: true })).toBeVisible();
+        for (const [width, height] of [
+          [1440, 1000],
+          [390, 844],
+        ]) {
+          await page.setViewportSize({ width, height });
+          await expect
+            .poll(
+              async () => {
+                const box = await drawer.boundingBox();
+                return !!box && box.x >= 0 && box.x + box.width <= width + 1;
+              },
+              { message: `Management drawer fits at ${width}` },
+            )
+            .toBe(true);
+          await page.screenshot({
+            path: resolve(output, `webui-management-${width}.png`),
+            fullPage: false,
+          });
+        }
+      }
+      await page.goto(`${origin}/library`);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await applyRole(role);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "打开导航" }).click();
+    await expect(
+      page
+        .getByRole("dialog")
+        .getByRole("link", { name: "论文库管理", exact: true }),
+    ).toHaveCount(role === "read" ? 0 : 1);
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Paperbox", exact: true }),
+    ).not.toBeVisible();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    reports.push({ role, status: response.status(), modules: groups });
+  }
+  console.log(JSON.stringify({ origin, status: "passed", reports }));
+} finally {
+  await browser.close();
+}

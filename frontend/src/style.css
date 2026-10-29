@@ -589,6 +589,22 @@ h1 {
 .metadata-detail {
   font-size: 12px;
 }
+.metadata-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+.paper-title-button {
+  padding: 0;
+  height: auto;
+  white-space: normal;
+  text-align: left;
+}
+@media (max-width: 760px) {
+  .metadata-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .url-import form {
   display: flex;
   flex-direction: column;

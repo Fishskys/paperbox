@@ -1,15 +1,24 @@
 import { App, Button, Drawer, Input, Select, Table, Tag, Tooltip } from "antd";
 import { ArrowUpRight, Download, Info } from "lucide-react";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { errorMessage } from "../api";
 import { Failure, PageHeader, Stage } from "../components";
 import type { Paper, PaperList } from "../contracts";
-import { downloadPaper } from "../files";
+import { downloadPaper, hasOriginal } from "../files";
 import { useResource } from "../hooks";
 import { positivePage, readerPath } from "../search-model";
 
-export default function Library() {
+export default function Library({
+  title = "论文库",
+  actions,
+  revision = 0,
+}: {
+  title?: string;
+  actions?: (paper: Paper) => ReactNode;
+  revision?: number;
+}) {
   const [params, setParams] = useSearchParams();
   const [refresh, setRefresh] = useState(0);
   const [selected, setSelected] = useState<Paper | null>(null);
@@ -24,7 +33,7 @@ export default function Library() {
     if (params.get(key)) query.set(key, params.get(key)!);
   const { data, error, loading } = useResource<PaperList>(
     `/api/papers?${query}`,
-    refresh,
+    refresh + revision,
   );
   function filter(key: string, value: string) {
     const next = new URLSearchParams(params);
@@ -43,7 +52,7 @@ export default function Library() {
   return (
     <>
       <PageHeader
-        title="论文库"
+        title={title}
         description={data ? `${data.total} 篇论文` : "研究资料"}
       />
       <div className="list-toolbar">
@@ -72,6 +81,7 @@ export default function Library() {
             { label: "已索引", value: "INDEXED" },
             { label: "失败", value: "FAILED" },
             { label: "已存储", value: "STORED" },
+            { label: "待补原文", value: "AWAITING_FILE" },
           ]}
         />
       </div>
@@ -106,12 +116,22 @@ export default function Library() {
             key: "paper",
             render: (_, paper) => (
               <div className="paper-cell">
-                <Link
-                  to={readerPath(paper.paper_id)}
-                  state={{ from: location.pathname + location.search }}
-                >
-                  {paper.title} <ArrowUpRight size={13} />
-                </Link>
+                {hasOriginal(paper) ? (
+                  <Link
+                    to={readerPath(paper.paper_id)}
+                    state={{ from: location.pathname + location.search }}
+                  >
+                    {paper.title} <ArrowUpRight size={13} />
+                  </Link>
+                ) : (
+                  <Button
+                    type="link"
+                    className="paper-title-button"
+                    onClick={() => setSelected(paper)}
+                  >
+                    {paper.title || "未命名论文"}
+                  </Button>
+                )}
                 <p>{paper.authors.slice(0, 4).join(" · ") || "作者未标注"}</p>
               </div>
             ),
@@ -137,9 +157,10 @@ export default function Library() {
           {
             title: "",
             key: "actions",
-            width: 85,
+            width: actions ? 125 : 85,
             render: (_, paper) => (
               <div className="inline">
+                {actions?.(paper)}
                 <Tooltip title="论文信息">
                   <Button
                     type="text"
@@ -152,6 +173,7 @@ export default function Library() {
                   <Button
                     type="text"
                     aria-label={`下载 ${paper.title}`}
+                    disabled={!hasOriginal(paper)}
                     icon={<Download size={16} />}
                     onClick={() => void download(paper)}
                   />
@@ -176,12 +198,16 @@ export default function Library() {
             <p>{selected.abstract || "暂无摘要"}</p>
             <h3>DOI</h3>
             <p>{selected.doi || "未标注"}</p>
-            <Link
-              to={readerPath(selected.paper_id)}
-              state={{ from: location.pathname + location.search }}
-            >
-              打开论文
-            </Link>
+            {hasOriginal(selected) ? (
+              <Link
+                to={readerPath(selected.paper_id)}
+                state={{ from: location.pathname + location.search }}
+              >
+                打开论文
+              </Link>
+            ) : (
+              <p className="muted">待补充 PDF 原文</p>
+            )}
           </div>
         )}
       </Drawer>

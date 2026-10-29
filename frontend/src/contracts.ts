@@ -17,8 +17,43 @@ export type Paper = {
   venue?: string | null;
   abstract?: string | null;
   doi?: string | null;
+  arxiv_id?: string | null;
+  paper_type?: string | null;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
+  publication_date?: string | null;
+  url?: string | null;
   status: string;
-  files?: { mime_type?: string | null }[];
+  files?: {
+    mime_type?: string | null;
+    storage_key?: string;
+    size_bytes?: number | null;
+  }[];
+};
+export type PaperMetadata = {
+  paper_id: string;
+  values: Record<string, unknown>;
+  sources: { source_id: string; source_type: string; source_ref: string }[];
+  provenance: Record<
+    string,
+    {
+      provenance_id: string;
+      value: unknown;
+      source_id?: string | null;
+      is_current: boolean;
+      decided_by: string;
+      decided_at?: string | null;
+    }[]
+  >;
+};
+export type ReextractReport = {
+  dry_run: boolean;
+  changed_papers: number;
+  skipped_no_file: number;
+  failed: number;
+  changes: { field: string; old: unknown; new: unknown; action: string }[];
+  errors: { paper_id: string; error: string }[];
 };
 export type PaperList = {
   total: number;

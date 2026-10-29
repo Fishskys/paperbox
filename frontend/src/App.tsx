@@ -22,6 +22,7 @@ import {
   Search,
   Library,
   Upload,
+  Files,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
@@ -41,6 +42,7 @@ import { UploadProvider } from "./upload-context";
 
 const SearchPage = lazy(() => import("./pages/Search"));
 const LibraryPage = lazy(() => import("./pages/Library"));
+const LibraryManagementPage = lazy(() => import("./pages/LibraryManagement"));
 const HistoryPage = lazy(() => import("./pages/History"));
 const ReaderPage = lazy(() => import("./pages/Reader"));
 const ImportsPage = lazy(() => import("./pages/Imports"));
@@ -76,6 +78,12 @@ const groups = [
       { label: "元数据导入", path: "/imports/metadata" },
       { label: "导入任务", path: "/imports/jobs" },
     ],
+  },
+  {
+    label: "论文管理",
+    capability: "write" as const,
+    icon: Files,
+    items: [{ label: "论文库管理", path: "/manage/library" }],
   },
   {
     label: "系统管理",
@@ -291,6 +299,10 @@ function Workspace() {
                         />
                       </Route>
                       <Route element={<RequireAccess capability="write" />}>
+                        <Route
+                          path="/manage/library"
+                          element={<LibraryManagementPage />}
+                        />
                         <Route path="/imports/new" element={<ImportsPage />} />
                         <Route
                           path="/imports/metadata"

@@ -21,9 +21,9 @@ import {
 } from "react-router-dom";
 import { errorMessage, useAuthHeaders, useCredentialRevision } from "../api";
 import { useSidebar } from "../workspace-context";
-import { Failure } from "../components";
+import { Blank, Failure } from "../components";
 import type { Paper } from "../contracts";
-import { downloadPaper } from "../files";
+import { downloadPaper, hasOriginal } from "../files";
 import { remember } from "../history";
 import { useResource } from "../hooks";
 import { positivePage } from "../search-model";
@@ -199,6 +199,7 @@ export default function Reader() {
           <Tooltip title="下载原文">
             <Button
               aria-label="下载原文"
+              disabled={!paper || !hasOriginal(paper)}
               icon={<Download size={16} />}
               onClick={() => void download()}
             />
@@ -214,7 +215,8 @@ export default function Reader() {
         />
       )}
       <div className="pdf-viewport" ref={container}>
-        {paper && (
+        {paper && !hasOriginal(paper) && <Blank text="待补充 PDF 原文" />}
+        {paper && hasOriginal(paper) && (
           <Document
             key={`${paperId}-${revision}-${reload}`}
             file={file}
