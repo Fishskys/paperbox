@@ -609,7 +609,7 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | GET | `/api/papers/{paper_id}/figures` | 图片列表，含图注、页码、parts、预览与下载 URL | `limit`、`offset`、可选 `generation_id`；批次变化 409 |
 | GET | `/api/papers/{paper_id}/figures/{figure_id}` | 当前批次图片详情 | 论文和图片 UUID |
 | GET | `/api/papers/{paper_id}/figures/{figure_id}/file` | 原生 PDF、PNG、缩略图，支持 ETag | `variant=native/preview/thumbnail`、`part=1`、`disposition=inline/attachment` |
-| GET | `/api/papers/{paper_id}/figures/download` | 整篇图片 ZIP，包含图注和图号/页码清单 | `variant=native/preview/thumbnail/all`，默认 native；可选 generation_id；尚未提取 409 |
+| GET | `/api/papers/{paper_id}/figures/download` | 整篇图片 ZIP，包含图注和图号/页码清单 | `variant=native/preview/thumbnail/all`，默认 native；可选 generation_id；从未提取时需 write，返回 202 任务信息，完成后重试 download_url；失败或删除历史不自动重试 |
 | POST | `/api/papers/{paper_id}/figures/extract` | 后台提取，202；当前结果可复用则 200 | JSON `force=false`；无 PDF 409，缺工具/队列未启动 503 |
 | DELETE | `/api/papers/{paper_id}/figures`、`/figures/{figure_id}` | 全部或单图删除，write 权限 | 支持 `dry_run=true`；存储不可用时返回 cleanup_pending，可重试 |
 

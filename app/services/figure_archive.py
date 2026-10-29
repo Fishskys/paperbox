@@ -22,6 +22,52 @@ class Archive:
     generation_id: str
 
 
+def prepare(
+    session, paper_id, *, variant="native", generation_id=None, extract_if_missing=False
+):
+    """Return a ZIP or an existing/new background job, without retrying history.
+
+    Callers must authorize writes before enabling extract_if_missing. Reads can
+    observe an existing job without requesting a new extraction.
+    """
+    try:
+        return build(session, paper_id, variant=variant, generation_id=generation_id)
+    except figures.FigureError as exc:
+        if exc.code not in ("FIGURES_NOT_EXTRACTED", "FIGURE_ARCHIVE_NOT_READY"):
+            raise
+        record = figures.paper(session, paper_id)
+        active = session.scalar(
+            select(Run).where(Run.paper_id == record.id, Run.status.in_(figures.ACTIVE))
+        )
+        if active:
+            pending = {
+                "paper_id": record.id,
+                "job_id": active.job_id,
+                "status": active.status,
+                "generation_id": active.id,
+                "status_url": f"/api/jobs/{active.job_id}",
+            }
+        elif session.scalar(
+            select(Run.id).where(Run.paper_id == record.id, Run.is_current.is_(True))
+        ):
+            return build(
+                session, paper_id, variant=variant, generation_id=generation_id
+            )
+        elif exc.code == "FIGURES_NOT_EXTRACTED" and extract_if_missing:
+            pending, code = figures.request_extraction(session, record.id)
+            if code == 200:
+                return build(
+                    session, paper_id, variant=variant, generation_id=generation_id
+                )
+        else:
+            raise
+        pending["download_url"] = (
+            f"/api/papers/{pending['paper_id']}/figures/download?variant={variant}"
+        )
+        session.rollback()
+        return pending
+
+
 def _snapshot(session, paper_id, variant, generation_id):
     record = figures.paper(session, paper_id)
     current = session.scalar(

@@ -15,7 +15,7 @@
 | 方法 | 路径 | 行为 |
 |---|---|---|
 | GET | 空路径 | `limit` 1–200、`offset`；返回 generation、状态、图注、页码、坐标、原生与预览 URL、警告 |
-| GET | `/download` | 整篇 ZIP，`variant=native/preview/thumbnail/all`，默认 native；可用 generation_id 固定批次 |
+| GET | `/download` | 整篇 ZIP，`variant=native/preview/thumbnail/all`，默认 native；可用 generation_id 固定批次；首次自动提取返回 202 |
 | GET | `/{figure_id}` | 当前批次可见图片详情 |
 | GET | `/{figure_id}/file` | `variant=native/preview/thumbnail`，默认 preview；预览和缩略图 `part` 从 1 开始；native 返回整份多页 PDF，忽略 part；`disposition=inline/attachment` |
 | POST | `/extract` | 可选 JSON `{"force":false}`；新任务或已有在途任务返回 202；源文件与选项未变的当前结果返回 200；force 创建新批次 |
@@ -24,7 +24,11 @@
 
 文件返回 MIME、Content-Length、ETag 和 UTF-8 文件名，支持 If-None-Match。每次访问重新检查可见性，包括条件 GET。URL 是相对 API 路径，客户端沿用现有凭据，不暴露 MinIO bucket/key、本机路径。
 
-ZIP 返回 `application/zip` 附件，包含所选格式全部 parts、每幅图的 `caption.txt` 和总清单 `manifest.json`。图片目录带 UUID，重复图号不覆盖。清单保留图号、图注、页码、质量警告和包内文件映射，不暴露对象 key。缺少所选预览时写明警告，已提取但无可见图片时返回仅有清单的 ZIP。尚未提取返回 409 `FIGURES_NOT_EXTRACTED`，其他无当前批次状态返回 409 `FIGURE_ARCHIVE_NOT_READY`。
+ZIP 返回 `application/zip` 附件，包含所选格式全部 parts、每幅图的 `caption.txt` 和总清单 `manifest.json`。图片目录带 UUID，重复图号不覆盖。清单保留图号、图注、页码、质量警告和包内文件映射，不暴露对象 key。缺少所选预览时写明警告，已提取但无可见图片时返回仅有清单的 ZIP。
+
+此前从未提取时，下载请求自动通过既有队列发起提取，返回 `202 application/json`，包含 `job_id`、`generation_id`、`status_url` 和保留所选 variant 的 `download_url`；响应头有 `Location`、`Retry-After: 2` 和 no-store。客户端轮询 status_url，完成后重试 download_url 得到 `200 application/zip`。并发或重复请求复用在途任务，不在 HTTP 请求里等待原生处理。该 202 响应不是 ZIP 文件，客户端应先检查状态码和 Content-Type。
+
+自动创建任务要求 write 权限；匿名/只读凭据不能发起提取，分别按现有规则返回 401/403。已有图片的下载及在途任务查询仍遵守读权限。`FIGURE_AUTO_EXTRACT` 只控制导入后触发，不关闭这项按需提取。有失败、取消或整批删除历史但无当前批次时返回 409 `FIGURE_ARCHIVE_NOT_READY`，需要显式提取或重试；不会因反复下载自动重试，也不恢复用户删除的图片。指定旧 generation_id 返回 409，不触发提取。
 
 打包逐个流式读取并核验大小与 SHA256，使用内存上限 8 MiB 的临时缓冲，超过后落临时文件；总包大小受 `FIGURE_MAX_TEMP_BYTES` 限制，超限 413。文件缺失、损坏或存储失败分别返回 404、409、503，不返回半个 ZIP。发送前再次验证批次和删除 revision，变更返回 409。ZIP 不写回 MinIO，下载结束或中断时清理临时文件；使用 no-store，不支持单文件接口的 ETag/304。
 
@@ -51,7 +55,7 @@ papers/<paper_id>/figures/<run_id>/<figure_id>/part-001-thumbnail.png
 
 共用 `IngestQueue`，图片另受 `FIGURE_EXTRACT_CONCURRENCY` 限制，等待图片配额的任务不占住全部导入 worker。原生 PDF/JVM 在独立进程组中运行，超时和取消时杀掉进程组。源文件与输出有字节预算，预览渲染前检查像素预算。cleanup_pending 在任务结束、删除、替换和重启恢复时重试。
 
-默认 `FIGURE_AUTO_EXTRACT=false`，读接口不触发提取；开启后正文索引成功时尝试排队，失败不改变导入成功状态。没有启动时自动全库回填。`uv run python scripts/extract_figures.py <paper_id> ...` 默认 dry-run，`--execute` 才请求服务，`--force` 强制重提取，凭据从 `PAPER_API_KEY` 读取。
+默认 `FIGURE_AUTO_EXTRACT=false`，不在导入后自动提取；开启后正文索引成功时尝试排队，失败不改变导入成功状态。普通列表、详情和单文件读取不会触发提取，ZIP 下载可按需触发。没有启动时自动全库回填。`uv run python scripts/extract_figures.py <paper_id> ...` 默认 dry-run，`--execute` 才请求服务，`--force` 强制重提取，凭据从 `PAPER_API_KEY` 读取。
 
 配置与默认值见 `.env.example` 的 `PDFFIGURES2_*`、`FIGURE_*`。本机需要 Java 21，执行 `uv run python scripts/build_pdffigures2.py` 构建 JAR；Docker 多阶段构建随附 JAR/JRE。上游固定 commit `3d7ad46753d4a315cccd1c2bcab398380e88c534`，仅升级构建用 Scala/sbt 并移除失效发布插件，未修改提取算法。PDFFigures2 为 Apache-2.0，PyMuPDF 为 AGPL/商业许可，分发时保留依赖许可材料。
 

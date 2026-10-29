@@ -18,6 +18,10 @@ class ExtractOut(BaseModel):
     status_url: str
 
 
+class FigureArchivePendingOut(ExtractOut):
+    download_url: str
+
+
 class FigurePart(BaseModel):
     part: int
     page: int

@@ -188,11 +188,21 @@ def inside(pdf):
             )
             assert client.get(base).json()["status"] == "not_extracted"
 
-            def extract(force=False):
+            def extract(force=False, automatic=False):
                 started = time.monotonic()
-                response = client.post(base + "/extract", json={"force": force})
+                response = (
+                    client.get(base + "/download", params={"variant": "all"})
+                    if automatic
+                    else client.post(base + "/extract", json={"force": force})
+                )
                 assert response.status_code == 202, response.text
                 assert time.monotonic() - started < 5
+                if automatic:
+                    assert (
+                        response.json()["download_url"]
+                        == base + "/download?variant=all"
+                    )
+                    assert response.headers["location"] == response.json()["status_url"]
                 job_id = response.json()["job_id"]
                 deadline = started + 60
                 while time.monotonic() < deadline:
@@ -206,7 +216,7 @@ def inside(pdf):
                     "figure job did not terminate within acceptance deadline"
                 )
 
-            first = extract()
+            first = extract(automatic=True)
             assert first["total"] == 5, first
             assert {row["figure_number"] for row in first["figures"]} == {
                 "1",
@@ -293,6 +303,7 @@ def inside(pdf):
                         "original_unchanged": True,
                         "cleanup": True,
                         "zip_download": True,
+                        "auto_extract_on_download": True,
                     }
                 )
             )

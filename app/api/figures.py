@@ -16,6 +16,7 @@ from app.schemas.figure import (
     FigureOut,
     FigureListOut,
     FigureDeleteOut,
+    FigureArchivePendingOut,
 )
 from app.services import figure_service as figures, figure_archive, object_storage
 
@@ -82,26 +83,58 @@ def delete_all(
     "/download",
     response_class=StreamingResponse,
     responses={
+        202: {
+            "model": FigureArchivePendingOut,
+            "description": "Extraction queued or running; retry download_url when complete",
+        },
         200: {
             "content": {
                 "application/zip": {"schema": {"type": "string", "format": "binary"}}
             }
-        }
+        },
     },
 )
 def download_archive(
     paper_id: str,
+    request: Request,
     variant: Literal["native", "preview", "thumbnail", "all"] = "native",
     generation_id: str | None = None,
     session: Session = Depends(get_db),
 ):
-    archive = _call(
-        figure_archive.build,
-        session,
-        paper_id,
-        variant=variant,
-        generation_id=generation_id,
-    )
+    try:
+        archive = _call(
+            figure_archive.prepare,
+            session,
+            paper_id,
+            variant=variant,
+            generation_id=generation_id,
+        )
+    except HTTPException as exc:
+        if (
+            not isinstance(exc.detail, dict)
+            or exc.detail.get("code") != "FIGURES_NOT_EXTRACTED"
+        ):
+            raise
+        require_write(request)
+        archive = _call(
+            figure_archive.prepare,
+            session,
+            paper_id,
+            variant=variant,
+            generation_id=generation_id,
+            extract_if_missing=True,
+        )
+    if isinstance(archive, dict):
+        pending = FigureArchivePendingOut.model_validate(archive)
+        return JSONResponse(
+            pending.model_dump(),
+            status_code=202,
+            headers={
+                "Location": pending.status_url,
+                "Retry-After": "2",
+                "Cache-Control": "private, no-store",
+            },
+        )
 
     def stream():
         try:
