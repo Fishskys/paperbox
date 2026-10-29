@@ -81,6 +81,20 @@ test("search evidence opens a real rendered PDF page and returns to the query", 
   expect(pdfCredential).toBe("Bearer read-test-only");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(canvas).toBeVisible();
+  await expect
+    .poll(() =>
+      canvas.evaluate((element: HTMLCanvasElement) => {
+        if (element.getBoundingClientRect().width > innerWidth - 32) return 0;
+        const pixels = element
+          .getContext("2d")!
+          .getImageData(0, 0, element.width, element.height).data;
+        let ink = 0;
+        for (let i = 0; i < pixels.length; i += 40)
+          if (pixels[i] < 180 && pixels[i + 3] > 0) ink++;
+        return ink;
+      }),
+    )
+    .toBeGreaterThan(100);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -92,6 +106,9 @@ test("search evidence opens a real rendered PDF page and returns to the query", 
   await expect(page.getByRole("textbox", { name: "查询内容" })).toHaveValue(
     "time-to-digital",
   );
+  await page.goForward();
+  await expect(page).toHaveURL(/reading\/papers\/paper-1\?page=3/);
+  await page.getByRole("button", { name: "返回来源页面" }).click();
   await page.getByRole("link", { name: "最近阅读", exact: true }).click();
   await expect(page.getByRole("link", { name: paper.title })).toHaveAttribute(
     "href",

@@ -46,6 +46,10 @@ export default function History({ kind }: { kind: "searches" | "readings" }) {
           </span>
           <div className="history-content">
             <Link
+              state={{
+                from:
+                  kind === "searches" ? "/search/history" : "/reading/recent",
+              }}
               to={
                 "query" in item
                   ? `/search?${item.search}`

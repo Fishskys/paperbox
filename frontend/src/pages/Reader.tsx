@@ -121,7 +121,10 @@ export default function Reader() {
         <Button
           aria-label="返回来源页面"
           icon={<ArrowLeft size={17} />}
-          onClick={() => navigate(from)}
+          onClick={() => {
+            if (location.state?.from) navigate(-1);
+            else navigate(from);
+          }}
         />
         <h1>{paper?.title || "论文阅读"}</h1>
         <Tooltip title="收起 / 展开侧栏">
