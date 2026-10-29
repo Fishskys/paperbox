@@ -15,7 +15,7 @@
 ### 1.1 项目定位与核心技术栈
 
 - **项目名称**：`paperbox`
-- **核心定位**：`个人/团队的论文知识服务：无前端、纯 REST API（可选 MCP），供 Hermes 等 Agent 调用 —— 五种入口导入 PDF → 原件进 MinIO、元数据进 PostgreSQL、解析成带页码与章节的结构化 markdown → 切块向量化 → OpenSearch 全文+向量检索 → /api/search 论文级聚合与 evidence。`
+- **核心定位**：`个人/团队的论文知识服务：REST API、可选 MCP 与独立启停的 WebUI，供人和 Agent 使用 —— 五种入口导入 PDF → 原件进 MinIO、元数据进 PostgreSQL、解析成带页码与章节的结构化 markdown → 切块向量化 → OpenSearch 全文+向量检索 → /api/search 论文级聚合与 evidence。`
 - **核心技术栈**：
   - **语言与运行时**：`Python 3.12（依赖与虚拟环境一律走 uv，以 uv.lock 为准）；uvicorn 单 worker（导入流水线跑在应用进程内）`
   - **核心框架**：`FastAPI 0.141 + Pydantic 2.13（REST，/api/**）、MCP 2.3（/mcp，默认关闭）、SQLAlchemy 2.0 + Alembic（psycopg 3）、opensearch-py、minio-py、PyMuPDF（降级解析后端）、docling-serve（主解析后端，可选 profile）`
@@ -37,6 +37,7 @@ paperbox/
 │   ├── mcp/                # MCP 端点与工具（读 6 + 写 4），直调 service 层
 │   └── eval/               # 评测指标
 ├── infra/                  # 依赖服务编排与镜像：PostgreSQL / OpenSearch / MinIO / Embedding / docling
+├── frontend/               # 独立 React / TypeScript / Vite WebUI，HTTP 调用 API，npm 管理依赖
 ├── migrations/             # Alembic 数据库迁移
 ├── scripts/                # 运维与真机验收脚本（建索引 / 批量导入 / 评测 / 对账 / 快照 / 健康检查）
 ├── tests/                  # 单元测试（默认不连真实依赖）
@@ -55,6 +56,7 @@ paperbox/
 - `app/parsing/`：解析后端与切块的边界，主后端 docling、降级后端 PyMuPDF 都要能产出同一套 markdown 方言。
 - `app/workers/`：进程内优先级队列与流水线，单 worker 消费，不要把长任务塞进请求线程。
 - `app/mcp/`：与 REST 同进程、共用配置/鉴权/日志，工具直调 service 层，避免两套实现。
+- `frontend/`：独立前端；开发用 Vite 同源代理，凭证只存页面内存；页面边界见 `docs/architecture/13-webui.md`。
 - `tests/`：单元测试严禁连 PostgreSQL / OpenSearch / MinIO（内存 SQLite 与替身）；真机验证只能放 `scripts/`。
 - `scripts/`：运维与真机验收脚本；脚本自造的数据必须能自行清理，不留合成数据。
 - `docs/`：非 plan 文档进 `docs/{architecture,progress,examine,old}/`；计划文档进 `.hermes/plans/`。

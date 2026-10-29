@@ -121,7 +121,7 @@ POST /mcp（Streamable HTTP，Bearer）
 
 ## 8. 未做 / 已知缺口
 
-- 前端在独立仓库 `paperbox-webui`；本仓库只提供 REST API。
+- 可选 WebUI 位于本仓库 `frontend/`，独立启停，通过 HTTP 使用 API；运行边界与页面见 [WebUI](13-webui.md)。
 - 已知未连通：`Redis/Celery`（任务用进程内队列）、`OCR`、`arm64` 等。
 - 文档口径：`docs/architecture/metadata-architecture.md` 是**设计背景**（目标/取舍/逐字段映射/术语表），**实现现状**看 `docs/architecture/08-metadata.md`（表 + 实现架构），实测数字看 `docs/progress/project.md` [#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21)。
 - MCP 侧：**无速率限制**；仅在 Hermes 与 codex 上做过真机验收（Claude Code 本机未装、自研 harness 片段未验证）；
