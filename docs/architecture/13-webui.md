@@ -64,6 +64,10 @@ Node.js 要求 `20.19+`（20 系列）、`22.13+`（22 系列）或 `24+`，依�
 `PAPERBOX_API_TARGET` 可由进程环境或前端 `.env.local` 配置；API 启停方式保持独立。
 `vite preview` 只用于本地检查构建产物，不用于正式部署。
 浏览器测试使用拦截响应，不写真实论文库；单元测试验证请求与错误契约。
+模拟接口测试不能替代已运行 API 的验收。后端代码更新后需要执行数据库迁移并重启 API，Vite 热更新不会更新 Python 进程。
+在仓库根执行 `node scripts/check_webui_metadata.mjs`，可用真实浏览器将
+`tests/metadata/ieee_metadata_example.jsonl` 和对应 JSON 文件提交给本地 API 做预览，检查记录数、解析失败及论文总数不变。
+该脚本只执行预览，不点击正式导入；默认访问 5173，可通过 `WEBUI_URL` 指定其他地址，需要该页面已具备写权限凭证。
 
 ## 独立部署
 
