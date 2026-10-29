@@ -7,11 +7,15 @@ const results = { total: 1, took_ms: 18, results: [{ ...paper, evidence: [{ chun
 
 test('search evidence opens a real rendered PDF page and returns to the query', async ({ page }) => {
   const errors: string[] = [];
+  let pdfCredential: string | undefined;
   page.on('pageerror', (error) => errors.push(error.message));
   await page.route('**/api/search', (route) => route.fulfill({ json: results }));
   await page.route('**/api/papers/paper-1', (route) => route.fulfill({ json: paper }));
-  await page.route('**/api/papers/paper-1/file', (route) => route.fulfill({ contentType: 'application/pdf', body: readFileSync(resolve('../tests/fixtures/smoke_sample.pdf')) }));
+  await page.route('**/api/papers/paper-1/file', (route) => { pdfCredential = route.request().headers().authorization; return route.fulfill({ contentType: 'application/pdf', body: readFileSync(resolve('../tests/fixtures/smoke_sample.pdf')) }); });
   await page.goto('/search');
+  await page.getByRole('button', { name: '连接与外观设置' }).click();
+  await page.getByLabel('API key', { exact: true }).fill('read-test-only');
+  await page.getByRole('button', { name: /^应\s*用$/ }).click();
   await page.getByRole('textbox', { name: '查询内容' }).fill('time-to-digital');
   await page.getByRole('button', { name: '搜索论文' }).click();
   await expect(page.getByRole('link', { name: paper.title, exact: true })).toBeVisible();
@@ -27,6 +31,11 @@ test('search evidence opens a real rendered PDF page and returns to the query', 
     for (let i = 0; i < pixels.length; i += 40) if (pixels[i] < 180 && pixels[i + 3] > 0) ink++;
     return ink;
   })).toBeGreaterThan(100);
+  expect(pdfCredential).toBe('Bearer read-test-only');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(canvas).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.getByRole('button', { name: '返回来源页面' }).click();
   await expect(page).toHaveURL(/search\?q=time-to-digital/);
   await expect(page.getByRole('textbox', { name: '查询内容' })).toHaveValue('time-to-digital');

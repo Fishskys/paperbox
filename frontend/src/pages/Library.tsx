@@ -1,5 +1,5 @@
 import { App, Button, Drawer, Input, Select, Table, Tag, Tooltip } from 'antd';
-import { ArrowUpRight, Download, Info } from 'lucide-react';
+import { ArrowUpRight, Download, Info, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { errorMessage } from '../api';
@@ -22,7 +22,7 @@ export default function Library() {
   function filter(key: string, value: string) { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); next.delete('page'); setParams(next); }
   async function download(paper: Paper) { try { await downloadPaper(paper.paper_id); } catch (error) { void message.error(errorMessage(error)); } }
   return <>
-    <PageHeader title="论文库" description={data ? `${data.total} 篇论文` : '研究资料'} />
+    <PageHeader title="论文库" description={data ? `${data.total} 篇论文` : '研究资料'} actions={<Link to="/imports/new"><Button type="primary" icon={<Upload size={16} />}>导入论文</Button></Link>} />
     <div className="list-toolbar"><Input.Search aria-label="搜索论文标题" key={`title-${params.get('q')}`} defaultValue={params.get('q') || ''} placeholder="搜索论文标题" allowClear onSearch={(value) => filter('q', value)} /><Input.Search aria-label="筛选作者" key={`author-${params.get('author')}`} defaultValue={params.get('author') || ''} placeholder="作者" allowClear onSearch={(value) => filter('author', value)} /><Select aria-label="处理状态" value={params.get('status') || ''} onChange={(value) => filter('status', value)} options={[{ label: '全部状态', value: '' }, { label: '已索引', value: 'INDEXED' }, { label: '失败', value: 'FAILED' }, { label: '已存储', value: 'STORED' }]} /></div>
     {error && <Failure message={error} retry={() => setRefresh((v) => v + 1)} />}
     <Table<Paper> className="data-table" rowKey="paper_id" loading={loading} dataSource={data?.papers || []} scroll={{ x: 720 }} locale={{ emptyText: error ? '论文列表加载失败' : '暂无论文' }} pagination={{ current: page, pageSize: 20, total: data?.total || 0, showSizeChanger: false, onChange: (value) => { const next = new URLSearchParams(params); next.set('page', String(value)); setParams(next); } }} columns={[

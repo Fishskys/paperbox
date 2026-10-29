@@ -20,8 +20,8 @@
 5. venue 粒度 = **会议 + 年份分开存**，搜索"会议"或"会议+年份"都要能命中；
 6. 作者只记名字即可；IEEE `article_number` 要存但归入标识符表。
 
-**硬约束（项目级，不可违反）**：不引入 Redis/Celery；应用 `--workers 1`；无前端（API 驱动）；
-不改动 `paper_chunks`/`ingestion_jobs`/`search_queries`/`authors` 的表结构；零新增依赖。
+**元数据后端约束**：不引入 Redis/Celery；API 应用 `--workers 1`，通过既有接口供独立 WebUI 和 Agent 使用；
+不改动 `paper_chunks`/`ingestion_jobs`/`search_queries`/`authors` 的表结构；零新增 Python 运行依赖。
 
 ---
 
