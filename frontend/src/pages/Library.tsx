@@ -93,10 +93,14 @@ export default function Library() {
         scroll={{ x: 720 }}
         locale={{ emptyText: error ? "论文列表加载失败" : "暂无论文" }}
         pagination={{
+          placement: ["topEnd", "bottomEnd"],
           current: page,
           pageSize: 20,
           total: data?.total || 0,
           showSizeChanger: false,
+          showQuickJumper: true,
+          responsive: true,
+          showLessItems: true,
           onChange: (value) => {
             const next = new URLSearchParams(params);
             next.set("page", String(value));

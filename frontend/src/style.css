@@ -589,6 +589,13 @@ h1 {
   height: auto;
   font-family: ui-monospace, monospace;
 }
+.data-table .ant-pagination-options {
+  display: inline-block;
+}
+.data-table .ant-pagination {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
 .data-summary {
   display: flex;
   flex-wrap: wrap;
