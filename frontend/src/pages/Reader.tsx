@@ -129,7 +129,7 @@ export default function Reader() {
             else navigate(from);
           }}
         />
-        <h1>{paper?.title || "论文阅读"}</h1>
+        <h1>{paper?.title || "阅读"}</h1>
         <Tooltip title="收起 / 展开侧栏">
           <Button
             className="reader-sidebar-toggle"

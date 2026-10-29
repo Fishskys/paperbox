@@ -94,7 +94,7 @@ export default function MetadataImport() {
     <>
       <PageHeader
         title="元数据导入"
-        description="外部题录与来源记录"
+        description="外部元数据与来源记录"
         actions={<Link to="/library">论文库</Link>}
       />
       <div className="metadata-upload">
@@ -118,7 +118,7 @@ export default function MetadataImport() {
           <p className="muted">
             {file
               ? `${(file.size / 1024).toFixed(1)} KB`
-              : "JSON / JSONL / NDJSON · IEEE / CSL / 通用题录"}
+              : "JSON / JSONL / NDJSON · IEEE / CSL / 通用元数据"}
           </p>
         </Upload.Dragger>
       </div>
@@ -154,7 +154,7 @@ export default function MetadataImport() {
         <Alert
           type="info"
           showIcon
-          title={busy === "preview" ? "正在预览题录匹配…" : "正在写入元数据…"}
+          title={busy === "preview" ? "正在预览元数据匹配…" : "正在写入元数据…"}
         />
       )}
       {!report && !busy && !error && (
@@ -176,7 +176,7 @@ export default function MetadataImport() {
                 ["参与匹配", report.total],
                 ["匹配论文", report.matched],
                 [
-                  report.dry_run ? "拟建题录" : "新建题录",
+                  report.dry_run ? "拟新增论文" : "新增论文",
                   report.created_shell,
                 ],
                 ["需复核", report.ambiguous],
@@ -195,7 +195,7 @@ export default function MetadataImport() {
             <Alert
               type="info"
               showIcon
-              title={`${report.created_shell} 条题录${report.dry_run ? "将建立" : "已建立"}待上传论文，尚无 PDF 原文`}
+              title={`${report.dry_run ? "将新增" : "已新增"} ${report.created_shell} 篇论文，待补充 PDF 原文`}
             />
           )}
           {(report.failed > 0 ||

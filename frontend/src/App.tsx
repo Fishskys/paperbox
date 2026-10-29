@@ -49,7 +49,7 @@ const DataCheckPage = lazy(() => import("./pages/DataCheck"));
 
 const groups = [
   {
-    label: "论文检索",
+    label: "检索",
     icon: Search,
     items: [
       { label: "论文搜索", path: "/search" },
@@ -57,7 +57,7 @@ const groups = [
     ],
   },
   {
-    label: "论文阅读",
+    label: "阅读",
     icon: Library,
     items: [
       { label: "论文库", path: "/library" },
@@ -65,10 +65,10 @@ const groups = [
     ],
   },
   {
-    label: "论文导入",
+    label: "导入",
     icon: Upload,
     items: [
-      { label: "新建导入", path: "/imports/new" },
+      { label: "论文导入", path: "/imports/new" },
       { label: "元数据导入", path: "/imports/metadata" },
       { label: "导入任务", path: "/imports/jobs" },
     ],
@@ -120,7 +120,7 @@ function Workspace() {
       <div className="nav-groups">
         {groups.map((group) => (
           <div
-            className={`nav-group ${location.pathname.startsWith("/reading/papers/") && group.label === "论文阅读" ? "is-current" : ""}`}
+            className={`nav-group ${location.pathname.startsWith("/reading/papers/") && group.label === "阅读" ? "is-current" : ""}`}
             key={group.label}
           >
             <div className="nav-group-title">
@@ -177,7 +177,7 @@ function Workspace() {
     </>
   );
   const current = location.pathname.startsWith("/reading/papers/")
-    ? "论文阅读"
+    ? "阅读"
     : groups.flatMap((g) => g.items).find((i) => i.path === location.pathname)
         ?.label || "Paperbox";
   return (

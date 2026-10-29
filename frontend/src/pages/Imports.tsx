@@ -77,7 +77,7 @@ export default function Imports() {
   return (
     <>
       <PageHeader
-        title="新建导入"
+        title="论文导入"
         description="将研究资料加入论文库"
         actions={
           <Link className="quiet-link" to="/imports/jobs">

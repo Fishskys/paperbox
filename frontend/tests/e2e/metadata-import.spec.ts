@@ -79,7 +79,7 @@ test("metadata import previews before applying and shows record failures and con
   await page.getByRole("button", { name: "预览导入", exact: true }).click();
   await expect(page.getByText("未写入", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("1 条题录将建立待上传论文，尚无 PDF 原文", { exact: true }),
+    page.getByText("将新增 1 篇论文，待补充 PDF 原文", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "详情", exact: true }).first().click();
   await expect(
