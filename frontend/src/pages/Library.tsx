@@ -1,5 +1,5 @@
 import { App, Button, Drawer, Input, Select, Table, Tag, Tooltip } from "antd";
-import { ArrowUpRight, Download, Info, Upload } from "lucide-react";
+import { ArrowUpRight, Download, Info } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { errorMessage } from "../api";
@@ -45,13 +45,6 @@ export default function Library() {
       <PageHeader
         title="论文库"
         description={data ? `${data.total} 篇论文` : "研究资料"}
-        actions={
-          <Link to="/imports/new">
-            <Button type="primary" icon={<Upload size={16} />}>
-              导入论文
-            </Button>
-          </Link>
-        }
       />
       <div className="list-toolbar">
         <Input.Search

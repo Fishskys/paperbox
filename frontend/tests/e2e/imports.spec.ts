@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 test("uploads PDFs, follows the accepted job and opens the completed paper", async ({
   page,

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 test("both library pagers jump to the same filtered page and survive refresh", async ({
   page,

@@ -33,7 +33,8 @@ import {
   Routes,
   useLocation,
 } from "react-router-dom";
-import { setCredential, useConnection } from "./api";
+import { setCredential, useConnection, useCredentialRevision } from "./api";
+import { AccessProvider, RequireAccess, useAccess } from "./access";
 import Status from "./pages/Status";
 import { SidebarContext } from "./workspace-context";
 import { UploadProvider } from "./upload-context";
@@ -50,6 +51,7 @@ const DataCheckPage = lazy(() => import("./pages/DataCheck"));
 const groups = [
   {
     label: "检索",
+    capability: "read" as const,
     icon: Search,
     items: [
       { label: "论文搜索", path: "/search" },
@@ -58,6 +60,7 @@ const groups = [
   },
   {
     label: "阅读",
+    capability: "read" as const,
     icon: Library,
     items: [
       { label: "论文库", path: "/library" },
@@ -66,6 +69,7 @@ const groups = [
   },
   {
     label: "导入",
+    capability: "write" as const,
     icon: Upload,
     items: [
       { label: "论文导入", path: "/imports/new" },
@@ -75,6 +79,7 @@ const groups = [
   },
   {
     label: "系统管理",
+    capability: "admin" as const,
     icon: ShieldCheck,
     items: [
       { label: "运行状态", path: "/system/status" },
@@ -84,6 +89,8 @@ const groups = [
 ];
 
 function Workspace() {
+  const { context, can } = useAccess();
+  const revision = useCredentialRevision();
   const [collapsed, setCollapsed] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -118,54 +125,73 @@ function Workspace() {
         </span>
       </Link>
       <div className="nav-groups">
-        {groups.map((group) => (
-          <div
-            className={`nav-group ${location.pathname.startsWith("/reading/papers/") && group.label === "阅读" ? "is-current" : ""}`}
-            key={group.label}
-          >
-            <div className="nav-group-title">
-              <group.icon size={16} />
-              <span>{group.label}</span>
-            </div>
-            {group.items.map((item) => (
-              <Tooltip
-                title={collapsed ? item.label : ""}
-                placement="right"
-                key={item.path}
-              >
-                <NavLink
-                  to={item.path}
-                  end
-                  className="nav-item"
-                  onClick={() => setMobile(false)}
+        {groups
+          .filter((group) => can(group.capability))
+          .map((group) => (
+            <div
+              className={`nav-group ${location.pathname.startsWith("/reading/papers/") && group.label === "阅读" ? "is-current" : ""}`}
+              key={group.label}
+            >
+              <div className="nav-group-title">
+                <group.icon size={16} />
+                <span>{group.label}</span>
+              </div>
+              {group.items.map((item) => (
+                <Tooltip
+                  title={collapsed ? item.label : ""}
+                  placement="right"
+                  key={item.path}
                 >
-                  <span className="nav-dot" />
-                  <span>{item.label}</span>
-                </NavLink>
-              </Tooltip>
-            ))}
-          </div>
-        ))}
+                  <NavLink
+                    to={item.path}
+                    end
+                    className="nav-item"
+                    onClick={() => setMobile(false)}
+                  >
+                    <span className="nav-dot" />
+                    <span>{item.label}</span>
+                  </NavLink>
+                </Tooltip>
+              ))}
+            </div>
+          ))}
       </div>
       <div className="sidebar-bottom">
-        <Link
-          className="connection"
-          to="/system/status"
-          onClick={() => setMobile(false)}
-        >
-          <Circle
-            size={9}
-            fill="currentColor"
-            className={`connection-${connection}`}
-          />
-          <span>
-            {connection === "online"
-              ? "API 已连接"
-              : connection === "offline"
-                ? "API 不可达"
-                : "等待连接"}
+        {can("admin") ? (
+          <Link
+            className="connection"
+            to="/system/status"
+            onClick={() => setMobile(false)}
+          >
+            <Circle
+              size={9}
+              fill="currentColor"
+              className={`connection-${connection}`}
+            />
+            <span>
+              {connection === "online"
+                ? "API 已连接"
+                : connection === "offline"
+                  ? "API 不可达"
+                  : "等待连接"}
+            </span>
+          </Link>
+        ) : (
+          <span className="connection">
+            <Circle
+              size={9}
+              fill="currentColor"
+              className={`connection-${connection}`}
+            />
+            <span>
+              {connection === "online"
+                ? "API 已连接"
+                : connection === "offline"
+                  ? "API 不可达"
+                  : "等待连接"}
+            </span>
           </span>
-        </Link>
+        )}
         <Button
           aria-label="连接与外观设置"
           title="连接与外观设置"
@@ -241,31 +267,44 @@ function Workspace() {
               <main
                 className={`page ${location.pathname.startsWith("/reading/papers/") ? "reader-page" : ""}`}
               >
-                <UploadProvider>
+                <UploadProvider key={revision}>
                   <Suspense fallback={<div className="blank">正在加载…</div>}>
                     <Routes>
-                      <Route path="/search" element={<SearchPage />} />
-                      <Route
-                        path="/search/history"
-                        element={<HistoryPage key="searches" kind="searches" />}
-                      />
-                      <Route path="/library" element={<LibraryPage />} />
-                      <Route
-                        path="/reading/recent"
-                        element={<HistoryPage key="readings" kind="readings" />}
-                      />
-                      <Route
-                        path="/reading/papers/:paperId"
-                        element={<ReaderPage />}
-                      />
-                      <Route path="/imports/new" element={<ImportsPage />} />
-                      <Route
-                        path="/imports/metadata"
-                        element={<MetadataImportPage />}
-                      />
-                      <Route path="/imports/jobs" element={<JobsPage />} />
-                      <Route path="/system/status" element={<Status />} />
-                      <Route path="/system/data" element={<DataCheckPage />} />
+                      <Route element={<RequireAccess capability="read" />}>
+                        <Route path="/search" element={<SearchPage />} />
+                        <Route
+                          path="/search/history"
+                          element={
+                            <HistoryPage key="searches" kind="searches" />
+                          }
+                        />
+                        <Route path="/library" element={<LibraryPage />} />
+                        <Route
+                          path="/reading/recent"
+                          element={
+                            <HistoryPage key="readings" kind="readings" />
+                          }
+                        />
+                        <Route
+                          path="/reading/papers/:paperId"
+                          element={<ReaderPage />}
+                        />
+                      </Route>
+                      <Route element={<RequireAccess capability="write" />}>
+                        <Route path="/imports/new" element={<ImportsPage />} />
+                        <Route
+                          path="/imports/metadata"
+                          element={<MetadataImportPage />}
+                        />
+                        <Route path="/imports/jobs" element={<JobsPage />} />
+                      </Route>
+                      <Route element={<RequireAccess capability="admin" />}>
+                        <Route path="/system/status" element={<Status />} />
+                        <Route
+                          path="/system/data"
+                          element={<DataCheckPage />}
+                        />
+                      </Route>
                       <Route
                         path="*"
                         element={<Navigate to="/search" replace />}
@@ -296,6 +335,12 @@ function Workspace() {
           destroyOnHidden
         >
           <Form layout="vertical">
+            <p className="muted">
+              当前权限：
+              {context
+                ? `${{ read: "只读", write: "读写", admin: "管理员" }[context.role]} · ${context.prefix}${context.auth_enabled ? "" : "（鉴权关闭）"}`
+                : "尚未验证"}
+            </p>
             <Form.Item label="API key" htmlFor="api-key">
               <Input.Password
                 id="api-key"
@@ -341,7 +386,9 @@ function Workspace() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Workspace />
+      <AccessProvider>
+        <Workspace />
+      </AccessProvider>
     </BrowserRouter>
   );
 }

@@ -11,6 +11,7 @@ import { UploadQueue } from "./upload-queue";
 const Context = createContext<UploadQueue | null>(null);
 export function UploadProvider({ children }: { children: ReactNode }) {
   const [queue] = useState(() => new UploadQueue());
+  useEffect(() => () => queue.stopQueued(), [queue]);
   const items = useSyncExternalStore(queue.subscribe, queue.snapshot);
   const pending = items.some((item) =>
     ["uploading", "backoff"].includes(item.state),
