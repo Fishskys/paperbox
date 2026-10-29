@@ -568,6 +568,27 @@ h1 {
   max-width: 700px;
   margin-top: 32px;
 }
+.metadata-upload {
+  max-width: 760px;
+}
+.metadata-upload .ant-upload-drag {
+  background: var(--surface);
+  border-radius: 6px;
+}
+.metadata-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0;
+}
+.metadata-reference,
+.metadata-detail {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.metadata-detail {
+  font-size: 12px;
+}
 .url-import form {
   display: flex;
   flex-direction: column;

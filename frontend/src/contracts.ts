@@ -64,6 +64,33 @@ export type BatchAccepted = {
   duplicate: number;
   rejected: number;
 };
+export type MetadataSource = {
+  source_ref: string;
+  paper_id?: string | null;
+  match_status?: string;
+  match_method?: string | null;
+  reason?: string | null;
+  note?: string | null;
+  evidence?: string[];
+  match_conflicts?: string[];
+  candidates?: unknown[];
+};
+export type MetadataImportReport = {
+  detected: number;
+  total: number;
+  matched: number;
+  created_shell: number;
+  ambiguous: number;
+  unmatched: number;
+  unchanged: number;
+  failed: number;
+  skipped: number;
+  failures: { index: number; identifier?: string | null; reason: string }[];
+  conflicts: Record<string, unknown>[];
+  sources: MetadataSource[];
+  dry_run: boolean;
+  format: string;
+};
 export type Consistency = {
   consistent: boolean;
   checked_at: string;

@@ -4,8 +4,24 @@ import { ApiError, request, setCredential } from "../src/api";
 afterEach(() => {
   setCredential("");
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 describe("API boundary", () => {
+  it("uses the longer metadata timeout without changing the default request deadline", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => new Response("{}")),
+    );
+    await request(
+      "/api/metadata/import",
+      { method: "POST", body: new FormData() },
+      120000,
+    );
+    expect(timeout).toHaveBeenLastCalledWith(120000);
+    await request("/api/papers");
+    expect(timeout).toHaveBeenLastCalledWith(30000);
+  });
   it("recognizes an HTML gateway failure without pretending the API is online", async () => {
     vi.stubGlobal(
       "fetch",

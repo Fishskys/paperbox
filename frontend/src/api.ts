@@ -93,13 +93,14 @@ export function checkResponse(
 export async function request<T>(
   path: string,
   options: RequestInit = {},
+  timeoutMs = 30000,
 ): Promise<T> {
   try {
     const response = await fetch(path, {
       ...options,
       signal: options.signal
-        ? AbortSignal.any([options.signal, AbortSignal.timeout(30000)])
-        : AbortSignal.timeout(30000),
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
       headers: {
         Accept: "application/json",
         ...authHeaders(),

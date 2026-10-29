@@ -43,6 +43,7 @@ const LibraryPage = lazy(() => import("./pages/Library"));
 const HistoryPage = lazy(() => import("./pages/History"));
 const ReaderPage = lazy(() => import("./pages/Reader"));
 const ImportsPage = lazy(() => import("./pages/Imports"));
+const MetadataImportPage = lazy(() => import("./pages/MetadataImport"));
 const JobsPage = lazy(() => import("./pages/Jobs"));
 const DataCheckPage = lazy(() => import("./pages/DataCheck"));
 
@@ -68,6 +69,7 @@ const groups = [
     icon: Upload,
     items: [
       { label: "新建导入", path: "/imports/new" },
+      { label: "元数据导入", path: "/imports/metadata" },
       { label: "导入任务", path: "/imports/jobs" },
     ],
   },
@@ -257,6 +259,10 @@ function Workspace() {
                         element={<ReaderPage />}
                       />
                       <Route path="/imports/new" element={<ImportsPage />} />
+                      <Route
+                        path="/imports/metadata"
+                        element={<MetadataImportPage />}
+                      />
                       <Route path="/imports/jobs" element={<JobsPage />} />
                       <Route path="/system/status" element={<Status />} />
                       <Route path="/system/data" element={<DataCheckPage />} />
