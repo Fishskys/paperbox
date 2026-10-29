@@ -15,6 +15,7 @@
 | 方法 | 路径 | 行为 |
 |---|---|---|
 | GET | 空路径 | `limit` 1–200、`offset`；返回 generation、状态、图注、页码、坐标、原生与预览 URL、警告 |
+| GET | `/download` | 整篇 ZIP，`variant=native/preview/thumbnail/all`，默认 native；可用 generation_id 固定批次 |
 | GET | `/{figure_id}` | 当前批次可见图片详情 |
 | GET | `/{figure_id}/file` | `variant=native/preview/thumbnail`，默认 preview；预览和缩略图 `part` 从 1 开始；native 返回整份多页 PDF，忽略 part；`disposition=inline/attachment` |
 | POST | `/extract` | 可选 JSON `{"force":false}`；新任务或已有在途任务返回 202；源文件与选项未变的当前结果返回 200；force 创建新批次 |
@@ -22,6 +23,10 @@
 | DELETE | `/{figure_id}` | 隐藏并清理当前批次单图，取消在途重提取；同一图重复删除幂等；支持 dry_run |
 
 文件返回 MIME、Content-Length、ETag 和 UTF-8 文件名，支持 If-None-Match。每次访问重新检查可见性，包括条件 GET。URL 是相对 API 路径，客户端沿用现有凭据，不暴露 MinIO bucket/key、本机路径。
+
+ZIP 返回 `application/zip` 附件，包含所选格式全部 parts、每幅图的 `caption.txt` 和总清单 `manifest.json`。图片目录带 UUID，重复图号不覆盖。清单保留图号、图注、页码、质量警告和包内文件映射，不暴露对象 key。缺少所选预览时写明警告，已提取但无可见图片时返回仅有清单的 ZIP。尚未提取返回 409 `FIGURES_NOT_EXTRACTED`，其他无当前批次状态返回 409 `FIGURE_ARCHIVE_NOT_READY`。
+
+打包逐个流式读取并核验大小与 SHA256，使用内存上限 8 MiB 的临时缓冲，超过后落临时文件；总包大小受 `FIGURE_MAX_TEMP_BYTES` 限制，超限 413。文件缺失、损坏或存储失败分别返回 404、409、503，不返回半个 ZIP。发送前再次验证批次和删除 revision，变更返回 409。ZIP 不写回 MinIO，下载结束或中断时清理临时文件；使用 no-store，不支持单文件接口的 ETag/304。
 
 列表 `generation_id` 固定分页批次，切换后返回 409 `FIGURE_GENERATION_CHANGED`。状态区分 `not_extracted`、`queued/running`、`completed/partial`、`failed/cancelled`、`deleted`、`stale`；有旧结果时继续提供旧结果及在途 job_id。整批删除后可显式重新提取。编号保留来源值，不拿 ordinal 冒充图号；明确标为 Continued 的相邻续图按 parts 保留多页。
 

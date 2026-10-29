@@ -8,6 +8,8 @@
 
 ### Added
 
+- **整篇图片 ZIP 下载**：`GET /api/papers/{paper_id}/figures/download` 支持 native/preview/thumbnail/all，包含所有分部、独立图注和元数据清单；重复图号按 UUID 分目录，校验资产完整性并限制包大小，打包期间删除或切换批次则拒绝旧包。
+
 - **论文图片 API**：后台提取、列表/详情、原生区域 PDF/PNG/缩略图下载、强制重提取、单图与整批删除；保留图号、完整图注、页码和多页 parts，供独立 WebUI 消费。PDFFigures2 定位、PyMuPDF 导出，自动结果标记 needs_review，不承诺准确率门槛。
 - **图片任务与存储隔离**：版本化上传后原子发布，失败保留旧批次，删除取消在途任务，持久化清理重试，进程超时和渲染预算；原 PDF、正文及向量不改写。新增迁移 `f2a8c7d9e401`，默认关闭导入后自动提图，提供 dry-run 批量命令及隔离验收脚本。
 - **图片工具构建**：锁定 PDFFigures2 上游 commit，提供 Java 21 构建脚本及随附 JAR/JRE 的容器构建；对账报告以 `totals.figure_objects` 单独计数已登记图片批次。

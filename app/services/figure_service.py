@@ -190,7 +190,8 @@ def request_extraction(session, paper_id, *, force=False, retry_job=None):
     }, 202
 
 
-def _asset_map(session, identifiers):
+def assets_by_figure(session, identifiers):
+    """Load assets for API and archive serialization."""
     result = defaultdict(list)
     if identifiers:
         for asset in session.scalars(
@@ -200,7 +201,8 @@ def _asset_map(session, identifiers):
     return result
 
 
-def _serialize(figure, assets):
+def serialize_figure(figure, assets):
+    """Return public figure metadata without storage locations."""
     base = f"/api/papers/{figure.paper_id}/figures/{figure.id}/file"
     parts = []
     for original in figure.parts:
@@ -266,8 +268,8 @@ def list_figures(session, paper_id, *, limit=20, offset=0, generation_id=None):
         rows = list(
             session.scalars(query.order_by(Figure.ordinal).limit(limit).offset(offset))
         )
-        assets = _asset_map(session, [figure.id for figure in rows])
-        figures = [_serialize(figure, assets[figure.id]) for figure in rows]
+        assets = assets_by_figure(session, [figure.id for figure in rows])
+        figures = [serialize_figure(figure, assets[figure.id]) for figure in rows]
     state = (
         current.status
         if current
@@ -325,7 +327,7 @@ def get_figure(session, paper_id, figure_id):
 
 def detail(session, paper_id, figure_id):
     figure = get_figure(session, paper_id, figure_id)
-    return _serialize(figure, _asset_map(session, [figure.id])[figure.id])
+    return serialize_figure(figure, assets_by_figure(session, [figure.id])[figure.id])
 
 
 def download(session, paper_id, figure_id, *, variant="preview", part=1):
@@ -343,7 +345,7 @@ def download(session, paper_id, figure_id, *, variant="preview", part=1):
         raise FigureError(
             "FIGURE_ASSET_NOT_FOUND", "requested figure asset is unavailable", 404
         )
-    label = _serialize(figure, [])["display_name"]
+    label = serialize_figure(figure, [])["display_name"]
     return {
         "key": asset.object_key,
         "bucket": run.bucket,

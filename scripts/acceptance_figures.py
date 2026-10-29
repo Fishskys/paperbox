@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -215,6 +217,21 @@ def inside(pdf):
             }
             figure = first["figures"][0]
             assert figure["caption_text"] and figure["match_status"] == "needs_review"
+            archive = client.get(base + "/download", params={"variant": "all"})
+            assert archive.status_code == 200, archive.text
+            with zipfile.ZipFile(io.BytesIO(archive.content)) as packed:
+                manifest = json.loads(packed.read("manifest.json"))
+                assert manifest["generation_id"] == first["generation_id"]
+                assert len(manifest["figures"]) == 5
+                assert (
+                    len([name for name in packed.namelist() if name.endswith(".pdf")])
+                    == 5
+                )
+                assert (
+                    len([name for name in packed.namelist() if name.endswith(".png")])
+                    == 10
+                )
+                assert packed.testzip() is None
             for url in (
                 figure["native_url"],
                 figure["parts"][0]["preview_url"],
@@ -233,6 +250,12 @@ def inside(pdf):
             assert second["generation_id"] != first["generation_id"]
             assert (
                 client.get(
+                    base + "/download", params={"generation_id": first["generation_id"]}
+                ).status_code
+                == 409
+            )
+            assert (
+                client.get(
                     base, params={"generation_id": first["generation_id"]}
                 ).status_code
                 == 409
@@ -243,6 +266,7 @@ def inside(pdf):
             assert client.get(second["figures"][0]["native_url"]).status_code == 404
             assert client.delete(base).status_code == 200
             assert client.get(base).json()["total"] == 0
+            assert client.get(base + "/download").status_code == 409
             third = extract()
             assert third["total"] == 5
             assert (
@@ -268,6 +292,7 @@ def inside(pdf):
                         "extraction_seconds": timings,
                         "original_unchanged": True,
                         "cleanup": True,
+                        "zip_download": True,
                     }
                 )
             )

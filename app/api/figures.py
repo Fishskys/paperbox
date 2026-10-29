@@ -6,6 +6,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.core.security import require_read, require_write
 from app.db.session import get_db
@@ -16,7 +17,7 @@ from app.schemas.figure import (
     FigureListOut,
     FigureDeleteOut,
 )
-from app.services import figure_service as figures, object_storage
+from app.services import figure_service as figures, figure_archive, object_storage
 
 router = APIRouter(
     prefix="/api/papers/{paper_id}/figures",
@@ -75,6 +76,51 @@ def delete_all(
     paper_id: str, dry_run: bool = False, session: Session = Depends(get_db)
 ):
     return _call(figures.delete_figures, session, paper_id, dry_run=dry_run)
+
+
+@router.get(
+    "/download",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {
+                "application/zip": {"schema": {"type": "string", "format": "binary"}}
+            }
+        }
+    },
+)
+def download_archive(
+    paper_id: str,
+    variant: Literal["native", "preview", "thumbnail", "all"] = "native",
+    generation_id: str | None = None,
+    session: Session = Depends(get_db),
+):
+    archive = _call(
+        figure_archive.build,
+        session,
+        paper_id,
+        variant=variant,
+        generation_id=generation_id,
+    )
+
+    def stream():
+        try:
+            while block := archive.content.read(64 * 1024):
+                yield block
+        finally:
+            archive.content.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/zip",
+        headers={
+            "Content-Length": str(archive.size_bytes),
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(archive.filename)}",
+            "Cache-Control": "private, no-store",
+            "X-Paperbox-Figure-Generation": archive.generation_id,
+        },
+        background=BackgroundTask(archive.content.close),
+    )
 
 
 @router.get("/{figure_id}", response_model=FigureOut)

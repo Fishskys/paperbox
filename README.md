@@ -170,6 +170,7 @@ paperbox/
 | 论文 | GET | `/api/papers/{paper_id}/file` | 下载 PDF 原件 |
 | 图片 | GET | `/api/papers/{paper_id}/figures`、`/figures/{figure_id}` | 图片列表、图注、页码与预览地址 |
 | 图片 | GET | `/api/papers/{paper_id}/figures/{figure_id}/file` | 原生区域 PDF、PNG 或缩略图 |
+| 图片 | GET | `/api/papers/{paper_id}/figures/download` | 整篇图片 ZIP，支持 native/preview/thumbnail/all，附图注与清单 |
 | 图片 | POST | `/api/papers/{paper_id}/figures/extract` | 后台提取，force 重提取 |
 | 图片 | DELETE | `/api/papers/{paper_id}/figures`、`/figures/{figure_id}` | 整批或单图删除 |
 | 论文 | GET | `/api/papers/{paper_id}/degradations` | 该论文的解析降级记录 |
