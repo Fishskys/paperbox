@@ -89,6 +89,18 @@ def _identity_without_token() -> AuthIdentity | None:
     return api_key_service.anonymous_reader() if settings.reads_are_public else None
 
 
+def require_identity(request: Request) -> AuthIdentity:
+    """Resolve the effective identity without accepting an invalid public-read key."""
+    identity, token_present = _resolve_identity(request)
+    if identity is not None:
+        return identity
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN if token_present else status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid API key" if token_present else "Missing API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def require_role(minimum: str):
     """Build a FastAPI dependency enforcing ``minimum`` (tiers are monotonic).
 
@@ -156,6 +168,7 @@ require_write = require_role(ROLE_WRITE)
 require_admin = require_role(ROLE_ADMIN)
 
 __all__ = [
+    "require_identity",
     "API_KEY_HEADER",
     "extract_api_key",
     "require_admin",

@@ -1,4 +1,14 @@
 // The fields consumed by the WebUI; the source contract is app/schemas/.
+export type Capability = "read" | "write" | "admin";
+export type AuthContext = {
+  prefix: string;
+  role: Capability;
+  source: string;
+  is_anonymous: boolean;
+  auth_enabled: boolean;
+  read_access: "public" | "key";
+  capabilities: Record<Capability, boolean>;
+};
 export type Paper = {
   paper_id: string;
   title: string;

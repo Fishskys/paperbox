@@ -122,6 +122,22 @@ def role_at_least(role: str, minimum: str) -> bool:
     return _ROLE_ORDER.get(role, -1) >= _ROLE_ORDER.get(minimum, len(_ROLE_ORDER))
 
 
+def describe_identity(identity: AuthIdentity) -> dict:
+    """Public authentication context; never include credential material."""
+    return {
+        "prefix": identity.prefix,
+        "role": identity.role,
+        "source": identity.source,
+        "is_anonymous": identity.is_anonymous,
+        "auth_enabled": settings.auth_enabled,
+        "read_access": settings.auth_read_access,
+        "capabilities": {
+            tier: role_at_least(identity.role, tier)
+            for tier in (ROLE_READ, ROLE_WRITE, ROLE_ADMIN)
+        },
+    }
+
+
 def hash_key(full_key: str) -> str:
     """``sha256`` of the full key — the only form ever persisted."""
     return hashlib.sha256(full_key.encode()).hexdigest()

@@ -199,6 +199,7 @@ paperbox/
 | 元数据 | POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只关掉这条分歧 |
 | 元数据 | GET | `/api/metadata/review` | 待复核清单（冲突 / 歧义） |
 | 元数据 | POST | `/api/metadata/import` | 导入外部元数据（IEEE raw / CSL / 通用结构，支持 JSON 和 JSONL） |
+| 鉴权 | GET | `/api/auth/context` | 当前有效身份、角色与权限能力；无效凭证明确拒绝，不返回密钥 |
 | 元数据 | POST | `/api/metadata/apply` | 提交复核决定 |
 | 元数据 | POST | `/api/metadata/sources/{source_id}/attach` | 把来源记录挂到指定论文 |
 | **agent** | **POST** | **`/mcp`** | **MCP Streamable HTTP 端点**（10 个工具；默认关闭，需 `MCP_ENABLED` + Host 白名单；**不在 `/docs` 里**，见架构文档 11） |

@@ -20,6 +20,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
 from app.api import ingestion as ingestion_api
+from app.api import auth as auth_api
 from app.api import jobs as jobs_api
 from app.api import figures as figures_api
 from app.api import health as health_api
@@ -301,6 +302,7 @@ class AuthContextMiddleware:
 app.add_middleware(AuthContextMiddleware)
 
 app.include_router(health_api.router)
+app.include_router(auth_api.router)
 app.include_router(consistency_api.router)
 app.include_router(ingestion_api.router)
 app.include_router(jobs_api.router)

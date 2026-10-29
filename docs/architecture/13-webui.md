@@ -34,6 +34,10 @@ PDF 上传自动尝试最多三次，只重试明确拒绝的 429；网络结果
 
 ## 凭证与错误
 
+`GET /api/auth/context` 返回有效身份的 prefix、role、source、is_anonymous、auth_enabled、read_access 及 read/write/admin 能力。
+接口复用现有鉴权身份，无效凭证始终返回 403；匿名公开读返回 read 能力，要求密钥时缺凭证返回 401，关闭鉴权时保持匿名 admin 行为。
+响应禁止缓存且不含密钥或哈希；普通公开读接口的既有权限语义不变。
+
 连接设置中的 API key 只保留在当前页面内存中，刷新后失效；通过 `Authorization: Bearer` 请求头发送。
 本机开发也可在被 Git 忽略的 `frontend/.env.local` 设置 `PAPERBOX_API_KEY`，由 Vite 开发/预览代理在服务端携带，无需在浏览器中输入。
 自动携带仅限本机回环连接、回环 Host 和同源请求；跨源请求或远程客户端不使用本地密钥。浏览器显式提供的凭证优先，错误凭证不会被替换。
