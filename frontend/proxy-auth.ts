@@ -7,6 +7,7 @@ type ClientRequest = {
 };
 
 export function canUseLocalKey(request: ClientRequest): boolean {
+  if (request.headers["x-paperbox-auth-mode"] === "explicit") return false;
   if (request.headers.authorization || request.headers["x-api-key"])
     return false;
   if (

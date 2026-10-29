@@ -26,6 +26,7 @@ describe("local proxy credential", () => {
     ).toBe(true);
   });
   it("preserves explicitly supplied credentials, including invalid ones", () => {
+    expect(canUseLocalKey(request({ "x-paperbox-auth-mode": "explicit" }))).toBe(false);
     expect(
       canUseLocalKey(request({ authorization: "Bearer explicit-test-key" })),
     ).toBe(false);

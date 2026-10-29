@@ -1,6 +1,13 @@
 import { useMemo, useSyncExternalStore } from "react";
 
 let credential = "";
+let explicitMode = false;
+try {
+  explicitMode =
+    sessionStorage.getItem("paperbox:credential-mode") === "explicit";
+} catch {
+  /* Storage may be unavailable. */
+}
 let revision = 0;
 let connection: "unknown" | "online" | "offline" = "unknown";
 const listeners = new Set<() => void>();
@@ -21,19 +28,37 @@ export function useCredentialRevision() {
 }
 export function setCredential(value: string) {
   credential = value.trim();
+  explicitMode = !!credential;
+  try {
+    if (explicitMode)
+      sessionStorage.setItem("paperbox:credential-mode", "explicit");
+    else sessionStorage.removeItem("paperbox:credential-mode");
+  } catch {
+    /* The in-memory credential remains usable. */
+  }
   revision++;
   notify();
 }
+function credentialHeaders(
+  key: string,
+  manual: boolean,
+): Record<string, string> {
+  return key
+    ? {
+        Authorization: `Bearer ${key}`,
+        "X-Paperbox-Auth-Mode": "explicit",
+      }
+    : manual
+      ? { "X-Paperbox-Auth-Mode": "explicit" }
+      : {};
+}
 export function authHeaders(): Record<string, string> {
-  return credential ? { Authorization: `Bearer ${credential}` } : {};
+  return credentialHeaders(credential, explicitMode);
 }
 export function useAuthHeaders() {
   const key = useSyncExternalStore(subscribe, () => credential);
-  return useMemo(() => {
-    const headers: Record<string, string> = {};
-    if (key) headers.Authorization = `Bearer ${key}`;
-    return headers;
-  }, [key]);
+  const manual = useSyncExternalStore(subscribe, () => explicitMode);
+  return useMemo(() => credentialHeaders(key, manual), [key, manual]);
 }
 export function markConnection(value: typeof connection) {
   connection = value;

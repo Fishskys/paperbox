@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, request, setCredential } from "../src/api";
+import { ApiError, authHeaders, request, setCredential } from "../src/api";
 
 afterEach(() => {
   setCredential("");
@@ -7,6 +7,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("API boundary", () => {
+  it("stores only a credential mode marker and clearing the key restores proxy mode", () => {
+    const storage = { setItem: vi.fn(), removeItem: vi.fn() };
+    vi.stubGlobal("sessionStorage", storage);
+    setCredential("test-only-explicit-key");
+    expect(storage.setItem).toHaveBeenCalledWith(
+      "paperbox:credential-mode",
+      "explicit",
+    );
+    expect(authHeaders()["X-Paperbox-Auth-Mode"]).toBe("explicit");
+    setCredential("");
+    expect(storage.removeItem).toHaveBeenCalledWith("paperbox:credential-mode");
+    expect(authHeaders()).toEqual({});
+  });
   it("uses the longer metadata timeout without changing the default request deadline", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.stubGlobal(
