@@ -63,7 +63,7 @@ test("search evidence opens a real rendered PDF page and returns to the query", 
   await expect(page.getByRole("spinbutton", { name: "阅读页码" })).toHaveValue(
     "3",
   );
-  const canvas = page.locator(".react-pdf__Page canvas");
+  const canvas = page.locator('[data-page-number="3"] canvas');
   await expect(canvas).toBeVisible();
   await expect
     .poll(() =>
@@ -115,6 +115,53 @@ test("search evidence opens a real rendered PDF page and returns to the query", 
     "/reading/papers/paper-1?page=3",
   );
   expect(errors).toEqual([]);
+});
+
+test("continuous reading updates the page and supports jumps without adding history", async ({
+  page,
+}) => {
+  await page.route("**/api/papers/paper-1", (route) =>
+    route.fulfill({ json: paper }),
+  );
+  await page.route("**/api/papers/paper-1/file", (route) =>
+    route.fulfill({
+      contentType: "application/pdf",
+      body: readFileSync(resolve("../tests/fixtures/smoke_sample.pdf")),
+    }),
+  );
+  await page.goto("/reading/papers/paper-1?page=1");
+  const viewport = page.locator(".pdf-viewport");
+  await expect(page.locator('[data-page-number="1"] canvas')).toBeVisible();
+  const historyLength = await page.evaluate(() => history.length);
+  await viewport.evaluate((element) => {
+    const sheet = element.querySelector('[data-page-number="2"]')!;
+    element.scrollTop +=
+      sheet.getBoundingClientRect().top -
+      element.getBoundingClientRect().top -
+      18;
+  });
+  await expect(page).toHaveURL(/page=2/);
+  await expect(page.getByRole("spinbutton", { name: "阅读页码" })).toHaveValue(
+    "2",
+  );
+  await expect(page.locator('[data-page-number="2"] canvas')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("paperbox:readings") || "[]")[0]
+            ?.page,
+      ),
+    )
+    .toBe(2);
+  await page.getByRole("button", { name: "上一页", exact: true }).click();
+  await expect(page).toHaveURL(/page=1/);
+  await expect
+    .poll(() => viewport.evaluate((element) => element.scrollTop))
+    .toBe(0);
+  expect(await page.evaluate(() => history.length)).toBe(historyLength);
+  await page.reload();
+  await expect(page.locator('[data-page-number="1"] canvas')).toBeVisible();
 });
 
 test("mobile search results fit the work area", async ({ page }) => {

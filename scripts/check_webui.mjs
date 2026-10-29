@@ -36,7 +36,7 @@ try {
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator(".ant-table-tbody .paper-cell a").first().click();
-  const canvas = page.locator(".react-pdf__Page canvas");
+  const canvas = page.locator(".react-pdf__Page canvas").first();
   await canvas.waitFor({ state: "visible", timeout: 30000 });
   await page.waitForFunction(() => {
     const element = document.querySelector(".react-pdf__Page canvas");

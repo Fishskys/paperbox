@@ -11,7 +11,8 @@ import {
   Plus,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
+import { Document, pdfjs } from "react-pdf";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
   useLocation,
   useNavigate,
@@ -26,6 +27,7 @@ import { downloadPaper } from "../files";
 import { remember } from "../history";
 import { useResource } from "../hooks";
 import { positivePage } from "../search-model";
+import PdfPages from "../PdfPages";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -54,6 +56,7 @@ export default function Reader() {
     loading,
   } = useResource<Paper>(`/api/papers/${encodeURIComponent(paperId)}`);
   const [pages, setPages] = useState(0);
+  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pdfError, setPdfError] = useState("");
   const [reload, setReload] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -74,6 +77,7 @@ export default function Reader() {
   const from = (location.state as { from?: string } | null)?.from || "/library";
   useEffect(() => {
     setPages(0);
+    setPdf(null);
     setPdfError("");
   }, [paperId, revision, reload]);
   useEffect(() => {
@@ -106,7 +110,6 @@ export default function Reader() {
       { page: String(Math.min(pages, Math.max(1, value))) },
       { replace: true, state: location.state },
     );
-    container.current?.scrollTo(0, 0);
   }
   async function download() {
     try {
@@ -218,18 +221,24 @@ export default function Reader() {
             options={options}
             loading={<div className="pdf-loading">正在加载原文…</div>}
             error=""
-            onLoadSuccess={({ numPages }) => {
-              setPages(numPages);
+            onLoadSuccess={(document) => {
+              setPages(document.numPages);
+              setPdf(document);
               setPdfError("");
             }}
             onLoadError={(error) => setPdfError(error.message)}
           >
-            <Page
-              pageNumber={page}
-              width={Math.min(width, 1100) * zoom}
-              loading={<div className="pdf-loading">正在渲染页面…</div>}
-              onRenderError={(error) => setPdfError(error.message)}
-            />
+            {pdf && (
+              <PdfPages
+                key={`${paperId}-${revision}-${reload}`}
+                pdf={pdf}
+                page={page}
+                width={Math.min(width, 1100) * zoom}
+                viewport={container}
+                onPageChange={go}
+                onError={setPdfError}
+              />
+            )}
           </Document>
         )}
       </div>

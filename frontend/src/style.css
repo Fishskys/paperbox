@@ -657,6 +657,20 @@ h1 {
 .react-pdf__Page {
   box-shadow: 0 2px 9px #00000013;
 }
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.pdf-sheet {
+  flex-shrink: 0;
+  background: white;
+  overflow: hidden;
+}
+.pdf-viewport {
+  overflow-anchor: none;
+}
 .pdf-loading {
   padding: 60px 20px;
   text-align: center;
