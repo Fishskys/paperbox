@@ -59,6 +59,7 @@ class PaperListOut(BaseModel):
     limit: int = 20
     offset: int = 0
     papers: list[PaperOut] = Field(default_factory=list)
+    facets: dict[str, list[dict[str, Any]]] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class PaperChunkOut(BaseModel):

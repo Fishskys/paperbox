@@ -1,4 +1,5 @@
 export type SearchHistory = {
+  path?: string;
   id: string;
   query: string;
   search: string;

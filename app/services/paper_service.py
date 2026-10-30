@@ -421,6 +421,9 @@ def list_papers(
     paper_type: Sequence[str] | None = None,
     tag: Sequence[str] | None = None,
     author: Sequence[str] | None = None,
+    scope: str = "title",
+    sort: str = "relevance",
+    facets_out: dict | None = None,
 ) -> tuple[list[Paper], int]:
     """Return ``(papers, total)`` for the browsing/search endpoint.
 
@@ -453,6 +456,10 @@ def list_papers(
     # Imported here: ``metadata_tags`` and ``venue_service`` both import this
     # module at module level, so a top-level import would be circular.
     from app.services import metadata_tags, venue_service
+    from app.services import catalog_service
+
+    if scope not in catalog_service.SCOPES or sort not in catalog_service.SORTS:
+        raise ValueError("unsupported metadata scope or sort")
 
     statement = _paper_query().where(Paper.deleted_at.is_(None))
     if status:
@@ -468,10 +475,7 @@ def list_papers(
         # wildcard.
         words = [word for word in re.split(r"[\s\-]+", query.strip()) if word]
         for word in words:
-            escaped = word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            statement = statement.where(
-                Paper.title.ilike(f"%{escaped}%", escape="\\")
-            )
+            statement = statement.where(catalog_service.metadata_predicate(scope, word))
     venue_keys = [
         venue_service.normalize_venue_name(name)
         for name in (venue or [])
@@ -523,6 +527,8 @@ def list_papers(
     total = session.execute(
         select(func.count()).select_from(statement.order_by(None).subquery())
     ).scalar_one()
+    if facets_out is not None:
+        facets_out.update(catalog_service.metadata_facets(session, statement))
     # Relevance ordering when a title query is present: a portable term-frequency
     # score -- how many times the query words occur in the title. Both PostgreSQL
     # and SQLite support length()/replace()/lower(), so the ordering is the same
@@ -543,6 +549,13 @@ def list_papers(
         order_clause = (freq.desc(), Paper.created_at.desc(), Paper.id.asc())
     else:
         order_clause = (Paper.created_at.desc(), Paper.id.asc())
+    if sort in ("year_desc", "year_asc"):
+        year_order = Paper.year.desc() if sort == "year_desc" else Paper.year.asc()
+        order_clause = (year_order.nulls_last(), Paper.created_at.desc(), Paper.id)
+    elif sort == "title":
+        order_clause = (func.lower(Paper.title), Paper.id)
+    elif sort == "newest":
+        order_clause = (Paper.created_at.desc(), Paper.id)
     rows = (
         session.execute(
             statement.order_by(*order_clause)

@@ -56,7 +56,8 @@ const groups = [
     capability: "read" as const,
     icon: Search,
     items: [
-      { label: "论文搜索", path: "/search" },
+      { label: "常规检索", path: "/search/standard" },
+      { label: "智能检索", path: "/search" },
       { label: "检索记录", path: "/search/history" },
     ],
   },
@@ -280,6 +281,7 @@ function Workspace() {
                     <Routes>
                       <Route element={<RequireAccess capability="read" />}>
                         <Route path="/search" element={<SearchPage />} />
+                        <Route path="/search/standard" element={<LibraryPage title="常规检索" conventional />} />
                         <Route
                           path="/search/history"
                           element={

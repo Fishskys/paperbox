@@ -52,7 +52,7 @@ export default function History({ kind }: { kind: "searches" | "readings" }) {
               }}
               to={
                 "query" in item
-                  ? `/search?${item.search}`
+                  ? `${item.path === "/search/standard" ? item.path : "/search"}?${item.search}`
                   : readerPath(item.id, item.page)
               }
             >

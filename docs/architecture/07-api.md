@@ -8,6 +8,10 @@
 
 ## 1. 职责边界（做什么 / 不做什么）
 
+`GET /api/papers` 的常规检索参数：`scope=all|title|authors|venue|doi|arxiv_id|abstract`（默认 title），
+`sort=relevance|newest|year_desc|year_asc|title`，`facets=true` 返回当前查询的作者、刊物、年份和类型论文计数。
+该接口直接读取当前元数据，保持现有过滤、`limit`/`offset` 和精确总数，不进入模型流水线。
+
 做什么：
 
 - 把 HTTP 请求翻译成服务层调用：路由声明、请求体解析、Bearer 鉴权、错误码映射、响应模型序列化。

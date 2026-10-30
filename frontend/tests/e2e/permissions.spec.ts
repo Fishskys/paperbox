@@ -32,7 +32,7 @@ for (const role of ["read", "write", "admin"] as const) {
       await page.goto("/system/data");
       await expect(page).toHaveURL(/\/search$/);
       await expect(
-        page.getByRole("heading", { name: "论文搜索", exact: true }),
+        page.getByRole("heading", { name: "智能检索", exact: true }),
       ).toBeVisible();
     }
     if (role === "read") {

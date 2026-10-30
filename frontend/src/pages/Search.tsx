@@ -112,7 +112,7 @@ export default function Search() {
   return (
     <>
       <PageHeader
-        title="论文搜索"
+        title="智能检索"
         description="发现研究，回到证据"
         actions={
           <Link className="quiet-link" to="/search/history">

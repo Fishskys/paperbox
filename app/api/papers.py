@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import (
@@ -86,6 +87,9 @@ def list_papers(
     offset: int = 0,
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None, description="case-insensitive title substring"),
+    scope: Literal["all", "title", "authors", "venue", "doi", "arxiv_id", "abstract"] = "title",
+    sort: Literal["relevance", "newest", "year_desc", "year_asc", "title"] = "relevance",
+    facets: bool = False,
     venue: list[str] | None = Query(default=None, description="venue name (repeatable)"),
     year_from: int | None = Query(default=None, description="inclusive lower bound on year"),
     year_to: int | None = Query(default=None, description="inclusive upper bound on year"),
@@ -107,6 +111,7 @@ def list_papers(
     so unlike the search filters they see a metadata change immediately (no
     reindex needed).
     """
+    facet_values = {} if facets else None
     rows, total = papers.list_papers(
         session,
         limit=limit,
@@ -119,8 +124,10 @@ def list_papers(
         paper_type=paper_type,
         tag=tag,
         author=author,
+        scope=scope, sort=sort, facets_out=facet_values,
     )
     return PaperListOut(
+        facets=facet_values,
         total=total,
         limit=limit,
         offset=offset,

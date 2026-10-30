@@ -90,6 +90,11 @@ class Paper(TimestampMixin, Base):
         ),
         Index("ix_papers_created_at", "created_at"),
         Index("ix_papers_venue_year", "venue_year"),
+        Index("ix_papers_live_catalog", "id", postgresql_include=["year", "paper_type", "venue_id"],
+              postgresql_where=text("deleted_at IS NULL")).ddl_if(dialect="postgresql"),
+        *(Index(f"ix_papers_{column}_trgm", column, postgresql_using="gin",
+                postgresql_ops={column: "gin_trgm_ops"}, postgresql_where=text("deleted_at IS NULL"))
+          .ddl_if(dialect="postgresql") for column in ("title", "abstract", "doi", "arxiv_id")),
         # Only live papers claim a fingerprint: deleting a paper releases it so the
         # same document can be ingested again (plan sections 5.1 and 23). The
         # deleted row keeps its value for audit/recovery.
@@ -207,6 +212,7 @@ class Author(TimestampMixin, Base):
         # ``0de3ab5e24dc`` merges the duplicates that existed before the index).
         UniqueConstraint("normalized_name", name="uq_authors_normalized_name"),
         Index("ix_authors_name", "name"),
+        Index("ix_authors_name_trgm", "name", postgresql_using="gin", postgresql_ops={"name": "gin_trgm_ops"}).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -230,6 +236,7 @@ class Author(TimestampMixin, Base):
 # --------------------------------------------------------------------------- #
 class Venue(TimestampMixin, Base):
     __tablename__ = "venues"
+    __table_args__ = (Index("ix_venues_name_trgm", "name", postgresql_using="gin", postgresql_ops={"name": "gin_trgm_ops"}).ddl_if(dialect="postgresql"),)
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=new_uuid

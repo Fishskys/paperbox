@@ -56,6 +56,7 @@ export type ReextractReport = {
   errors: { paper_id: string; error: string }[];
 };
 export type PaperList = {
+  facets?: Record<string, { key: string; count: number }[]> | null;
   total: number;
   limit: number;
   offset: number;
