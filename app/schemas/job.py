@@ -13,6 +13,7 @@ class JobOut(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     job_id: str
+    kind: str = "ingest"
     paper_id: str | None = None
     stage: str
     progress: float = 0.0

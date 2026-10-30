@@ -15,6 +15,9 @@ export const identity = (role: "read" | "write" | "admin") => ({
 // Existing workflow tests run as an administrator without consulting the live API.
 export const test = base.extend({
   page: async ({ page }, use) => {
+    await page.route("**/api/jobs/queue", (route) => route.fulfill({ json: {
+      started: true, concurrency: 2, running: 0, queued: 0, queued_high: 0, queued_low: 0,
+    } }));
     await page.route("**/api/auth/context", (route) =>
       route.fulfill({ json: identity("admin") }),
     );

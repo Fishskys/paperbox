@@ -1,12 +1,13 @@
-import { App, Button, Drawer, Progress, Select, Table, Tooltip } from "antd";
+import { Alert, App, Button, Drawer, Input, Progress, Select, Table, Tooltip } from "antd";
 import { ArrowUpRight, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { errorMessage, post, request, useCredentialRevision } from "../api";
 import { Failure, formatTime, PageHeader, Stage } from "../components";
-import type { Job, JobList } from "../contracts";
+import type { Job, JobList, QueueSnapshot } from "../contracts";
 import { useResource, useVisible } from "../hooks";
 import { positivePage, readerPath } from "../search-model";
+import { jobDuration, jobKind } from "../job-model";
 
 const stages = [
   "RECEIVED",
@@ -44,6 +45,7 @@ export default function Jobs() {
       : null,
     refresh,
   );
+  const queue = useResource<QueueSnapshot>(visible ? "/api/jobs/queue" : null, refresh);
   useEffect(() => {
     const controller = new AbortController();
     const query = new URLSearchParams({
@@ -54,6 +56,8 @@ export default function Jobs() {
     });
     const stage = new URLSearchParams(encoded).get("stage");
     if (stage) query.set("stage", stage);
+    const paperId = new URLSearchParams(encoded).get("paper_id");
+    if (paperId) query.set("paper_id", paperId);
     setState((previous) =>
       previous.query === encoded
         ? { ...previous, loading: true, error: undefined }
@@ -88,12 +92,14 @@ export default function Jobs() {
     if (
       !visible ||
       state.error ||
-      !(state.data?.jobs.some(active) || (detail.data && active(detail.data)))
+      !(state.data?.jobs.some(active) ||
+        (params.get("job") && detail.data && active(detail.data)) ||
+        (!queue.error && queue.data && (queue.data.running > 0 || queue.data.queued > 0)))
     )
       return;
     const timer = setTimeout(() => setRefresh((v) => v + 1), 3000);
     return () => clearTimeout(timer);
-  }, [visible, state.data, state.error, detail.data]);
+  }, [visible, state.data, state.error, detail.data, params, queue.data, queue.error]);
   async function retry(job: Job) {
     setRetrying(job.job_id);
     try {
@@ -128,6 +134,20 @@ export default function Jobs() {
         }
       />
       <div className="list-toolbar">
+        <Input.Search
+          aria-label="按论文 ID 筛选任务"
+          placeholder="论文 ID"
+          key={params.get("paper_id") || "all-papers"}
+          defaultValue={params.get("paper_id") || ""}
+          allowClear
+          onSearch={(value) => {
+            const next = new URLSearchParams(params);
+            if (value.trim()) next.set("paper_id", value.trim());
+            else next.delete("paper_id");
+            next.delete("page");
+            setParams(next);
+          }}
+        />
         <Select
           aria-label="任务阶段"
           value={params.get("stage") || ""}
@@ -147,6 +167,17 @@ export default function Jobs() {
           }}
         />
       </div>
+      {queue.error && <Failure message={`队列状态：${queue.error}`} />}
+      {queue.data && !queue.error && (
+        <div className="data-summary" aria-label="任务队列状态">
+          <span>运行中 <strong>{queue.data.running}</strong></span>
+          <span>排队中 <strong>{queue.data.queued}</strong></span>
+          <span>交互队列 <strong>{queue.data.queued_high}</strong></span>
+          <span>批量队列 <strong>{queue.data.queued_low}</strong></span>
+          <span>并发上限 <strong>{queue.data.concurrency}</strong></span>
+        </div>
+      )}
+      {queue.data && !queue.data.started && !queue.error && <Alert type="warning" showIcon title="任务队列尚未启动" />}
       {state.error && (
         <Failure message={state.error} retry={() => setRefresh((v) => v + 1)} />
       )}
@@ -157,10 +188,12 @@ export default function Jobs() {
         loading={state.loading && !state.data}
         scroll={{ x: 750 }}
         pagination={{
+          placement: ["topEnd", "bottomEnd"],
           current: page,
           pageSize: 20,
           total: state.data?.total || 0,
           showSizeChanger: false,
+          showQuickJumper: true,
           onChange: (value) => {
             const next = new URLSearchParams(params);
             next.set("page", String(value));
@@ -182,6 +215,7 @@ export default function Jobs() {
                   {job.job_id.slice(0, 12)}
                 </Button>
                 <p>
+                  {job.error_code && <code>{job.error_code}: </code>}
                   {job.error_message ||
                     (job.paper_id
                       ? `论文 ${job.paper_id.slice(0, 8)}`
@@ -190,6 +224,7 @@ export default function Jobs() {
               </div>
             ),
           },
+          { title: "类型", key: "kind", width: 110, render: (_, job) => jobKind(job.kind) },
           {
             title: "阶段",
             dataIndex: "stage",
@@ -264,17 +299,29 @@ export default function Jobs() {
           <div className="paper-info">
             <h3>任务 ID</h3>
             <p>{detail.data.job_id}</p>
+            <h3>类型</h3>
+            <p>{jobKind(detail.data.kind)}</p>
             <Stage value={detail.data.stage} />
             <Progress
               percent={Math.max(0, Math.min(100, detail.data.progress))}
             />
             <h3>更新时间</h3>
             <p>{formatTime(detail.data.updated_at)}</p>
+            <h3>创建时间</h3>
+            <p>{formatTime(detail.data.created_at)}</p>
+            <h3>完成时间</h3>
+            <p>{formatTime(detail.data.finished_at)}</p>
+            <h3>总耗时（含排队）</h3>
+            <p>{jobDuration(detail.data)}</p>
+            {detail.data.error_code && <p>错误码：<code>{detail.data.error_code}</code></p>}
             {detail.data.error_message && (
               <Failure message={detail.data.error_message} />
             )}
             {detail.data.paper_id && (
-              <Link to={readerPath(detail.data.paper_id)}>打开论文</Link>
+              <div className="metadata-actions">
+                <Link to={`/manage/library?paper=${encodeURIComponent(detail.data.paper_id)}`}>管理论文</Link>
+                {detail.data.stage === "COMPLETED" && <Link to={readerPath(detail.data.paper_id)}>打开论文</Link>}
+              </div>
             )}
           </div>
         )}

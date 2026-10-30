@@ -341,6 +341,7 @@ def serialize_job(job: IngestionJob) -> dict:
     """Shape a job row for :class:`app.schemas.job.JobOut`."""
     return {
         "job_id": job.id,
+        "kind": job.kind,
         "paper_id": job.paper_id,
         "stage": job.stage,
         "progress": float(job.progress or 0.0),

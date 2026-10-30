@@ -41,11 +41,12 @@ def client(session_factory):
         app.dependency_overrides.clear()
 
 
-def make_job(session_factory, *, stage="COMPLETED", minutes=0, paper_id=None) -> str:
+def make_job(session_factory, *, stage="COMPLETED", minutes=0, paper_id=None, kind="ingest") -> str:
     """Insert one job whose ``created_at`` orders it against its siblings."""
     session = session_factory()
     try:
         job = IngestionJob(
+            kind=kind,
             paper_id=paper_id,
             stage=stage,
             progress=100.0 if stage == "COMPLETED" else 0.0,
@@ -62,6 +63,13 @@ def make_job(session_factory, *, stage="COMPLETED", minutes=0, paper_id=None) ->
 # --------------------------------------------------------------------------- #
 # offset: the three jobs are oldest -> newest, the endpoint answers newest first
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("kind", ["ingest", "reindex", "figures"])
+def test_job_kind_is_reported_in_list_and_detail(client, session_factory, kind):
+    job_id = make_job(session_factory, kind=kind)
+    assert client.get(f"/api/jobs/{job_id}").json()["kind"] == kind
+    assert client.get("/api/jobs").json()["jobs"][0]["kind"] == kind
+
+
 def test_offset_walks_the_history_newest_first(client, session_factory):
     oldest = make_job(session_factory, minutes=0)
     middle = make_job(session_factory, minutes=1)
@@ -88,6 +96,10 @@ def test_an_offset_past_the_end_is_empty_not_an_error(client, session_factory):
 
 def test_a_negative_offset_is_rejected(client):
     assert client.get("/api/jobs", params={"offset": -1}).status_code == 422
+
+
+def test_invalid_paper_id_is_rejected_before_database_access(client):
+    assert client.get("/api/jobs", params={"paper_id": "not-a-uuid"}).status_code == 422
 
 
 # --------------------------------------------------------------------------- #

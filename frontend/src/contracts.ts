@@ -75,6 +75,7 @@ export type SearchResponse = {
 };
 export type Job = {
   job_id: string;
+  kind?: string;
   paper_id?: string | null;
   stage: string;
   progress: number;
@@ -89,6 +90,14 @@ export type JobList = {
   limit: number;
   offset: number;
   jobs: Job[];
+};
+export type QueueSnapshot = {
+  started: boolean;
+  concurrency: number;
+  running: number;
+  queued: number;
+  queued_high: number;
+  queued_low: number;
 };
 export type Accepted = {
   job_id: string;

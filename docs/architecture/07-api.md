@@ -40,9 +40,9 @@
 | POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | write | — | `app/api/ingestion.py` 的 `ingest_dir()` |
 | POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | write | — | `app/api/ingestion.py` 的 `ingest_file()` |
 | GET | `/api/jobs/queue` | 队列深度快照 | read | — | `app/api/jobs.py` |
-| GET | `/api/jobs/{job_id}` | 单作业阶段/进度 | read | — | `app/api/jobs.py` |
+| GET | `/api/jobs/{job_id}` | 单作业类型（`kind`）、阶段、进度与结构化失败信息 | read | — | `app/api/jobs.py` |
 | POST | `/api/jobs/{job_id}/retry` | 重驱动 FAILED 作业（202） | write | — | `app/api/jobs.py` |
-| GET | `/api/jobs` | 最近作业列表 | read | `limit`（默认 20，无上下界） | `app/api/jobs.py` |
+| GET | `/api/jobs` | 最近作业列表，条目含真实 `kind` | read | `limit`（1..200，默认 20）、`offset`、`stage`、`paper_id`（UUID；非法值 422） | `app/api/jobs.py` |
 | GET | `/api/papers` | 论文列表（元数据搜索）；有 `q` 时按**相关度**排序，否则最新优先 | read | `limit`、`offset`、`status`、`q`、`venue`、`year_from`、`year_to`、`paper_type`、`tag`、`author`（可重复，AND；按 `authors.normalized_name` 匹配） | `app/api/papers.py` |
 | GET | `/api/papers/{paper_id}` | 单篇元数据 | read | — | `app/api/papers.py` 的 `list_papers()` |
 | GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | read | — | `app/api/papers.py` 的 `get_paper()` |

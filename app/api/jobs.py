@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -90,7 +92,7 @@ def list_jobs(
     stage: str | None = Query(
         default=None, description="only jobs observed in this stage"
     ),
-    paper_id: str | None = Query(default=None),
+    paper_id: UUID | None = Query(default=None),
     session: Session = Depends(get_db),
 ) -> JobListOut:
     """List recent jobs newest first, pageable and filterable (2026-09-23).
@@ -109,7 +111,8 @@ def list_jobs(
             ),
         )
     rows, total = ingestion_service.list_jobs(
-        session, limit=limit, offset=offset, stage=stage, paper_id=paper_id
+        session, limit=limit, offset=offset, stage=stage,
+        paper_id=str(paper_id) if paper_id else None,
     )
     return JobListOut(
         total=total,
