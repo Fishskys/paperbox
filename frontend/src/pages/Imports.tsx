@@ -10,6 +10,8 @@ import {
 } from "antd";
 import {
   ArrowUpRight,
+  Archive,
+  FolderOpen,
   FileText,
   Link as LinkIcon,
   Pause,
@@ -25,6 +27,7 @@ import { Blank, PageHeader } from "../components";
 import type { Accepted } from "../contracts";
 import { readerPath } from "../search-model";
 import { useUploads } from "../upload-context";
+import ServerImports from "../ServerImports";
 
 const labels = {
   waiting: "等待上传",
@@ -93,7 +96,7 @@ export default function Imports() {
           {
             label: (
               <span className="inline">
-                <UploadCloud size={15} /> 上传文件
+                <UploadCloud size={15} /> PDF
               </span>
             ),
             value: "files",
@@ -106,9 +109,11 @@ export default function Imports() {
             ),
             value: "url",
           },
+          { value: "archive", label: <span className="inline"><Archive size={15} /> ZIP</span> },
+          { value: "directory", label: <span className="inline"><FolderOpen size={15} /> 目录</span> },
         ]}
       />
-      {mode === "files" ? (
+      {mode === "archive" || mode === "directory" ? <ServerImports key={mode} mode={mode} /> : mode === "files" ? (
         <div className="import-workspace">
           <Upload.Dragger
             accept=".pdf,application/pdf"
