@@ -41,6 +41,7 @@ export default function Search() {
   );
   const [rerank, setRerank] = useState(params.get("rerank") === "true");
   const [rewrite, setRewrite] = useState(params.get("rewrite") === "true");
+  const [excludeReferences, setExcludeReferences] = useState(params.get("include_references") !== "true");
   const [recallK, setRecallK] = useState(Number(params.get("recall_k") || 100));
   const [topK, setTopK] = useState(Number(params.get("top_k") || 20));
   const [paperType, setPaperType] = useState(params.get("paper_type") || "");
@@ -63,6 +64,7 @@ export default function Search() {
     setYearTo(p.get("year_to") ? Number(p.get("year_to")) : null);
     setRerank(p.get("rerank") === "true");
     setRewrite(p.get("rewrite") === "true");
+    setExcludeReferences(p.get("include_references") !== "true");
     setRecallK(Number(p.get("recall_k") || 100));
     setTopK(Number(p.get("top_k") || 20));
     setPaperType(p.get("paper_type") || "");
@@ -109,6 +111,7 @@ export default function Search() {
     next.set("recall_k", String(recallK));
     next.set("top_k", String(topK));
     if (rewrite) next.set("rewrite", "true");
+    if (!excludeReferences) next.set("include_references", "true");
     if (paperType) next.set("paper_type", paperType);
     if (tag.trim()) next.set("tag", tag.trim());
     try {
@@ -182,6 +185,7 @@ export default function Search() {
           />
           </span>
           <span className="inline">查询改写 <Switch aria-label="查询改写" checked={rewrite} onChange={setRewrite} size="small" /></span>
+          <span className="inline">排除参考文献 <Switch aria-label="排除参考文献" checked={excludeReferences} onChange={setExcludeReferences} size="small" /></span>
           <label>召回论文数 <InputNumber aria-label="召回论文数" min={1} max={500} value={recallK} onChange={(value) => setRecallK(value || 100)} /></label>
           <label>每页结果数 <InputNumber aria-label="每页结果数" min={1} max={50} value={topK} onChange={(value) => setTopK(value || 20)} /></label>
         </div>

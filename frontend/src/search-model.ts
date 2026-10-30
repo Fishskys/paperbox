@@ -5,7 +5,9 @@ export function searchBody(params: URLSearchParams) {
   if (!query) throw new Error("请输入查询内容");
   if (!modes.includes(mode as (typeof modes)[number]))
     throw new Error("检索模式无效");
-  const filters: Record<string, string | number | string[]> = {};
+  const filters: Record<string, string | number | boolean | string[]> = {};
+  if (params.get("include_references") === "true")
+    filters.include_references = true;
   for (const key of ["year_from", "year_to"]) {
     const raw = params.get(key);
     if (!raw) continue;

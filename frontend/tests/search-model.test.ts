@@ -30,6 +30,11 @@ describe("search and reading contracts", () => {
       searchBody(new URLSearchParams("q=x&year_from=abc")),
     ).toThrow();
   });
+  it("excludes references by default and includes them only on explicit opt-in", () => {
+    expect(searchBody(new URLSearchParams("q=clock")).filters).not.toHaveProperty("include_references");
+    expect(searchBody(new URLSearchParams("q=clock&include_references=false")).filters).not.toHaveProperty("include_references");
+    expect(searchBody(new URLSearchParams("q=clock&include_references=true")).filters).toHaveProperty("include_references", true);
+  });
   it("does not fabricate evidence pages and clamps invalid deep links", () => {
     expect(readerPath("abc", null)).toBe("/reading/papers/abc");
     expect(readerPath("abc", 3)).toBe("/reading/papers/abc?page=3");

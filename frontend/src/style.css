@@ -452,7 +452,7 @@ h1 {
 }
 .active-paper-filters { margin-bottom: 16px; }
 .catalog-filters { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
-.catalog-filters .catalog-tag { width: 191px; max-width: 100%; }
+.catalog-filters .catalog-tag { flex: 1 1 191px; min-width: 0; max-width: 100%; }
 .catalog-filters .catalog-venue { width: 650px; max-width: 100%; }
 .catalog-filters .catalog-type { width: 130px; }
 .catalog-years { display: flex; gap: 12px; max-width: 100%; }
