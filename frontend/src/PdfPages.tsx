@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { Page } from "react-pdf";
+import { highlightText } from "./pdf-text";
 
 type Viewport = RefObject<HTMLDivElement | null>;
 
@@ -11,12 +12,14 @@ function PdfSheet({
   height,
   viewport,
   onError,
+  query,
 }: {
   number: number;
   width: number;
   height: number;
   viewport: Viewport;
   onError: (message: string) => void;
+  query: string;
 }) {
   const element = useRef<HTMLElement>(null);
   const [visible, setVisible] = useState(false);
@@ -42,6 +45,7 @@ function PdfSheet({
           width={width}
           loading={<div className="pdf-loading">正在渲染第 {number} 页…</div>}
           onRenderError={(error) => onError(error.message)}
+          customTextRenderer={({ str }) => highlightText(str, query)}
         />
       )}
     </section>
@@ -55,6 +59,7 @@ export default function PdfPages({
   viewport,
   onPageChange,
   onError,
+  query = "",
 }: {
   pdf: PDFDocumentProxy;
   page: number;
@@ -62,6 +67,7 @@ export default function PdfPages({
   viewport: Viewport;
   onPageChange: (page: number) => void;
   onError: (message: string) => void;
+  query?: string;
 }) {
   const [ratios, setRatios] = useState<number[]>([]);
   const document = useRef<HTMLDivElement>(null);
@@ -138,6 +144,7 @@ export default function PdfPages({
           height={width * ratio}
           viewport={viewport}
           onError={onError}
+          query={query}
         />
       ))}
     </div>

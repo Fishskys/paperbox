@@ -9,6 +9,7 @@ import {
   Minus,
   PanelLeftClose,
   Plus,
+  ListTree,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Document, pdfjs } from "react-pdf";
@@ -28,6 +29,7 @@ import { remember } from "../history";
 import { useResource } from "../hooks";
 import { positivePage } from "../search-model";
 import PdfPages from "../PdfPages";
+import PdfNavigation from "../PdfNavigation";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -61,6 +63,8 @@ export default function Reader() {
   const [reload, setReload] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [info, setInfo] = useState(false);
+  const [navigation, setNavigation] = useState(false);
+  const [query, setQuery] = useState("");
   const [width, setWidth] = useState(700);
   const container = useRef<HTMLDivElement>(null);
   const page = positivePage(
@@ -79,6 +83,7 @@ export default function Reader() {
     setPages(0);
     setPdf(null);
     setPdfError("");
+    setQuery("");
   }, [paperId, revision, reload]);
   useEffect(() => {
     if (!container.current) return;
@@ -189,6 +194,7 @@ export default function Reader() {
           </Tooltip>
         </div>
         <div className="inline">
+          <Tooltip title="目录、缩略图与文内查找"><Button aria-label="阅读导航" icon={<ListTree size={16} />} disabled={!pdf} onClick={() => setNavigation(true)} /></Tooltip>
           <Tooltip title="论文信息">
             <Button
               aria-label="论文信息"
@@ -239,11 +245,15 @@ export default function Reader() {
                 viewport={container}
                 onPageChange={go}
                 onError={setPdfError}
+                query={query}
               />
             )}
           </Document>
         )}
       </div>
+      <Drawer title="阅读导航" open={navigation} onClose={() => setNavigation(false)} size={380}>
+        {pdf && <PdfNavigation key={`${paperId}-${revision}-${reload}`} pdf={pdf} paperId={paperId} page={page} go={go} onQuery={setQuery} />}
+      </Drawer>
       <Drawer title="论文信息" open={info} onClose={() => setInfo(false)}>
         {paper && (
           <div className="paper-info">
