@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorMessage, request, useCredentialRevision } from "./api";
 
-export function useResource<T>(path: string | null, refresh = 0) {
+export function useResource<T>(path: string | null, refresh = 0, timeoutMs = 30000) {
   const revision = useCredentialRevision();
   const [state, setState] = useState<{
     data?: T;
@@ -12,7 +12,7 @@ export function useResource<T>(path: string | null, refresh = 0) {
     if (!path) return;
     const controller = new AbortController();
     setState({ loading: true });
-    request<T>(path, { signal: controller.signal })
+    request<T>(path, { signal: controller.signal }, timeoutMs)
       .then((data) => {
         if (!controller.signal.aborted) setState({ data, loading: false });
       })
@@ -21,7 +21,7 @@ export function useResource<T>(path: string | null, refresh = 0) {
           setState({ error: errorMessage(error), loading: false });
       });
     return () => controller.abort();
-  }, [path, refresh, revision]);
+  }, [path, refresh, revision, timeoutMs]);
   return state;
 }
 

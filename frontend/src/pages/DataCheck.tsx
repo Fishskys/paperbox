@@ -10,10 +10,11 @@ import { downloadJson } from "../files";
 export default function DataCheck() {
   const [run, setRun] = useState(0);
   const [identifierRun, setIdentifierRun] = useState(0);
-  const identifiers = useResource<IdentifierCheck>(identifierRun ? "/api/consistency/doi?limit=100" : null, identifierRun);
+  const identifiers = useResource<IdentifierCheck>(identifierRun ? "/api/consistency/doi?limit=100" : null, identifierRun, 180000);
   const { data, error, loading } = useResource<Consistency>(
     run ? "/api/consistency?limit=100" : null,
     run,
+    180000,
   );
   const incomplete = !!data?.errors.length;
   return (

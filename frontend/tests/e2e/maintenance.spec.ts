@@ -10,6 +10,7 @@ for (const kind of ["index", "metadata"] as const) {
         : { dry_run: input.dry_run, papers: 1, changed_papers: 1, skipped_no_file: 0, failed: 0, changes: [{ paper_id: "paper-1", field: "title", old: "old", new: "new", action: "update" }], errors: [], note: "" } });
     });
     await page.goto(`/system/${kind}`);
+    await expect(page.getByRole("heading", { name: kind === "index" ? "索引维护" : "元数据维护", exact: true })).toBeVisible({ timeout: 15000 });
     expect(requests).toHaveLength(0);
     await expect(page.getByRole("button", { name: "执行维护" })).toBeDisabled();
     await page.getByRole("button", { name: "预览维护" }).click();
@@ -36,4 +37,20 @@ test("identifier checks show incomplete and drift details without repairs", asyn
   await expect(page.getByText("结果不完整", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "paper-1" })).toHaveAttribute("href", "/manage/library?paper=paper-1");
   await expect(page.getByText("10/new", { exact: true })).toBeVisible();
+});
+
+test("full data checks may finish beyond the default request timeout", async ({ page }) => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/consistency?*", async (route) => {
+    await gate;
+    await route.fulfill({ json: { consistent: true, checked_at: "2026-10-30T09:00:00Z", errors: [], problems: [], truncated: false,
+      totals: { papers_live: 1, documents_os: 1, objects_minio: 1, problems: 0 } } });
+  });
+  await page.goto("/system/data");
+  await page.clock.install();
+  await page.getByRole("button", { name: "开始检查" }).click();
+  await page.clock.fastForward(45000);
+  release();
+  await expect(page.getByText("数据一致", { exact: true })).toBeVisible();
 });
