@@ -29,6 +29,7 @@ import type {
 import { hasOriginal } from "./files";
 import { useResource, useVisible } from "./hooks";
 import { metadataChanges, metadataValues } from "./metadata-form";
+import FigureGallery from "./FigureGallery";
 
 type Action =
   | { kind: "delete" | "reindex" }
@@ -442,6 +443,12 @@ export default function PaperManagement({
                 />
               </>
             ),
+          },
+          {
+            key: "figures",
+            label: "附图",
+            destroyOnHidden: true,
+            children: <FigureGallery paperId={paperId} manage originalAvailable={hasOriginal(document)} />,
           },
           {
             key: "maintenance",
