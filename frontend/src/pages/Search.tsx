@@ -268,7 +268,7 @@ export default function Search() {
             <span>重排：{({ not_requested: "未请求", disabled: "服务未启用", applied: "已执行", failed: "失败，使用召回排序", empty: "无候选结果" } as Record<string, string>)[state.data.rerank?.status || ""] || "状态未知"}</span>
             <span>改写：{state.data.rewrite?.applied ? "已执行" : "未执行"}</span>
           </div>
-          <Pagination current={Number(params.get("page") || 1)} pageSize={topK}
+          <Pagination current={Number(params.get("page") || 1)} pageSize={Number(params.get("top_k") || DEFAULT_TOP_K)}
             total={state.data.recalled_papers ?? state.data.results.length} showSizeChanger={false}
             onChange={(page) => { const next = new URLSearchParams(params); next.set("page", String(page)); setParams(next); }} />
           <div className="results">

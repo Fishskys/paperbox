@@ -1,5 +1,34 @@
 import { expect, test } from "./fixtures";
 
+test("pagination uses submitted page size until a new search is submitted", async ({ page }) => {
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/search", (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    return route.fulfill({ json: { total: 35, recalled_papers: 35, took_ms: 1, mode: "hybrid",
+      results: [{ paper_id: `p-${body.offset}`, title: `Result ${body.offset}`, authors: [], evidence: [] }],
+    } });
+  });
+  await page.goto("/search?q=timing&recall_k=35&top_k=20");
+  await expect(page.getByRole("link", { name: "Result 0", exact: true })).toBeVisible();
+  const pageSize = page.getByRole("spinbutton", { name: "每页结果数" });
+  await pageSize.fill("10");
+  await expect(page.locator(".ant-pagination-item")).toHaveText(["1", "2"]);
+  expect(requests).toHaveLength(1);
+  await page.locator(".ant-pagination-item-2").click();
+  await expect(page.getByRole("link", { name: "Result 20", exact: true })).toBeVisible();
+  expect(requests.at(-1)).toMatchObject({ top_k: 20, offset: 20 });
+  await pageSize.fill("10");
+  await page.getByRole("button", { name: "搜索论文" }).click();
+  await expect.poll(() => requests.at(-1)).toMatchObject({ top_k: 10, offset: 0 });
+  await expect(page.locator(".ant-pagination-item")).toHaveText(["1", "2", "3", "4"]);
+  await page.locator(".ant-pagination-item-2").click();
+  await expect(page.getByRole("link", { name: "Result 10", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("link", { name: "Result 10", exact: true })).toBeVisible();
+  expect(requests.at(-1)).toMatchObject({ top_k: 10, offset: 10 });
+});
+
 test("smart search starts with ten recalled papers and ten results per page", async ({ page }) => {
   const requests: Record<string, unknown>[] = [];
   await page.route("**/api/search", (route) => {
