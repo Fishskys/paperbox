@@ -79,12 +79,19 @@ try {
       .getByRole("heading", { name: "导入预览", exact: true })
       .waitFor();
     await page.getByText("未写入", { exact: true }).waitFor();
+    const pendingDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: "下载报告", exact: true }).click();
+    const download = await pendingDownload;
+    const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+    if (JSON.stringify(exported) !== JSON.stringify(report))
+      throw new Error(`${name}: downloaded report differs from the API response`);
     reports.push({
       file: name,
       status: response.status(),
       detected: report.detected,
       failed: report.failed,
       dry_run: report.dry_run,
+      report_download: "verified",
     });
   }
   const after = await countPapers();

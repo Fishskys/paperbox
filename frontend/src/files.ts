@@ -1,6 +1,16 @@
 import { authHeaders, checkResponse } from "./api";
 import type { Paper } from "./contracts";
 
+export function downloadJson(value: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export function hasOriginal(paper: Paper) {
   if (!paper.files) return paper.status !== "AWAITING_FILE";
   return paper.files.some(

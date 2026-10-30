@@ -3,19 +3,22 @@ import {
   Button,
   Descriptions,
   Drawer,
+  InputNumber,
+  Select,
   Table,
   Tabs,
   Tag,
   Tooltip,
   Upload,
 } from "antd";
-import { Check, FileJson, ScanLine, UploadCloud, X } from "lucide-react";
+import { Check, Download, FileJson, ScanLine, UploadCloud, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import MetadataReview from "../MetadataReview";
 import { ApiError, errorMessage, request } from "../api";
 import { Blank, Failure, PageHeader } from "../components";
 import type { MetadataImportReport, MetadataSource } from "../contracts";
+import { downloadJson } from "../files";
 
 const fieldLabels: Record<string, string> = {
   source_ref: "来源记录",
@@ -43,6 +46,8 @@ function MetadataUpload({ onReview }: { onReview: () => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [canApply, setCanApply] = useState(false);
+  const [sourceType, setSourceType] = useState("import_file");
+  const [limit, setLimit] = useState<number | null>(null);
   const [selected, setSelected] = useState<Record<string, unknown> | null>(
     null,
   );
@@ -58,6 +63,9 @@ function MetadataUpload({ onReview }: { onReview: () => void }) {
   }, [busy]);
   function choose(value: File | null) {
     setFile(value);
+    clearReport();
+  }
+  function clearReport() {
     setReport(null);
     setError("");
     setCanApply(false);
@@ -72,9 +80,11 @@ function MetadataUpload({ onReview }: { onReview: () => void }) {
     setReport(null);
     const body = new FormData();
     body.append("file", file);
+    const query = new URLSearchParams({ apply: String(apply), source_type: sourceType });
+    if (limit !== null) query.set("limit", String(limit));
     try {
       const result = await request<MetadataImportReport>(
-        `/api/metadata/import?apply=${apply}&source_type=import_file`,
+        `/api/metadata/import?${query}`,
         { method: "POST", body },
         120000,
       );
@@ -118,6 +128,30 @@ function MetadataUpload({ onReview }: { onReview: () => void }) {
           </p>
         </Upload.Dragger>
       </div>
+      <div className="list-toolbar">
+        <Select
+          aria-label="元数据来源类型"
+          value={sourceType}
+          disabled={!!busy}
+          options={[
+            { value: "import_file", label: "导入文件" },
+            { value: "ieee_api", label: "IEEE API" },
+            { value: "arxiv_api", label: "arXiv API" },
+            { value: "crossref", label: "Crossref" },
+            { value: "manual", label: "人工整理" },
+          ]}
+          onChange={(value) => { setSourceType(value); clearReport(); }}
+        />
+        <InputNumber
+          aria-label="元数据处理条数"
+          placeholder="全部条目"
+          min={1}
+          precision={0}
+          value={limit}
+          disabled={!!busy}
+          onChange={(value) => { setLimit(value); clearReport(); }}
+        />
+      </div>
       <div className="metadata-actions">
         <Tooltip title="移除文件">
           <Button
@@ -143,6 +177,13 @@ function MetadataUpload({ onReview }: { onReview: () => void }) {
           onClick={() => void submit(true)}
         >
           正式导入
+        </Button>
+        <Button
+          icon={<Download size={16} />}
+          disabled={!report || !!busy}
+          onClick={() => report && downloadJson(report, `paperbox-metadata-${report.dry_run ? "preview" : "import"}-${Date.now()}.json`)}
+        >
+          下载报告
         </Button>
       </div>
       {error && <Failure message={error} />}

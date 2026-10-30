@@ -1,4 +1,5 @@
 import { expect, test } from "./fixtures";
+import { readFile } from "node:fs/promises";
 
 const preview = {
   detected: 4,
@@ -44,6 +45,35 @@ const file = {
   mimeType: "application/x-ndjson",
   buffer: Buffer.from('{"title":"A timing circuit"}\n'),
 };
+
+test("metadata options invalidate the preview and the complete report can be downloaded", async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route("**/api/metadata/import?*", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    return route.fulfill({ json: { ...preview, dry_run: url.searchParams.get("apply") !== "true" } });
+  });
+  await page.goto("/imports/metadata");
+  await page.locator('input[type="file"]').setInputFiles(file);
+  await page.getByRole("button", { name: "预览导入", exact: true }).click();
+  const apply = page.getByRole("button", { name: "正式导入", exact: true });
+  await expect(apply).toBeEnabled();
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载报告", exact: true }).click();
+  const download = await pending;
+  const report = JSON.parse(await readFile((await download.path())!, "utf8"));
+  expect(report).toEqual(preview);
+  await page.getByRole("combobox", { name: "元数据来源类型" }).click();
+  await page.getByText("Crossref", { exact: true }).click();
+  await expect(apply).toBeDisabled();
+  await page.getByRole("spinbutton", { name: "元数据处理条数" }).fill("2");
+  await page.getByRole("button", { name: "预览导入", exact: true }).click();
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await expect(page.getByText("已处理", { exact: true })).toBeVisible();
+  expect(requests.slice(1).every((url) => url.searchParams.get("source_type") === "crossref" && url.searchParams.get("limit") === "2")).toBe(true);
+  expect(requests.map((url) => url.searchParams.get("apply"))).toEqual(["false", "false", "true"]);
+});
 
 test("metadata import previews before applying and shows record failures and conflicts", async ({
   page,
