@@ -25,6 +25,7 @@ test("both library pagers jump to the same filtered page and survive refresh", a
     });
   });
   await page.goto("/library?q=clock&author=Chen&status=INDEXED");
+  await expect(page).toHaveURL(/\/search\/standard\?/);
   const pagers = page.locator(".ant-table-pagination");
   await expect(pagers).toHaveCount(2);
   const jumps = page.locator(".ant-pagination-options-quick-jumper input");

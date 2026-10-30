@@ -11,7 +11,7 @@ test("task diagnostics show queue state, filter by paper, and preserve the error
     return route.fulfill({ json: { total: 1, jobs: [job] } });
   });
   await page.route("**/api/jobs/failed-parse-job", (route) => route.fulfill({ json: job }));
-  await page.goto(`/imports/jobs?paper_id=${paperId}&stage=FAILED`);
+  await page.goto(`/manage/jobs?paper_id=${paperId}&stage=FAILED`);
   await expect(page.getByLabel("任务队列状态")).toContainText("并发上限 2");
   await page.getByRole("button", { name: "failed-parse", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "任务详情", exact: true });

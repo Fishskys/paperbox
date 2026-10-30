@@ -18,8 +18,8 @@ try {
   if (!job || !job.kind) throw new Error("No associated task with an explicit kind available");
   const invalid = await page.request.get(`${origin}/api/jobs?paper_id=invalid`);
   if (invalid.status() !== 422) throw new Error("Invalid paper UUID must return 422");
-  await page.goto(`${origin}/imports/jobs?paper_id=${encodeURIComponent(job.paper_id)}&job=${encodeURIComponent(job.job_id)}`);
-  await expect(page.getByRole("heading", { name: "导入任务", exact: true })).toBeVisible();
+  await page.goto(`${origin}/manage/jobs?paper_id=${encodeURIComponent(job.paper_id)}&job=${encodeURIComponent(job.job_id)}`);
+  await expect(page.getByRole("heading", { name: "处理任务", exact: true })).toBeVisible();
   await expect(page.getByLabel("按论文 ID 筛选任务", { exact: true })).toHaveValue(job.paper_id);
   await expect(page.getByLabel("任务队列状态")).toBeVisible();
   const drawer = page.getByRole("dialog", { name: "任务详情", exact: true });

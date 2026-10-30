@@ -129,7 +129,7 @@ test("metadata import previews before applying and shows record failures and con
     page.getByRole("heading", { name: "导入报告", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "查看论文库", exact: true }),
+    page.getByRole("link", { name: "浏览论文", exact: true }),
   ).toBeVisible();
   expect(requests.map((request) => request.apply)).toEqual(["false", "true"]);
   expect(

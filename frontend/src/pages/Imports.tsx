@@ -83,8 +83,8 @@ export default function Imports() {
         title="论文导入"
         description="将研究资料加入论文库"
         actions={
-          <Link className="quiet-link" to="/imports/jobs">
-            导入任务 <ArrowUpRight size={15} />
+          <Link className="quiet-link" to="/manage/jobs">
+            处理任务 <ArrowUpRight size={15} />
           </Link>
         }
       />
@@ -178,7 +178,7 @@ export default function Imports() {
                   </Tag>
                   {item.result?.job_id && (
                     <Link
-                      to={`/imports/jobs?job=${encodeURIComponent(item.result.job_id)}`}
+                      to={`/manage/jobs?job=${encodeURIComponent(item.result.job_id)}`}
                     >
                       查看任务
                     </Link>
@@ -244,7 +244,7 @@ export default function Imports() {
                 {accepted.duplicate ? "已在库中" : "已接收"}
               </Tag>
               <Link
-                to={`/imports/jobs?job=${encodeURIComponent(accepted.job_id)}`}
+                to={`/manage/jobs?job=${encodeURIComponent(accepted.job_id)}`}
               >
                 查看任务 <ArrowUpRight size={14} />
               </Link>

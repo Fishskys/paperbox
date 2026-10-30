@@ -40,9 +40,12 @@ try {
           ? ["检索", "阅读", "导入", "论文管理"]
           : ["检索", "阅读", "导入", "论文管理", "系统管理"];
     await expect(page.locator(".sidebar .nav-group-title")).toHaveText(groups);
-    await page.getByRole("link", { name: "论文库", exact: true }).click();
+    await expect(page.locator('.sidebar a[href="/library"]')).toHaveCount(0);
+    await expect(page.locator('.sidebar a[href="/imports/jobs"]')).toHaveCount(0);
+    await expect(page.locator('.sidebar a[href="/manage/jobs"]')).toHaveCount(role === "read" ? 0 : 1);
+    await page.getByRole("link", { name: "常规检索", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "论文库", exact: true }),
+      page.getByRole("heading", { name: "常规检索", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "导入论文", exact: true }),

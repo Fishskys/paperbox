@@ -67,7 +67,6 @@ const groups = [
     capability: "read" as const,
     icon: Library,
     items: [
-      { label: "论文库", path: "/library" },
       { label: "最近阅读", path: "/reading/recent" },
     ],
   },
@@ -78,14 +77,16 @@ const groups = [
     items: [
       { label: "论文导入", path: "/imports/new" },
       { label: "元数据导入", path: "/imports/metadata" },
-      { label: "导入任务", path: "/imports/jobs" },
     ],
   },
   {
     label: "论文管理",
     capability: "write" as const,
     icon: Files,
-    items: [{ label: "论文库管理", path: "/manage/library" }],
+    items: [
+      { label: "论文库管理", path: "/manage/library" },
+      { label: "处理任务", path: "/manage/jobs" },
+    ],
   },
   {
     label: "系统管理",
@@ -99,6 +100,16 @@ const groups = [
     ],
   },
 ];
+
+function LegacyRoute({ to, library = false }: { to: string; library?: boolean }) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  if (library) {
+    if (params.get("q") && !params.has("scope")) params.set("scope", "title");
+    if (!params.has("sort")) params.set("sort", "newest");
+  }
+  return <Navigate replace to={{ pathname: to, search: params.toString(), hash: location.hash }} state={location.state} />;
+}
 
 function Workspace() {
   const { context, can } = useAccess();
@@ -291,7 +302,7 @@ function Workspace() {
                             <HistoryPage key="searches" kind="searches" />
                           }
                         />
-                        <Route path="/library" element={<LibraryPage />} />
+                        <Route path="/library" element={<LegacyRoute to="/search/standard" library />} />
                         <Route
                           path="/reading/recent"
                           element={
@@ -313,7 +324,8 @@ function Workspace() {
                           path="/imports/metadata"
                           element={<MetadataImportPage />}
                         />
-                        <Route path="/imports/jobs" element={<JobsPage />} />
+                        <Route path="/manage/jobs" element={<JobsPage />} />
+                        <Route path="/imports/jobs" element={<LegacyRoute to="/manage/jobs" />} />
                       </Route>
                       <Route element={<RequireAccess capability="admin" />}>
                         <Route path="/system/index" element={<MaintenancePage key="index" kind="index" />} />

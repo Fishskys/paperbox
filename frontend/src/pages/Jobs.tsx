@@ -119,7 +119,7 @@ export default function Jobs() {
   return (
     <>
       <PageHeader
-        title="导入任务"
+        title="处理任务"
         description={
           state.checked ? `更新于 ${formatTime(state.checked)}` : "处理队列"
         }

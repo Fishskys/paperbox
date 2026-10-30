@@ -141,7 +141,7 @@ test("task polling stops when tasks complete and preserves the last report on fa
           },
     );
   });
-  await page.goto("/imports/jobs");
+  await page.goto("/manage/jobs");
   await expect(page.getByText("排队中", { exact: true })).toBeVisible();
   await page.clock.fastForward(3100);
   await expect(page.getByText("已完成", { exact: true })).toBeVisible();

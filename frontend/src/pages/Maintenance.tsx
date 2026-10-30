@@ -62,7 +62,7 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
         ? `${report.dry_run ? "预览" : "已提交"}：选中 ${report.selected}，入队 ${report.queued}，跳过 ${report.skipped.length}`
         : `${report.dry_run ? "预览" : "已完成"}：处理 ${report.papers}，变更 ${report.changed_papers}，无原文 ${report.skipped_no_file}，失败 ${report.failed}`} description={report.note} />
       {"job_ids" in report ? <>
-        <div className="metadata-actions">{report.job_ids.map((id) => <Link key={id} to={`/imports/jobs?job=${encodeURIComponent(id)}`}>任务 {id}</Link>)}</div>
+        <div className="metadata-actions">{report.job_ids.map((id) => <Link key={id} to={`/manage/jobs?job=${encodeURIComponent(id)}`}>任务 {id}</Link>)}</div>
         <Table className="data-table" rowKey="_key" pagination={{ pageSize: 20 }} scroll={{ x: 550 }} dataSource={[...report.reasons, ...report.skipped, ...report.skipped_reasons].map((row, i) => ({
           _key: String(i), target: String(row.paper_id || row.code || row.reason || "—"), detail: String(row.message || row.detail || row.description || row.note || "—"), count: String(row.count ?? row.papers ?? "—"),
         }))} columns={[{ title: "论文 / 原因", dataIndex: "target" }, { title: "说明", dataIndex: "detail" }, { title: "数量", dataIndex: "count" }]} />
@@ -75,7 +75,7 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
       </>}
     </>}
     <Modal title={index ? "确认重建索引" : "确认重新提取元数据"} open={confirm} onCancel={() => setConfirm(false)} okText="确认执行" cancelText="取消" onOk={() => void submit(false)}>
-      <p>将处理 {count} 篇论文。{index ? "后台任务可在导入任务中查看。" : "此操作同步处理，完成后返回报告。"}</p>
+      <p>将处理 {count} 篇论文。{index ? "后台任务可在处理任务中查看。" : "此操作同步处理，完成后返回报告。"}</p>
     </Modal>
   </>;
 }

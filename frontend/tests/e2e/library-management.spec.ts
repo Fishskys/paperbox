@@ -24,7 +24,7 @@ test("shell original upload confirms the chosen paper and exposes its job", asyn
   expect(uploads).toBe(0);
   await confirmation.getByRole("button", { name: "确认上传", exact: true }).click();
   await expect(drawer.getByText(/原文补传任务已接收/)).toBeVisible();
-  await expect(drawer.getByRole("link", { name: "查看任务", exact: true })).toHaveAttribute("href", "/imports/jobs?job=attachment-job");
+  await expect(drawer.getByRole("link", { name: "查看任务", exact: true })).toHaveAttribute("href", "/manage/jobs?job=attachment-job");
   await expect(drawer.getByRole("button", { name: "补传原文", exact: true })).toBeDisabled();
   expect(uploads).toBe(1);
   completed = true;
@@ -262,7 +262,7 @@ test("single-paper maintenance previews extraction and queues an inspectable rei
     .click();
   await expect(
     drawer.getByRole("link", { name: "查看任务", exact: true }),
-  ).toHaveAttribute("href", "/imports/jobs?job=rebuild-job");
+  ).toHaveAttribute("href", "/manage/jobs?job=rebuild-job");
 });
 
 test("metadata-only papers do not request a missing PDF", async ({ page }) => {

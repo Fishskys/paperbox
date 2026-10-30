@@ -260,7 +260,7 @@ export default function PaperManagement({
     <>
       <h2>{document.title || "未命名论文"}</h2>
       <p className="muted">{document.paper_id}</p>
-      <Link to={`/imports/jobs?paper_id=${encodeURIComponent(document.paper_id)}`}>查看相关任务</Link>
+      <Link to={`/manage/jobs?paper_id=${encodeURIComponent(document.paper_id)}`}>查看相关任务</Link>
       {!hasOriginal(document) && (
         <Alert type="info" showIcon title="待补充 PDF 原文" action={
           <Upload
@@ -304,7 +304,7 @@ export default function PaperManagement({
           title={outcome.text}
           description={
             outcome.job && (
-              <Link to={`/imports/jobs?job=${encodeURIComponent(outcome.job)}`}>
+              <Link to={`/manage/jobs?job=${encodeURIComponent(outcome.job)}`}>
                 查看任务
               </Link>
             )

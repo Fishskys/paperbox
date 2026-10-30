@@ -60,7 +60,7 @@ export default function ServerImports({ mode }: { mode: "archive" | "directory" 
         <Button type="primary" icon={<UploadCloud size={16} />} disabled={busy || !report?.dry_run || !report.accepted} onClick={() => setConfirm(true)}>正式导入目录</Button>
       </> : <Button type="primary" icon={<UploadCloud size={16} />} disabled={!file || busy} loading={busy} onClick={() => void submit(false)}>开始 ZIP 导入</Button>}
       <Button icon={<Download size={16} />} disabled={!report || busy} onClick={() => report && downloadJson(report, `paperbox-${mode}-report-${Date.now()}.json`)}>下载报告</Button>
-      <Link to="/imports/jobs">查看导入任务</Link>
+      <Link to="/manage/jobs">查看处理任务</Link>
     </div>
     {error && <Failure message={error} />}
     {report && <>
@@ -70,7 +70,7 @@ export default function ServerImports({ mode }: { mode: "archive" | "directory" 
         dataSource={report.results || report.jobs || []} scroll={{ x: 650 }} pagination={{ pageSize: 20, showSizeChanger: false }}
         columns={[{ title: "文件", render: (_, row) => row.relative || row.entry || row.filename },
           { title: "状态", dataIndex: "status" }, { title: "错误", render: (_, row) => `${row.error_code || ""} ${row.error_message || ""}` },
-          { title: "任务", render: (_, row) => row.job_id ? <Link to={`/imports/jobs?job=${encodeURIComponent(row.job_id)}`}>查看任务</Link> : "—" }]} />
+          { title: "任务", render: (_, row) => row.job_id ? <Link to={`/manage/jobs?job=${encodeURIComponent(row.job_id)}`}>查看任务</Link> : "—" }]} />
     </>}
     <Modal title="确认目录导入" open={confirm} onCancel={() => setConfirm(false)} okText="确认导入" cancelText="取消" onOk={() => void submit(false)}>
       <p>{root}</p><p>将接收 {report?.accepted || 0} 个文件并创建后台任务。</p>

@@ -14,7 +14,7 @@ test("ZIP is submitted explicitly and reports rejected archive entries", async (
   expect(calls).toBe(0);
   await page.getByRole("button", { name: "开始 ZIP 导入" }).click();
   await expect(page.getByText(/接收 1，重复 0，拒绝 1/)).toBeVisible();
-  await expect(page.getByRole("link", { name: "查看任务", exact: true })).toHaveAttribute("href", "/imports/jobs?job=zip-job");
+  await expect(page.getByRole("link", { name: "查看任务", exact: true })).toHaveAttribute("href", "/manage/jobs?job=zip-job");
 });
 
 test("directory apply requires a current preview and confirmation", async ({ page }) => {

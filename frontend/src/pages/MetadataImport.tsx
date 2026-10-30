@@ -367,9 +367,9 @@ function MetadataUpload({ onReview }: { onReview: () => void }) {
           />
           {!report.dry_run && (
             <div className="metadata-actions">
-              <Link className="inline" to="/library">
+              <Link className="inline" to="/search/standard">
                 <Check size={16} />
-                查看论文库
+                浏览论文
               </Link>
               <Button onClick={onReview}>复核元数据</Button>
             </div>
@@ -417,7 +417,6 @@ export default function MetadataImport() {
       <PageHeader
         title="元数据导入"
         description="外部元数据与来源记录"
-        actions={<Link to="/library">论文库</Link>}
       />
       <Tabs
         activeKey={tab}

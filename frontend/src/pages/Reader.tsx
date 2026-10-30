@@ -78,7 +78,7 @@ export default function Reader() {
     }),
     [paperId, headers],
   );
-  const from = (location.state as { from?: string } | null)?.from || "/library";
+  const from = (location.state as { from?: string } | null)?.from || "/search/standard";
   useEffect(() => {
     setPages(0);
     setPdf(null);

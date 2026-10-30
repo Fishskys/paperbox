@@ -59,7 +59,7 @@ try {
   if (!consistencyResponse.ok()) throw new Error(`Consistency check failed: ${consistencyResponse.status()}`);
   const consistencyReport = await consistencyResponse.json();
   await page.screenshot({ path: resolve(output, "webui-deployed-system.png") });
-  await page.getByRole("link", { name: "论文库", exact: true }).click();
+  await page.getByRole("link", { name: "常规检索", exact: true }).click();
   await page.locator(".ant-table-tbody .paper-cell a").first().click();
   const canvas = page.locator(".pdf-sheet canvas").first();
   await expect(canvas).toBeVisible({ timeout: 30000 });

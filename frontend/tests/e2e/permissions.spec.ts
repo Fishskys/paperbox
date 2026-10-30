@@ -13,7 +13,7 @@ for (const role of ["read", "write", "admin"] as const) {
     );
     await page.goto("/library");
     await expect(
-      page.getByRole("heading", { name: "论文库", exact: true }),
+      page.getByRole("heading", { name: "常规检索", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "导入论文", exact: true }),
@@ -40,6 +40,11 @@ for (const role of ["read", "write", "admin"] as const) {
       ).toBeVisible();
     }
     if (role === "read") {
+      await expect(page.locator('.sidebar a[href="/manage/jobs"]')).toHaveCount(0);
+      await page.goto("/manage/jobs");
+      await expect(page).toHaveURL(/\/search$/);
+      await page.goto("/imports/jobs?job=private-job");
+      await expect(page).toHaveURL(/\/search$/);
       await page.goto("/imports/metadata");
       await expect(page).toHaveURL(/\/search$/);
       await expect(page.locator("input[type=file]")).toHaveCount(0);
