@@ -10,8 +10,8 @@ server {
 
     location /api/ {
         proxy_pass $paperbox_api$request_uri;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
+        proxy_read_timeout ${PAPERBOX_PROXY_TIMEOUT};
+        proxy_send_timeout ${PAPERBOX_PROXY_TIMEOUT};
         proxy_request_buffering off;
         proxy_http_version 1.1;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -19,7 +19,7 @@ server {
 
     location = /health {
         proxy_pass $paperbox_api$request_uri;
-        proxy_read_timeout 120s;
+        proxy_read_timeout ${PAPERBOX_PROXY_TIMEOUT};
     }
 
     # PDF.js uses an ES module worker; older MIME tables do not include .mjs.

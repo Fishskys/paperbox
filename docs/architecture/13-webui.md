@@ -126,7 +126,7 @@ Node.js 要求 `20.19+`（20 系列）、`22.13+`（22 系列）或 `24+`，依�
 根 compose 中 `webui` 属于可选 profile，没有 `depends_on`，不会自动启动或停止 API：
 
 ```bash
-docker compose --profile webui up -d --build webui
+docker compose --profile webui up -d --build --force-recreate webui
 docker compose --profile webui stop webui
 ```
 
@@ -139,6 +139,12 @@ Nginx 提供 SPA 深层路径回退、静态资源缓存和 API 反向代理，�
 API 域名在请求时解析，因此 API 尚未启动时页面仍可打开，对应业务请求返回网关错误。
 默认 DNS 读取容器 `/etc/resolv.conf`；特殊网络可用容器环境变量 `PAPERBOX_DNS_RESOLVER` 覆盖。
 反向代理的单请求上传上限为 200 MB，实际接收仍受 paperbox 自身的文件大小与队列限制。
+`WEBUI_PROXY_TIMEOUT` 默认 `240s`，应长于前端检索、维护与数据检查请求的三分钟等待时间；该值注入 Nginx 的 `PAPERBOX_PROXY_TIMEOUT`。
+部署后可在 `frontend/` 执行 `WEBUI_URL=http://127.0.0.1:8089 npx playwright test --config playwright.deployment.config.ts --workers=2`，在真实 Nginx 静态资源上运行模拟接口回归。
+`uv run python scripts/check_webui_deployment.py` 使用临时管理员密钥，比较部署页面与本机 `frontend/dist/index.html` 的入口资源哈希，并验证真实 JSONL 预览、单篇索引与限量元数据维护预览、标识与三端检查、PDF 画布和阅读导航，以及桌面/移动布局；结束或失败时删除密钥，不执行维护写入。运行前先在本机构建前端。
+更新镜像时显式重建 WebUI 容器，避免仅更新同名镜像而继续提供旧资源。已有附图可用时，验收同时核对真实预览和单幅原始 PDF 下载。
+`WEBUI_URL=http://127.0.0.1:8089 uv run python scripts/check_webui_permissions.py` 使用临时 read/write/admin 密钥验证部署后的权限分区，结束后清理密钥。
+`uv run python scripts/check_import_archive.py` 创建临时 PDF，验证 ZIP 条目处置、真实解析索引与原文下载，并清理本次生成的数据；未配置目录白名单时同时核对目录导入保持禁用。
 
 在仓库根执行 `node scripts/check_webui.mjs` 可对已运行服务执行只读浏览器验收，
 默认地址 `http://127.0.0.1:5173`，可通过 `WEBUI_URL` 覆盖；用于匿名可读的部署，需要库中已有可读 PDF。

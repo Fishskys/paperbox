@@ -23,6 +23,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       PAPERBOX_API_UPSTREAM: ${WEBUI_API_UPSTREAM:-http://api:8077}
+      PAPERBOX_PROXY_TIMEOUT: ${WEBUI_PROXY_TIMEOUT:-240s}
     # No depends_on: the static UI must start without starting the API.
   api:
     build: .

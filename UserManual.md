@@ -251,17 +251,17 @@ uv run python scripts/manage_keys.py revoke hermes --yes
 | 记得前缀、忘了密钥值 | **找不回来**（库里只有 sha256，不可逆）。用 `list` 确认前缀，然后**重发**：同 prefix 再 `create`，确认替换 → 旧密钥立刻失效、新密钥打印一次 |
 | 引导密钥 `PAPER_API_KEY` 忘了 | 它明文写在仓库根 `.env`（`AUTH_ENABLED=true` 时非 `change-me`），本机可读；`.env` 也丢了就**写一个新的值**并重启 —— 启动时会 upsert 成 `source=env` 的 admin 行，**不需要知道旧值** |
 | 一把能用的钥匙都没有（进不去） | ① 首选：在 `.env` 写一个新的 `PAPER_API_KEY`（或 `PAPER_API_KEYS=前缀:key`）并重启，离线、不需要旧值；② 或者用 `manage_keys.py create --prefix rescue --role admin` 从库里新建一把（需要能连 Postgres）；③ 应急：临时 `AUTH_ENABLED=false` 重启（读写全放行，只在紧窗口用，用完改回） |
-| 改/重发了钥匙之后 | **客户端不会自动更新**：webui 的 `PAPERBOX_API_KEY`、Hermes 的 `mcp_servers.paperbox.headers.Authorization`（以及 codex 若接入）都要各自换成新密钥，否则一直 403 |
+| 改/重发了钥匙之后 | **客户端不会自动更新**：在 WebUI 连接设置中提供新密钥；本机 Vite 代理则更新 `frontend/.env.local` 的 `PAPERBOX_API_KEY` 并重启前端。Hermes 的 `mcp_servers.paperbox.headers.Authorization`（以及 codex 若接入）也要各自更新，否则一直 403 |
 
 #### 1.3.6 时区（2026-10-10 起全栈统一）
 
-全栈统一 `Asia/Shanghai`，三处一起生效，**任何一处漏设都会重新出现"时间不对"**：
+API 与依赖容器默认采用 `Asia/Shanghai`；WebUI 将接口时间按浏览器本机时区显示：
 
 | 位置 | 怎么设 | 影响什么 |
 |---|---|---|
 | 应用进程（API） | `app/core/config.py` 导入期 `os.environ.setdefault("TZ", "Asia/Shanghai")` + `time.tzset()`，可用 `.env` 的 `TZ` 覆盖 | 日志时间戳（形如 `2026-10-10T21:54:44+0800`）、不带偏移的时间戳、`datetime.now()` |
-| 四个依赖容器 | `infra/docker-compose.yml` 每个服务的 `TZ`（Postgres 另加 `PGTZ` 给容器内客户端） | 容器日志；**`docker exec ... psql` 看到的时间** |
-| WebUI 进程 | `webui/config.py` 同口径 | WebUI 的访问日志 |
+| 依赖容器 | `infra/docker-compose.yml` 每个服务的 `TZ`（Postgres 另加 `PGTZ` 给容器内客户端） | 容器日志；**`docker exec ... psql` 看到的时间** |
+| WebUI | React 使用浏览器本机时区；Nginx 访问日志使用容器时区，默认镜像为 UTC | 页面显示与访问日志可能采用不同偏移；对齐时比较绝对时刻 |
 
 ```bash
 # 自查：三处都该显示同一时刻（UTC+8）
@@ -820,7 +820,7 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 upsert 成 `source=env` 的 admin 行；也可以直接用 `uv run python scripts/manage_keys.py create --prefix rescue
 --role admin` 从库里新建一把（需要能连 Postgres）。应急手段是临时 `AUTH_ENABLED=false` 重启（读写全放行，
 用完必须改回）。两件要记住的事：**已发出的密钥值找不回来**（库里只有 sha256，非对称不可逆），要换就重发
-（同 prefix 再 `create`）；**换完钥匙客户端不会自动更新** —— webui 的 `PAPERBOX_API_KEY`、Hermes 的
+（同 prefix 再 `create`）；**换完钥匙客户端不会自动更新** —— WebUI 连接设置中的密钥（本机 Vite 代理使用 `frontend/.env.local` 的 `PAPERBOX_API_KEY`）、Hermes 的
 `mcp_servers.paperbox.headers.Authorization` 都要各自换，否则一直 403。完整流程见
 [#1.3.7.1](#1371-密钥分发auth_enabledtrue-时)。
 
