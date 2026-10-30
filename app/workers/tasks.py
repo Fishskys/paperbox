@@ -40,6 +40,7 @@ from app.services import metadata_matcher
 from app.services import metadata_reextract, metadata_service, metadata_shell, metadata_sources
 from app.services.metadata_reextract import FILENAME_MATCH_CONFIDENCE
 from app.services import object_storage, paper_service, parser_service, provenance_service
+from app.services import original_attachment
 
 logger = get_logger(__name__)
 
@@ -178,6 +179,8 @@ def run_retry_job(job_id: str) -> None:
     try:
         job = ingest.get_job(session, job_id)
         has_paper = bool(job.paper_id) if job is not None else False
+        if has_paper and (job.payload or {}).get("target_paper_id"):
+            has_paper = bool(job.payload.get("attachment_stored"))
     finally:
         session.close()
     if job is None:
@@ -230,6 +233,9 @@ def _process_job(session: Session, job) -> PayloadOutcome:
 
     source = _load_source(payload)
     digest = source.sha256
+
+    if payload.get("target_paper_id"):
+        return _attach_original(session, job, source)
 
     existing = paper_service.find_by_sha256(session, digest)
     if existing is None:
@@ -308,6 +314,33 @@ def _process_job(session: Session, job) -> PayloadOutcome:
         session.rollback()
         raise
     return PayloadOutcome(paper_id=paper_id)
+
+
+def _attach_original(session: Session, job: IngestionJob, source: _Source) -> PayloadOutcome:
+    payload = job.payload or {}
+    paper = original_attachment.target_for_upload(
+        session, payload["target_paper_id"], lock=True, exclude_job_id=job.id,
+    )
+    original_attachment.validate_content(session, paper, source.sha256)
+    original_attachment.validate_identifiers(session, paper, extract_embedded_metadata(source.data))
+    stored = _store_source(paper.id, source)
+    record = paper_service.register_original_file(
+        session, paper, object_key=stored.object_key, bucket=stored.bucket,
+        sha256=source.sha256, size_bytes=stored.size_bytes,
+        filename=source.filename, content_type=ingest.PDF_CONTENT_TYPE,
+    )
+    paper_service.apply_primary_selection(session, paper, incoming=record)
+    paper.status = paper_service.STATUS_PENDING
+    paper.embedding_model = settings.embedding_model
+    paper.embedding_dimension = settings.embedding_dimension
+    job.paper_id = paper.id
+    job.stage = ingest.STAGE_STORED
+    job.progress = ingest.PROGRESS_STORED
+    job.payload = {**payload, "attachment_stored": True}
+    session.commit()
+    _cleanup_source(source, payload, payload.get("object_key"))
+    _run_pipeline(session, job, paper, stored.object_key, dedupe=False)
+    return PayloadOutcome(paper_id=paper.id)
 
 
 @dataclass(frozen=True)
@@ -1235,7 +1268,10 @@ def _record_failure(session: Session, job_id: str, exc: Exception) -> None:
         ingest.mark_failed(session, job, failure.message, code=failure.code)
         if job.paper_id:
             paper = session.get(Paper, job.paper_id)
-            if paper is not None:
+            if paper is not None and (
+                not (job.payload or {}).get("target_paper_id")
+                or (job.payload or {}).get("attachment_stored")
+            ):
                 paper.status = paper_service.STATUS_FAILED
         session.commit()
     except Exception:  # noqa: BLE001 - nothing else we can do here

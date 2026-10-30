@@ -33,6 +33,7 @@ READS: frozenset[tuple[str, str]] = frozenset(
 #: Everything that changes state: the mutations (``write``) plus the two
 #: whole-library operations (``admin``: rebuild index, re-extract metadata).
 WRITES: dict[tuple[str, str], str] = {
+    ("POST", "/api/papers/{paper_id}/file"): "write",
     ("DELETE", "/api/papers/{paper_id}"): "write",
     ("POST", "/api/jobs/{job_id}/retry"): "write",
     ("POST", "/api/metadata/apply"): "write",

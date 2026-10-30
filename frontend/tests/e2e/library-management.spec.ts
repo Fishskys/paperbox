@@ -1,5 +1,34 @@
 import { expect, test } from "./fixtures";
 
+test("shell original upload confirms the chosen paper and exposes its job", async ({ page }) => {
+  const shell = { paper_id: "shell-upload", title: "Imported shell", authors: [], status: "AWAITING_FILE", files: [] };
+  let uploads = 0;
+  await page.route("**/api/papers?*", (route) => route.fulfill({ json: { total: 1, papers: [shell] } }));
+  await page.route("**/api/papers/shell-upload", (route) => route.fulfill({ json: shell }));
+  await page.route("**/api/papers/shell-upload/metadata", (route) => route.fulfill({ json: { sources: [], provenance: {} } }));
+  await page.route("**/api/papers/shell-upload/file", (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().headers()["content-type"]).toContain("multipart/form-data");
+    uploads++;
+    return route.fulfill({ status: 202, json: { job_id: "attachment-job", paper_id: shell.paper_id, status: "RECEIVED" } });
+  });
+  await page.goto("/manage/library?status=AWAITING_FILE");
+  await page.getByRole("button", { name: "管理论文 Imported shell", exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: "管理论文", exact: true });
+  await drawer.locator('input[type="file"]').setInputFiles({ name: "my-original.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.7 test") });
+  const confirmation = page.getByRole("dialog", { name: "补传原文", exact: true });
+  await expect(confirmation.getByText("论文：Imported shell", { exact: true })).toBeVisible();
+  await expect(confirmation.getByText("文件：my-original.pdf", { exact: true })).toBeVisible();
+  expect(uploads).toBe(0);
+  await confirmation.getByRole("button", { name: "确认上传", exact: true }).click();
+  await expect(drawer.getByText(/原文补传任务已接收/)).toBeVisible();
+  await expect(drawer.getByRole("link", { name: "查看任务", exact: true })).toHaveAttribute("href", "/imports/jobs?job=attachment-job");
+  await expect(drawer.getByRole("button", { name: "补传原文", exact: true })).toBeDisabled();
+  expect(uploads).toBe(1);
+  await page.goto("/library");
+  await expect(page.getByRole("button", { name: "补传原文", exact: true })).toHaveCount(0);
+});
+
 test("management filters shell and processing states and preserves filters on reload", async ({ page }) => {
   const requests: URL[] = [];
   await page.route("**/api/papers?*", (route) => {

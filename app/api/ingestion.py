@@ -50,6 +50,7 @@ from app.services import (
     archive_service,
     local_scan,
     object_storage,
+    original_attachment,
     paper_service,
     upload_admission,
 )
@@ -138,6 +139,7 @@ async def stage_and_queue(
     index: int,
     request_id: str,
     priority: int,
+    target_paper_id: str | None = None,
 ) -> IngestFileResult:
     """Validate, stage, dedupe and queue exactly one uploaded file.
 
@@ -173,6 +175,13 @@ async def stage_and_queue(
 
         Returns ``(duplicate_result, created_job)`` — exactly one is meaningful.
         """
+        if target_paper_id:
+            job = original_attachment.create_job(
+                session, target_paper_id, object_key=staging_key, digest=digest,
+                filename=filename, content_type=content_type, size_bytes=size,
+            )
+            session.commit()
+            return None, job
         existing = ingest.find_existing_paper(session, digest)
         if existing is not None:
             # Same content is already in the library: the staged copy has served
@@ -210,6 +219,10 @@ async def stage_and_queue(
 
     try:
         duplicate, job = await run_in_threadpool(_finalize_file_job)
+    except original_attachment.AttachmentError:
+        session.rollback()
+        await run_in_threadpool(_discard_staging, staging_key)
+        raise
     except Exception as exc:  # noqa: BLE001 - database trouble is per-part too
         session.rollback()
         await run_in_threadpool(_discard_staging, staging_key)
@@ -227,6 +240,7 @@ async def stage_and_queue(
         filename=filename,
         status=STATUS_ACCEPTED,
         job_id=job.id,
+        paper_id=job.paper_id,
         size_bytes=size,
     )
 
@@ -591,6 +605,29 @@ async def ingest_file(
             ),
         )
     )
+
+
+@router.post("/{paper_id}/file", response_model=IngestAccepted, status_code=202)
+async def attach_original(
+    paper_id: str, file: UploadFile = File(...), session: Session = Depends(get_db),
+) -> IngestAccepted:
+    """Queue the first PDF for a selected paper; never replace or auto-match."""
+    try:
+        await run_in_threadpool(original_attachment.target_for_upload, session, paper_id)
+        await run_in_threadpool(session.rollback)
+        with upload_admission.get_admission().slot():
+            result = await stage_and_queue(
+                session, file, index=1, request_id=uuid.uuid4().hex[:16],
+                priority=job_queue.PRIORITY_INTERACTIVE, target_paper_id=paper_id,
+            )
+    except original_attachment.AttachmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except upload_admission.AdmissionRejected as exc:
+        raise _busy(exc.reason, exc.retry_after) from exc
+    if result.status == STATUS_REJECTED:
+        raise HTTPException(status_code=422, detail=result.error_message or "upload rejected")
+    job = await run_in_threadpool(ingest.get_job, session, str(result.job_id))
+    return IngestAccepted(**ingest.accepted_payload(job, message="原文补传任务已接收"))
 
 
 @router.post(

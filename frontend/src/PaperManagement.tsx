@@ -12,8 +12,9 @@ import {
   Table,
   Tabs,
   Tag,
+  Upload,
 } from "antd";
-import { Eraser, RefreshCw, Save, ScanLine, Trash2 } from "lucide-react";
+import { Eraser, RefreshCw, Save, ScanLine, Trash2, Upload as UploadIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { errorMessage, post, request } from "./api";
@@ -74,6 +75,8 @@ export default function PaperManagement({
   const guard = useRef(false);
   const [error, setError] = useState("");
   const [action, setAction] = useState<Action | null>(null);
+  const [original, setOriginal] = useState<File | null>(null);
+  const [attachmentJob, setAttachmentJob] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<{
     text: string;
     job?: string;
@@ -82,6 +85,28 @@ export default function PaperManagement({
   useEffect(() => {
     if (paper.data) form.setFieldsValue(metadataValues(paper.data));
   }, [paper.data, form]);
+  async function attachOriginal() {
+    if (!original || guard.current) return;
+    guard.current = true;
+    setBusy(true);
+    setError("");
+    setOutcome(null);
+    try {
+      const body = new FormData();
+      body.append("file", original);
+      const result = await request<Accepted>(`${base}/file`, { method: "POST", body });
+      setAttachmentJob(result.job_id);
+      setOutcome({ text: "原文补传任务已接收，解析与索引进度请查看任务。", job: result.job_id });
+      setRevision((value) => value + 1);
+      onChanged();
+    } catch (error) {
+      setError(`${errorMessage(error)}；提交结果不明确时，请先查看该论文的任务。`);
+    } finally {
+      setOriginal(null);
+      guard.current = false;
+      setBusy(false);
+    }
+  }
   async function save(values: Partial<Paper>) {
     if (!paper.data || guard.current) return;
     const changes = metadataChanges(paper.data, values);
@@ -204,8 +229,39 @@ export default function PaperManagement({
       <h2>{document.title || "未命名论文"}</h2>
       <p className="muted">{document.paper_id}</p>
       {!hasOriginal(document) && (
-        <Alert type="info" showIcon title="待补充 PDF 原文" />
+        <Alert type="info" showIcon title="待补充 PDF 原文" action={
+          <Upload
+            accept=".pdf,application/pdf"
+            showUploadList={false}
+            disabled={busy || !!attachmentJob}
+            beforeUpload={(file) => {
+              setError("");
+              setOriginal(file);
+              return false;
+            }}
+          >
+            <Button icon={<UploadIcon size={16} />} disabled={busy || !!attachmentJob}>
+              补传原文
+            </Button>
+          </Upload>
+        } />
       )}
+      <Modal
+        title="补传原文"
+        open={!!original}
+        okText="确认上传"
+        cancelText="取消"
+        confirmLoading={busy}
+        closable={!busy}
+        mask={{ closable: !busy }}
+        cancelButtonProps={{ disabled: busy }}
+        onCancel={() => !busy && setOriginal(null)}
+        onOk={() => void attachOriginal()}
+      >
+        <p>论文：{document.title}</p>
+        <p>文件：{original?.name}</p>
+        <p>请确认 PDF 属于这篇论文。文件将绑定此论文，并创建解析和索引任务。</p>
+      </Modal>
       {error && !action && <Failure message={error} />}
       {outcome && (
         <Alert

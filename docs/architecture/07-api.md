@@ -35,6 +35,7 @@
 | GET | `/` | landing（`include_in_schema=False`） | public | — | `app/main.py` 的 `lifespan()` |
 | POST | `/api/papers/ingest` | URL 摄取 | write | — | `app/api/ingestion.py` |
 | POST | `/api/papers/ingest/files` | multipart 多文件（`files` 可重复） | write | — | `app/api/ingestion.py` |
+| POST | `/api/papers/{paper_id}/file` | 为指定论文补传首份原文，multipart `file`，202 `IngestAccepted`，返回目标 `paper_id` 与任务 ID；不覆盖、不自动匹配 | write | — | `app/api/ingestion.py` 的 `attach_original()`；`app/services/original_attachment.py` |
 | POST | `/api/papers/ingest/dir` | 服务端目录导入（零传输） | write | — | `app/api/ingestion.py` 的 `ingest_files()` |
 | POST | `/api/papers/ingest/file` | 单文件（`/files` 的薄封装） | write | — | `app/api/ingestion.py` 的 `ingest_dir()` |
 | POST | `/api/papers/ingest/compressed` | 上传 zip 解包导入 | write | — | `app/api/ingestion.py` 的 `ingest_file()` |
@@ -235,7 +236,15 @@
 
 **启动**：uvicorn → `app.main:lifespan`(`main.py`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → 请求可服务。
 
-**`POST /api/papers/ingest/files`**（`ingestion.py` 的 `ingest_url()`）：
+**`POST /api/papers/{paper_id}/file`**（`ingestion.py` 的 `attach_original()`）：
+
+指定已有论文补传使用独立的 `POST /api/papers/{paper_id}/file`，multipart 字段为 `file`，返回 202 `IngestAccepted`，其中 `paper_id` 固定为目标论文。
+目标不存在返回 404；已有文件、其他活动任务或内容已属于另一篇论文返回 409；文件类型、空文件或大小不合规返回 422，上传准入饱和返回带 `Retry-After` 的 429。
+服务层 `original_attachment` 在论文行锁下校验并创建关联任务；worker 存储前再次校验内容和内嵌 DOI/arXiv，明确冲突记为失败，不重新匹配或合并其他论文。
+存储检查点随任务持久化 `attachment_stored`；重试以该检查点决定重新读取暂存对象还是重跑解析，不能仅凭任务已关联论文判断原文存在。
+
+**`POST /api/papers/ingest/files`**（`ingestion.py` 的 `ingest_files()`）：
+
 `request_id_middleware`(`main.py`) → router 级 `require_api_key`(`security.py`) → `Depends(get_db)` 开请求 session(`session.py`) → 文件数/总字节检查(`ingestion.py`) → `upload_admission.get_admission()` + `should_throttle_batch`(`ingestion.py`) → `admission.slot()`(`ingestion.py`) → 逐文件 `stage_and_queue`()：`ingest.is_pdf`/`ensure_size` → `run_in_threadpool(_stage_upload)`(→ `object_storage.upload_stream_hashed`) → `ingest.find_existing_paper` → `ingest.create_job` + `session.commit`() → `job_queue.submit`(→ `ingest.mark_queued` → `enqueue` → `_hand_off`) → worker `_worker`(`queue.py`) → `asyncio.to_thread(tasks.run_ingestion_job)`(`queue.py`) → 返回 `summarize()` 的 202 响应(`ingestion.py`)。
 
 **`POST /api/search`**（`app/api/search.py`）：中间件 → `require_api_key` → `SearchRequest` 校验() → `maybe_rewrite`(线程化 `app/services/search_pipeline.py`) → `asyncio.to_thread(search_service.search_papers)`(`app/services/search_pipeline.py`) → 逐结果构造 `SearchResult`(`app/services/search_pipeline.py`) → `_log_search` 另开 `SessionLocal()` 写日志(`app/services/search_pipeline.py`) → `SearchResponse`(`app/services/search_pipeline.py`)。
