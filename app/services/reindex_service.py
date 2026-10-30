@@ -107,7 +107,7 @@ def embedding_census(session: Session) -> dict[str, object]:
     """
     configured = settings.embedding_model
     rows = session.execute(
-        select(PaperChunk.embedding_model, func.count(PaperChunk.id)).group_by(
+        select(PaperChunk.embedding_model, func.count()).group_by(
             PaperChunk.embedding_model
         )
     ).all()
@@ -149,7 +149,7 @@ def detect_embedding_drift(session: Session) -> ReindexReason | None:
             f"索引里的 chunk 是用别的模型嵌的（现在配的是 {census['configured']}；"
             f"实际见到 {seen}）—— 换模型必须整库重嵌，旧向量与新查询不可比"
         ),
-        papers=len(_live_papers(session)),
+        papers=session.scalar(select(func.count()).select_from(Paper).where(Paper.deleted_at.is_(None))),
         scope="all",
     )
 
@@ -210,11 +210,8 @@ def papers_with_stamp(session: Session, stamp: str) -> set[str]:
     把"不是 docling 产出"的全重新解析一遍）。**检测器要的是补集**，由
     :func:`papers_without_stamp` 提供，别把两者搞混（我第一版就搞反了，测试当场抓住）。
     """
-    if stamp == "unknown":
-        return {paper.id for paper in _live_papers(session) if not paper.parser_backend}
-    return {
-        paper.id for paper in _live_papers(session) if (paper.parser_backend or "") == stamp
-    }
+    predicate = func.coalesce(Paper.parser_backend, "") == ("" if stamp == "unknown" else stamp)
+    return set(session.scalars(select(Paper.id).where(Paper.deleted_at.is_(None), predicate)))
 
 
 def papers_without_stamp(session: Session, stamp: str | None = None) -> set[str]:
@@ -223,19 +220,17 @@ def papers_without_stamp(session: Session, stamp: str | None = None) -> set[str]
     这是"换了解析器之后需要重新解析"的那一批 —— 包括从未打过戳的行。
     """
     wanted = (stamp or settings.parser_backend) or ""
-    return {
-        paper.id
-        for paper in _live_papers(session)
-        if (paper.parser_backend or "unknown") != wanted
-    }
+    return set(session.scalars(select(Paper.id).where(
+        Paper.deleted_at.is_(None), func.coalesce(func.nullif(Paper.parser_backend, ""), "unknown") != wanted,
+    )))
 
 
 def papers_without_chunks(session: Session) -> set[str]:
     """论文 id：还没有任何 chunk（首次回填、或上次跑到一半炸了）。"""
-    have = set(
-        session.execute(select(PaperChunk.paper_id).group_by(PaperChunk.paper_id)).scalars()
-    )
-    return {paper.id for paper in _live_papers(session) if paper.id not in have}
+    return set(session.scalars(select(Paper.id).where(
+        Paper.deleted_at.is_(None),
+        ~select(PaperChunk.id).where(PaperChunk.paper_id == Paper.id).exists(),
+    )))
 
 
 #: 原因码 → 该码命中的论文选择器（``all`` 语义的码由 :func:`select_papers` 单独处理）。
@@ -281,11 +276,9 @@ def select_papers(
 
     if paper_ids:
         wanted = list(dict.fromkeys(paper_ids))
-        papers = [
-            paper
-            for paper in _live_papers(session)
-            if paper.id in set(wanted)
-        ]
+        papers = list(session.scalars(select(Paper).where(
+            Paper.deleted_at.is_(None), Paper.id.in_(wanted),
+        ).order_by(Paper.created_at)))
         missing = [paper_id for paper_id in wanted if paper_id not in {p.id for p in papers}]
         plan.papers = papers
         plan.reasons = [
@@ -335,7 +328,9 @@ def select_papers(
             selector = _SUBSET_SELECTORS.get(code)
             if selector is not None:
                 wanted_ids |= selector(session)
-        plan.papers = [paper for paper in _live_papers(session) if paper.id in wanted_ids]
+        plan.papers = list(session.scalars(select(Paper).where(
+            Paper.deleted_at.is_(None), Paper.id.in_(wanted_ids),
+        ).order_by(Paper.created_at)))
         plan.reasons = [by_code[code] for code in chosen]
 
     plan.skipped_reasons.extend(

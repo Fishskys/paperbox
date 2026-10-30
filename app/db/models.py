@@ -415,6 +415,7 @@ class PaperChunk(TimestampMixin, Base):
         ),
         Index("ix_paper_chunks_paper_id", "paper_id"),
         Index("ix_paper_chunks_paper_section", "paper_id", "section"),
+        Index("ix_paper_chunks_embedding_model", "embedding_model"),
     )
 
     id: Mapped[str] = mapped_column(

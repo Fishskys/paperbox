@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import event
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -108,6 +109,31 @@ def client(session_factory):
 # --------------------------------------------------------------------------- #
 # 检测
 # --------------------------------------------------------------------------- #
+def test_census_counts_rows_from_the_model_index_including_nulls(db_session):
+    paper = make_paper(db_session)
+    add_chunks(db_session, paper, model=None)
+    statements = []
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+    event.listen(db_session.bind, "before_cursor_execute", capture)
+    try:
+        assert reindex.embedding_census(db_session)["seen"] == {"": 2}
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture)
+    assert "count(*)" in statements[0].lower()
+
+
+def test_explicit_selection_does_not_materialize_unselected_papers(db_session, monkeypatch):
+    selected = make_paper(db_session)
+    make_paper(db_session, title="Unselected")
+    add_chunks(db_session, selected, model=settings.embedding_model)
+    def unbounded(*args):
+        raise AssertionError("Unbounded paper materialization")
+    monkeypatch.setattr(reindex, "_live_papers", unbounded)
+    plan = reindex.select_papers(db_session, paper_ids=[selected.id])
+    assert [paper.id for paper in plan.papers] == [selected.id]
+
+
 def test_a_model_change_means_the_whole_library(db_session) -> None:
     """换模型是"前提变了"，不是"某几篇脏了" —— 旧向量与新查询不可比，全库都要重嵌。"""
     old = make_paper(db_session, title="Indexed with the old model")
