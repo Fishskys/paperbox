@@ -1,5 +1,4 @@
 import {
-  Alert,
   App,
   Button,
   Descriptions,
@@ -26,9 +25,11 @@ import { useResource } from "./hooks";
 export default function MetadataReview({ active }: { active: boolean }) {
   const [refresh, setRefresh] = useState(0);
   const [status, setStatus] = useState("");
+  const [sourcePage, setSourcePage] = useState(1);
+  const [conflictPage, setConflictPage] = useState(1);
   const review = useResource<MetadataReviewReport>(
     active
-      ? `/api/metadata/review?limit=200${status ? `&status=${status}` : ""}`
+      ? `/api/metadata/review?limit=20&offset=${(sourcePage - 1) * 20}&conflicts_offset=${(conflictPage - 1) * 20}${status ? `&status=${status}` : ""}`
       : null,
     refresh,
   );
@@ -46,6 +47,11 @@ export default function MetadataReview({ active }: { active: boolean }) {
   const guard = useRef(false);
   const [error, setError] = useState("");
   const { message } = App.useApp();
+  useEffect(() => {
+    if (!review.data) return;
+    setSourcePage((page) => Math.min(page, Math.max(1, Math.ceil(review.data!.total / 20))));
+    setConflictPage((page) => Math.min(page, Math.max(1, Math.ceil((review.data!.conflicts_total ?? review.data!.conflicts.length) / 20))));
+  }, [review.data]);
   useEffect(() => {
     if (!active) {
       setSource(null);
@@ -93,7 +99,7 @@ export default function MetadataReview({ active }: { active: boolean }) {
         <Select
           aria-label="来源匹配状态"
           value={status}
-          onChange={setStatus}
+          onChange={(value) => { setStatus(value); setSourcePage(1); }}
           options={[
             { value: "", label: "全部待复核来源" },
             { value: "ambiguous", label: "匹配有歧义" },
@@ -121,17 +127,9 @@ export default function MetadataReview({ active }: { active: boolean }) {
       {error && !source && !decision && <Failure message={error} />}
       {review.data && (
         <p className="muted">
-          本次返回 {review.data.items.length} 条来源、
-          {review.data.conflicts.length} 项字段冲突，每类最多 200 项。
+          共 {review.data.total} 条来源、
+          {review.data.conflicts_total ?? review.data.conflicts.length} 项字段冲突。
         </p>
-      )}
-      {(review.data?.items.length === 200 ||
-        review.data?.conflicts.length === 200) && (
-        <Alert
-          type="warning"
-          showIcon
-          title="已达到返回上限，处理后刷新以获取后续记录"
-        />
       )}
       <h2>待复核来源</h2>
       <Table<ReviewSource>
@@ -140,7 +138,7 @@ export default function MetadataReview({ active }: { active: boolean }) {
         loading={review.loading}
         dataSource={review.data?.items || []}
         scroll={{ x: 650 }}
-        pagination={{ pageSize: 20, showSizeChanger: false }}
+        pagination={{ current: sourcePage, pageSize: 20, total: review.data?.total, showSizeChanger: false, showQuickJumper: true, onChange: setSourcePage }}
         locale={{ emptyText: review.error ? "来源加载失败" : "暂无待复核来源" }}
         columns={[
           {
@@ -195,7 +193,7 @@ export default function MetadataReview({ active }: { active: boolean }) {
         loading={review.loading}
         dataSource={review.data?.conflicts || []}
         scroll={{ x: 800 }}
-        pagination={{ pageSize: 20, showSizeChanger: false }}
+        pagination={{ current: conflictPage, pageSize: 20, total: review.data?.conflicts_total ?? review.data?.conflicts.length, showSizeChanger: false, showQuickJumper: true, onChange: setConflictPage }}
         locale={{ emptyText: review.error ? "冲突加载失败" : "暂无待复核冲突" }}
         columns={[
           {

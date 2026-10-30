@@ -198,6 +198,10 @@ class ReviewOut(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     total: int = 0
+    conflicts_total: int = 0
+    limit: int = 50
+    offset: int = 0
+    conflicts_offset: int = 0
     items: list[SourceOut] = Field(default_factory=list)
     conflicts: list[ConflictOut] = Field(default_factory=list)
 

@@ -1,5 +1,24 @@
 import { expect, test } from "./fixtures";
 
+test("review pages reach sources and conflicts beyond 200 records independently", async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route("**/api/metadata/review?*", (route) => {
+    const url = new URL(route.request().url()); requests.push(url);
+    return route.fulfill({ json: { total: 205, conflicts_total: 205,
+      items: [{ source_id: `s-${url.searchParams.get("offset")}`, source_ref: `source-${url.searchParams.get("offset")}`, source_type: "import_file", match_status: "pending" }],
+      conflicts: [{ paper_id: "p", field: `field-${url.searchParams.get("conflicts_offset")}`, kept: "a", rejected: "b" }],
+    } });
+  });
+  await page.goto("/imports/metadata?tab=review");
+  const jumps = page.locator(".ant-pagination-options-quick-jumper input");
+  await jumps.first().fill("11"); await jumps.first().press("Enter");
+  await expect(page.getByText("source-200", { exact: true })).toBeVisible();
+  await jumps.last().fill("11"); await jumps.last().press("Enter");
+  await expect(page.getByText("field-200", { exact: true })).toBeVisible();
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("200");
+  expect(requests.at(-1)?.searchParams.get("conflicts_offset")).toBe("200");
+});
+
 test("metadata review is inside import and associates sources before resolving conflicts", async ({
   page,
 }) => {

@@ -21,12 +21,13 @@ import { errorMessage, post, request } from "./api";
 import { Failure, formatTime } from "./components";
 import type {
   Accepted,
+  Job,
   Paper,
   PaperMetadata,
   ReextractReport,
 } from "./contracts";
 import { hasOriginal } from "./files";
-import { useResource } from "./hooks";
+import { useResource, useVisible } from "./hooks";
 import { metadataChanges, metadataValues } from "./metadata-form";
 
 type Action =
@@ -77,11 +78,40 @@ export default function PaperManagement({
   const [action, setAction] = useState<Action | null>(null);
   const [original, setOriginal] = useState<File | null>(null);
   const [attachmentJob, setAttachmentJob] = useState<string | null>(null);
+  const [watchedJob, setWatchedJob] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState("");
+  const [taskRetry, setTaskRetry] = useState(0);
+  const visible = useVisible();
+  const changed = useRef(onChanged);
+  useEffect(() => { changed.current = onChanged; }, [onChanged]);
   const [outcome, setOutcome] = useState<{
     text: string;
     job?: string;
     warning?: boolean;
   } | null>(null);
+  useEffect(() => {
+    if (!watchedJob || !visible) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const job = await request<Job>(`/api/jobs/${encodeURIComponent(watchedJob!)}`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setTaskError("");
+        if (["COMPLETED", "FAILED"].includes(job.stage)) {
+          setWatchedJob(null);
+          setAttachmentJob(null);
+          setOutcome({ text: job.stage === "COMPLETED" ? "任务已完成，论文状态已刷新。" : `任务失败：${job.error_code || ""} ${job.error_message || "请查看任务详情"}`, job: job.job_id, warning: job.stage === "FAILED" });
+          setRevision((value) => value + 1);
+          changed.current();
+        } else timer = setTimeout(() => void poll(), 2000);
+      } catch (error) {
+        if (!controller.signal.aborted) setTaskError(errorMessage(error));
+      }
+    }
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [watchedJob, visible, taskRetry]);
   useEffect(() => {
     if (paper.data) form.setFieldsValue(metadataValues(paper.data));
   }, [paper.data, form]);
@@ -96,6 +126,7 @@ export default function PaperManagement({
       body.append("file", original);
       const result = await request<Accepted>(`${base}/file`, { method: "POST", body });
       setAttachmentJob(result.job_id);
+      setWatchedJob(result.job_id);
       setOutcome({ text: "原文补传任务已接收，解析与索引进度请查看任务。", job: result.job_id });
       setRevision((value) => value + 1);
       onChanged();
@@ -188,6 +219,7 @@ export default function PaperManagement({
       }
       if (action.kind === "reindex") {
         const accepted = await post<Accepted>(`${base}/reindex`, {});
+        setWatchedJob(accepted.job_id);
         setOutcome({ text: "重建任务已接收", job: accepted.job_id });
       } else if (action.kind === "clear") {
         await request(`${base}/metadata?dry_run=false`, { method: "DELETE" });
@@ -264,6 +296,7 @@ export default function PaperManagement({
         <p>请确认 PDF 属于这篇论文。文件将绑定此论文，并创建解析和索引任务。</p>
       </Modal>
       {error && !action && <Failure message={error} />}
+      {taskError && <Failure message={`任务状态：${taskError}`} retry={() => setTaskRetry((value) => value + 1)} />}
       {outcome && (
         <Alert
           type={outcome.warning ? "warning" : "success"}
@@ -288,7 +321,7 @@ export default function PaperManagement({
                 form={form}
                 layout="vertical"
                 onFinish={(values) => void save(values)}
-                disabled={busy}
+                disabled={busy || !!watchedJob}
               >
                 <Form.Item
                   name="title"
@@ -417,21 +450,21 @@ export default function PaperManagement({
               <div className="metadata-actions">
                 <Button
                   icon={<RefreshCw size={16} />}
-                  disabled={busy || !hasOriginal(document)}
+                  disabled={busy || !!watchedJob || !hasOriginal(document)}
                   onClick={() => void prepare("reindex")}
                 >
                   重建索引
                 </Button>
                 <Button
                   icon={<ScanLine size={16} />}
-                  disabled={busy || !hasOriginal(document)}
+                  disabled={busy || !!watchedJob || !hasOriginal(document)}
                   onClick={() => void prepare("reextract")}
                 >
                   重新提取元数据
                 </Button>
                 <Button
                   icon={<Eraser size={16} />}
-                  disabled={busy}
+                  disabled={busy || !!watchedJob}
                   onClick={() => void prepare("clear")}
                 >
                   清除元数据
@@ -439,7 +472,7 @@ export default function PaperManagement({
                 <Button
                   danger
                   icon={<Trash2 size={16} />}
-                  disabled={busy}
+                  disabled={busy || !!watchedJob}
                   onClick={() => void prepare("delete")}
                 >
                   删除论文

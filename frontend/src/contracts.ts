@@ -161,6 +161,7 @@ export type MetadataConflict = {
 };
 export type MetadataReviewReport = {
   total: number;
+  conflicts_total?: number;
   items: ReviewSource[];
   conflicts: MetadataConflict[];
 };

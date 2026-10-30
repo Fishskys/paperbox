@@ -23,8 +23,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.core.logging import get_logger
 from app.db.models import Paper, PaperFieldProvenance, PaperSource, new_uuid
@@ -664,7 +664,11 @@ def dismiss_claim(
     return row
 
 
-def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]]:
+def recorded_conflicts(session: Session, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    return conflict_page(session, limit=limit, offset=offset)[0]
+
+
+def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
     """Disagreements the merge engine filed: a losing claim plus the winning one.
 
     A conflict is a *non-current* claim whose value differs from the current one for
@@ -688,56 +692,41 @@ def recorded_conflicts(session: Session, limit: int = 50) -> list[dict[str, Any]
     排序按落败声明的 ``decided_at``（= 它**写入账本**的时刻）倒序 —— 清单里全是未决分歧，
     ``decision_at`` 在这里恒为 ``NULL``，排不了也排不出意义（2026-10-10 澄清）。
     """
+    current_row = aliased(PaperFieldProvenance)
+    loser_source = aliased(PaperSource)
+    current_source = aliased(PaperSource)
     statement = (
-        select(PaperFieldProvenance)
+        select(
+            PaperFieldProvenance.id.label("provenance_id"), PaperFieldProvenance.paper_id,
+            PaperFieldProvenance.field, current_row.value.label("kept"),
+            PaperFieldProvenance.value.label("rejected"), PaperFieldProvenance.source_id,
+            PaperFieldProvenance.decided_at,
+            func.row_number().over(partition_by=(PaperFieldProvenance.paper_id, PaperFieldProvenance.field),
+                order_by=(PaperFieldProvenance.decided_at.desc(), PaperFieldProvenance.id)).label("position"),
+        )
         .join(Paper, Paper.id == PaperFieldProvenance.paper_id)
+        .join(current_row, (current_row.paper_id == PaperFieldProvenance.paper_id)
+              & (current_row.field == PaperFieldProvenance.field) & current_row.is_current.is_(True))
+        .outerjoin(loser_source, loser_source.id == PaperFieldProvenance.source_id)
+        .outerjoin(current_source, current_source.id == current_row.source_id)
         .where(
             PaperFieldProvenance.is_current.is_(False),
             Paper.deleted_at.is_(None),
+            PaperFieldProvenance.decided_by != DECIDED_DISMISSED,
+            PaperFieldProvenance.value.is_distinct_from(current_row.value),
+            or_(loser_source.source_type.is_(None), func.lower(func.trim(loser_source.source_type)).not_in((
+                source_vocab.SOURCE_TYPE_PDF_HEURISTIC, source_vocab.SOURCE_TYPE_MANUAL,
+            ))),
+            or_(current_source.source_type.is_(None), func.lower(func.trim(current_source.source_type)) != source_vocab.SOURCE_TYPE_MANUAL),
         )
-        .order_by(PaperFieldProvenance.decided_at.desc())
-        .limit(max(1, min(limit * 4, 800)))
     )
-    rows = list(session.execute(statement).scalars().all())
-    seen: set[tuple[str, str]] = set()
-    conflicts: list[dict[str, Any]] = []
-    for row in rows:
-        key = (row.paper_id, row.field)
-        if key in seen:
-            continue
-        current = current_claim(session, row.paper_id, row.field)
-        if current is None or _same_value(current.value, row.value):
-            continue
-        # A human already reviewed this one and kept the current value.
-        if row.decided_by == DECIDED_DISMISSED:
-            continue
-        # A heuristic value losing to a structured one is an override (rule 2), and
-        # the design says that is expected -- not something to review.
-        loser_type = claim_source_type(session, row)
-        if loser_type == source_vocab.SOURCE_TYPE_PDF_HEURISTIC:
-            continue
-        # A human already decided this field ("采纳被拒值" / "保留现值" both write a
-        # ``manual`` claim): the older value is history, not an open question. Without
-        # this the review list could never be emptied by acting on it.
-        if loser_type == source_vocab.SOURCE_TYPE_MANUAL:
-            continue
-        if claim_source_type(session, current) == source_vocab.SOURCE_TYPE_MANUAL:
-            continue
-        seen.add(key)
-        conflicts.append(
-            {
-                "paper_id": row.paper_id,
-                "field": row.field,
-                "kept": current.value,
-                "rejected": row.value,
-                "source_id": row.source_id,
-                "provenance_id": row.id,
-                "decided_at": row.decided_at,
-            }
-        )
-        if len(conflicts) >= max(1, min(limit, 200)):
-            break
-    return conflicts
+    candidates = statement.subquery()
+    distinct_fields = select(candidates).where(candidates.c.position == 1)
+    total = session.scalar(select(func.count()).select_from(distinct_fields.subquery()))
+    page = distinct_fields.order_by(candidates.c.decided_at.desc(), candidates.c.provenance_id).limit(max(1, min(limit, 200))).offset(max(0, offset))
+    conflicts = [{key: value for key, value in row.items() if key != "position"}
+                 for row in session.execute(page).mappings()]
+    return conflicts, int(total or 0)
 
 
 def utcnow() -> datetime:  # pragma: no cover - trivial helper used by callers

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from datetime import datetime, timezone
 
 from app.db.models import Paper, PaperFieldProvenance, PaperIdentifier, PaperSource, new_uuid
 from app.services import metadata_identifiers as ids
@@ -191,6 +192,23 @@ def test_two_structured_sources_disagreeing_is_a_conflict(db_session) -> None:
     conflicts = prov.recorded_conflicts(db_session)
     assert [row["field"] for row in conflicts] == ["volume"]
     assert conflicts[0]["kept"] == "62" and conflicts[0]["rejected"] == "63"
+
+
+def test_conflict_pages_reach_old_records_beyond_the_previous_scan_cap(db_session):
+    for _ in range(205):
+        paper = make_paper(db_session)
+        prov.record_claim(db_session, paper_id=paper.id, field="volume", value="1", make_current=True)
+        prov.record_claim(db_session, paper_id=paper.id, field="volume", value="2")
+    db_session.add_all([PaperFieldProvenance(
+        id=new_uuid(), paper_id=paper.id, field="volume", value="1", is_current=False,
+        decided_by="initial", decided_at=datetime(2027, 1, 1, tzinfo=timezone.utc),
+    ) for _ in range(900)])
+    db_session.flush()
+    first, total = prov.conflict_page(db_session, limit=20)
+    second, second_total = prov.conflict_page(db_session, limit=20, offset=20)
+    assert total == second_total == 205
+    assert len(first) == len(second) == 20
+    assert {row["provenance_id"] for row in first}.isdisjoint(row["provenance_id"] for row in second)
 
 
 def test_claims_carry_their_source_and_confidence(db_session) -> None:

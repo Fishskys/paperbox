@@ -3,8 +3,10 @@ import { expect, test } from "./fixtures";
 test("shell original upload confirms the chosen paper and exposes its job", async ({ page }) => {
   const shell = { paper_id: "shell-upload", title: "Imported shell", authors: [], status: "AWAITING_FILE", files: [] };
   let uploads = 0;
+  let completed = false;
+  await page.route("**/api/jobs/attachment-job", (route) => route.fulfill({ json: { job_id: "attachment-job", stage: completed ? "COMPLETED" : "QUEUED", progress: completed ? 100 : 0 } }));
   await page.route("**/api/papers?*", (route) => route.fulfill({ json: { total: 1, papers: [shell] } }));
-  await page.route("**/api/papers/shell-upload", (route) => route.fulfill({ json: shell }));
+  await page.route("**/api/papers/shell-upload", (route) => route.fulfill({ json: completed ? { ...shell, status: "INDEXED", files: [{ mime_type: "application/pdf" }] } : shell }));
   await page.route("**/api/papers/shell-upload/metadata", (route) => route.fulfill({ json: { sources: [], provenance: {} } }));
   await page.route("**/api/papers/shell-upload/file", (route) => {
     expect(route.request().method()).toBe("POST");
@@ -25,6 +27,9 @@ test("shell original upload confirms the chosen paper and exposes its job", asyn
   await expect(drawer.getByRole("link", { name: "查看任务", exact: true })).toHaveAttribute("href", "/imports/jobs?job=attachment-job");
   await expect(drawer.getByRole("button", { name: "补传原文", exact: true })).toBeDisabled();
   expect(uploads).toBe(1);
+  completed = true;
+  await expect(drawer.getByText("任务已完成，论文状态已刷新。", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("待补充 PDF 原文", { exact: true })).toHaveCount(0);
   await page.goto("/library");
   await expect(page.getByRole("button", { name: "补传原文", exact: true })).toHaveCount(0);
 });

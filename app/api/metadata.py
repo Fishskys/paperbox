@@ -160,14 +160,17 @@ async def import_metadata(
 def review_queue(
     match_status: list[str] | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    conflicts_offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db),
 ) -> ReviewOut:
     """Records waiting for a human decision, plus the conflicts already recorded."""
     statuses = tuple(match_status) if match_status else sources.REVIEW_STATUSES
-    rows = sources.review_queue(session, statuses=statuses, limit=limit)
-    conflicts = provenance_service.recorded_conflicts(session, limit=limit)
+    rows = sources.review_queue(session, statuses=statuses, limit=limit, offset=offset)
+    conflicts, conflicts_total = provenance_service.conflict_page(session, limit=limit, offset=conflicts_offset)
     return ReviewOut(
-        total=len(rows),
+        total=sum(sources.count_by_status(session, statuses=statuses).values()),
+        conflicts_total=conflicts_total, limit=limit, offset=offset, conflicts_offset=conflicts_offset,
         items=[sources.serialize_source(row) for row in rows],
         conflicts=conflicts,
     )

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -250,6 +250,7 @@ def review_queue(
     *,
     statuses: Sequence[str] = REVIEW_STATUSES,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[PaperSource]:
     """Sources waiting for a human decision, newest first."""
     wanted = [status for status in statuses if status]
@@ -258,8 +259,9 @@ def review_queue(
     statement = (
         select(PaperSource)
         .where(PaperSource.match_status.in_(wanted))
-        .order_by(PaperSource.imported_at.desc())
+        .order_by(PaperSource.imported_at.desc(), PaperSource.id)
         .limit(max(1, min(limit, 200)))
+        .offset(max(0, offset))
     )
     return list(session.execute(statement).scalars().all())
 
@@ -283,13 +285,13 @@ def serialize_source(source: PaperSource) -> dict[str, Any]:
 
 def count_by_status(session: Session, statuses: Iterable[str] | None = None) -> dict[str, int]:
     """``{match_status: count}`` for reporting (optionally filtered)."""
-    statement = select(PaperSource)
+    statement = select(PaperSource.match_status, func.count()).group_by(PaperSource.match_status)
     wanted = [status for status in (statuses or ()) if status]
     if wanted:
         statement = statement.where(PaperSource.match_status.in_(wanted))
     counts: dict[str, int] = {}
-    for source in session.execute(statement).scalars().all():
-        counts[source.match_status] = counts.get(source.match_status, 0) + 1
+    for match_status, count in session.execute(statement):
+        counts[match_status] = int(count)
     return counts
 
 

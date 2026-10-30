@@ -340,6 +340,18 @@ def test_review_can_be_narrowed_by_status(client, session_factory) -> None:
     assert client.get("/api/metadata/review?status=ambiguous").json()["total"] == 0
 
 
+def test_review_paginates_sources_with_full_total(client, session_factory):
+    with session_factory() as session:
+        session.add_all([PaperSource(id=paper_service.new_uuid(), source_type="import_file",
+            source_ref=f"page-{index}", raw={}, match_status="pending") for index in range(205)])
+        session.commit()
+    first = client.get("/api/metadata/review?limit=20").json()
+    last = client.get("/api/metadata/review?limit=20&offset=200").json()
+    assert first["total"] == last["total"] == 205
+    assert len(first["items"]) == 20 and len(last["items"]) == 5
+    assert {row["source_id"] for row in first["items"]}.isdisjoint(row["source_id"] for row in last["items"])
+
+
 # --------------------------------------------------------------------------- #
 # POST /api/metadata/sources/{source_id}/attach
 # --------------------------------------------------------------------------- #
