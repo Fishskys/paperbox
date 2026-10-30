@@ -21,7 +21,7 @@ import { errorMessage, post, useCredentialRevision } from "../api";
 import { Blank, Failure, PageHeader } from "../components";
 import type { SearchResponse } from "../contracts";
 import { remember } from "../history";
-import { readerPath, searchBody } from "../search-model";
+import { DEFAULT_RECALL_K, DEFAULT_TOP_K, readerPath, searchBody } from "../search-model";
 
 const scrollPositions = new Map<string, number>();
 
@@ -42,8 +42,8 @@ export default function Search() {
   const [rerank, setRerank] = useState(params.get("rerank") === "true");
   const [rewrite, setRewrite] = useState(params.get("rewrite") === "true");
   const [excludeReferences, setExcludeReferences] = useState(params.get("include_references") !== "true");
-  const [recallK, setRecallK] = useState(Number(params.get("recall_k") || 100));
-  const [topK, setTopK] = useState(Number(params.get("top_k") || 20));
+  const [recallK, setRecallK] = useState(Number(params.get("recall_k") || DEFAULT_RECALL_K));
+  const [topK, setTopK] = useState(Number(params.get("top_k") || DEFAULT_TOP_K));
   const [paperType, setPaperType] = useState(params.get("paper_type") || "");
   const [tag, setTag] = useState(params.get("tag") || "");
   const [state, setState] = useState<{
@@ -65,8 +65,8 @@ export default function Search() {
     setRerank(p.get("rerank") === "true");
     setRewrite(p.get("rewrite") === "true");
     setExcludeReferences(p.get("include_references") !== "true");
-    setRecallK(Number(p.get("recall_k") || 100));
-    setTopK(Number(p.get("top_k") || 20));
+    setRecallK(Number(p.get("recall_k") || DEFAULT_RECALL_K));
+    setTopK(Number(p.get("top_k") || DEFAULT_TOP_K));
     setPaperType(p.get("paper_type") || "");
     setTag(p.get("tag") || "");
     if (!p.get("q")) {
@@ -186,8 +186,8 @@ export default function Search() {
           </span>
           <span className="inline">查询改写 <Switch aria-label="查询改写" checked={rewrite} onChange={setRewrite} size="small" /></span>
           <span className="inline">排除参考文献 <Switch aria-label="排除参考文献" checked={excludeReferences} onChange={setExcludeReferences} size="small" /></span>
-          <label>召回论文数 <InputNumber aria-label="召回论文数" min={1} max={500} value={recallK} onChange={(value) => setRecallK(value || 100)} /></label>
-          <label>每页结果数 <InputNumber aria-label="每页结果数" min={1} max={50} value={topK} onChange={(value) => setTopK(value || 20)} /></label>
+          <label>召回论文数 <InputNumber aria-label="召回论文数" min={1} max={500} value={recallK} onChange={(value) => setRecallK(value || DEFAULT_RECALL_K)} /></label>
+          <label>每页结果数 <InputNumber aria-label="每页结果数" min={1} max={50} value={topK} onChange={(value) => setTopK(value || DEFAULT_TOP_K)} /></label>
         </div>
         <Collapse
           ghost

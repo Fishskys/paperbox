@@ -1,4 +1,6 @@
 export const modes = ["hybrid", "keyword", "semantic"] as const;
+export const DEFAULT_RECALL_K = 10;
+export const DEFAULT_TOP_K = 10;
 export function searchBody(params: URLSearchParams) {
   const query = params.get("q")?.trim() || "";
   const mode = params.get("mode") || "hybrid";
@@ -24,8 +26,8 @@ export function searchBody(params: URLSearchParams) {
     filters.venue = [params.get("venue")!.trim()];
   for (const key of ["paper_type", "tag", "doi", "arxiv_id"])
     if (params.get(key)?.trim()) filters[key] = params.get(key)!.trim();
-  const topK = Number(params.get("top_k") || 20);
-  const recallK = Number(params.get("recall_k") || 100);
+  const topK = Number(params.get("top_k") || DEFAULT_TOP_K);
+  const recallK = Number(params.get("recall_k") || DEFAULT_RECALL_K);
   const offset = (positivePage(params.get("page")) - 1) * topK;
   if (!Number.isInteger(topK) || topK < 1 || topK > 50 || !Number.isInteger(recallK) || recallK < topK || recallK > 500 || offset >= recallK)
     throw new Error("结果数应为 1–50，召回数应覆盖当前页且不超过 500");

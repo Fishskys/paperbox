@@ -12,8 +12,8 @@ describe("search and reading contracts", () => {
     ).toEqual({
       query: "clock",
       mode: "hybrid",
-      top_k: 20,
-      recall_k: 100,
+      top_k: 10,
+      recall_k: 10,
       offset: 0,
       backend: "native",
       rewrite: false,
@@ -34,6 +34,12 @@ describe("search and reading contracts", () => {
     expect(searchBody(new URLSearchParams("q=clock")).filters).not.toHaveProperty("include_references");
     expect(searchBody(new URLSearchParams("q=clock&include_references=false")).filters).not.toHaveProperty("include_references");
     expect(searchBody(new URLSearchParams("q=clock&include_references=true")).filters).toHaveProperty("include_references", true);
+  });
+  it("preserves explicit recall windows and rejects a page larger than its recall pool", () => {
+    expect(searchBody(new URLSearchParams("q=clock&recall_k=35&top_k=20&page=2"))).toMatchObject({
+      recall_k: 35, top_k: 20, offset: 20,
+    });
+    expect(() => searchBody(new URLSearchParams("q=clock&recall_k=10&top_k=20"))).toThrow();
   });
   it("does not fabricate evidence pages and clamps invalid deep links", () => {
     expect(readerPath("abc", null)).toBe("/reading/papers/abc");
