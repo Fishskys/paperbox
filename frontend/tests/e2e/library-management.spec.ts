@@ -45,20 +45,47 @@ test("management filters shell and processing states and preserves filters on re
     } });
   });
   await page.goto("/manage/library?q=clock&author=Chen&page=3");
-  const state = page.getByRole("combobox", { name: "处理状态" });
-  await state.click();
-  await page.getByText("待补原文（空壳论文）", { exact: true }).click();
+  await page.getByRole("tab", { name: "待补原文", exact: true }).click();
   await expect(page).toHaveURL(/status=AWAITING_FILE/);
   expect(new URL(page.url()).searchParams.has("page")).toBe(false);
   await expect(page.getByRole("button", { name: "管理论文 Clock shell", exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByText("待补原文（空壳论文）", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "待补原文", exact: true })).toHaveAttribute("aria-selected", "true");
   for (const [label, value] of [["待处理", "PENDING"], ["处理中", "PROCESSING"], ["失败", "FAILED"]]) {
-    await state.click();
-    await page.locator(".ant-select-item-option-content").getByText(label, { exact: true }).click();
+    await page.getByRole("tab", { name: label, exact: true }).click();
     await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe(value);
   }
   expect(requests.every((url) => url.searchParams.get("q") === "clock" && url.searchParams.get("author") === "Chen")).toBe(true);
+});
+
+test("management prioritizes every state and locates papers by DOI without catalog facets", async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route("**/api/papers?*", (route) => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({ json: { total: 100, papers: [{ paper_id: "managed", title: "Managed paper", authors: ["Chen"], doi: "10.1234/clock", status: "INDEXED", files: [{ mime_type: "application/pdf" }] }] } });
+  });
+  await page.goto("/manage/library?author=Chen&page=3");
+  await expect(page.getByRole("columnheader", { name: "原文", exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "年份", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "筛选期刊或会议" })).toHaveCount(0);
+  for (const [label, value] of [["待补原文", "AWAITING_FILE"], ["失败", "FAILED"], ["处理中", "PROCESSING"], ["待处理", "PENDING"], ["已存储", "STORED"], ["已索引", "INDEXED"], ["全部", null]]) {
+    await page.getByRole("tab", { name: label!, exact: true }).click();
+    await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe(value);
+    expect(new URL(page.url()).searchParams.has("page")).toBe(false);
+  }
+  await page.getByRole("combobox", { name: "定位字段" }).click();
+  await page.locator(".ant-select-item-option-content").getByText("DOI", { exact: true }).click();
+  await page.getByLabel("快速定位论文").fill("10.1234/clock");
+  await page.getByLabel("快速定位论文").press("Enter");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("q")).toBe("10.1234/clock");
+  expect(requests.at(-1)?.searchParams.get("scope")).toBe("doi");
+  expect(requests.every((url) => url.searchParams.get("author") === "Chen" && !url.searchParams.has("facets"))).toBe(true);
+  const count = requests.length;
+  await page.getByRole("button", { name: "刷新论文列表" }).click();
+  await expect.poll(() => requests.length).toBe(count + 1);
+  expect(requests.at(-1)?.searchParams.get("q")).toBe("10.1234/clock");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test("library management edits only changed fields and previews destructive actions", async ({

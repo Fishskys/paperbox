@@ -1,7 +1,6 @@
-import { App, Button, Drawer, Input, InputNumber, Select, Table, Tag, Tooltip } from "antd";
-import { ArrowUpRight, Download, Info } from "lucide-react";
+import { App, Button, Drawer, Input, InputNumber, Select, Table, Tabs, Tag, Tooltip } from "antd";
+import { ArrowUpRight, Download, Info, Pencil, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { errorMessage } from "../api";
 import { Failure, PageHeader, Stage } from "../components";
@@ -11,14 +10,24 @@ import { useResource } from "../hooks";
 import { positivePage, readerPath } from "../search-model";
 import { remember } from "../history";
 
+const statuses = [
+  { label: "全部", key: "all" },
+  { label: "待补原文", key: "AWAITING_FILE" },
+  { label: "失败", key: "FAILED" },
+  { label: "处理中", key: "PROCESSING" },
+  { label: "待处理", key: "PENDING" },
+  { label: "已存储", key: "STORED" },
+  { label: "已索引", key: "INDEXED" },
+];
+
 export default function Library({
-  title = "论文库",
-  actions,
+  title = "常规检索",
+  onManage,
   revision = 0,
   conventional = false,
 }: {
   title?: string;
-  actions?: (paper: Paper) => ReactNode;
+  onManage?: (paper: Paper) => void;
   revision?: number;
   conventional?: boolean;
 }) {
@@ -34,8 +43,8 @@ export default function Library({
   });
   for (const key of ["q", "status", "author"])
     if (params.get(key)) query.set(key, params.get(key)!);
+  query.set("scope", params.get("scope") || (conventional ? "all" : "title"));
   if (conventional) {
-    query.set("scope", params.get("scope") || "all");
     query.set("facets", "true");
     for (const key of ["sort", "venue", "year_from", "year_to", "paper_type", "tag"])
       if (params.get(key)) query.set(key, params.get(key)!);
@@ -71,16 +80,19 @@ export default function Library({
       <PageHeader
         title={title}
         description={data ? `${data.total} 篇论文` : "研究资料"}
+        actions={!conventional && <Button icon={<RefreshCw size={16} />} loading={loading} aria-label="刷新论文列表" onClick={() => setRefresh((value) => value + 1)}>刷新</Button>}
       />
+      {!conventional && <Tabs className="management-status" activeKey={params.get("status") || "all"} items={statuses}
+        onChange={(value) => filter("status", value === "all" ? "" : value)} />}
       <div className="list-toolbar">
-        {conventional && <Select aria-label="检索字段" value={params.get("scope") || "all"}
-          options={[["all", "全部元数据"], ["title", "标题"], ["authors", "作者"], ["venue", "期刊 / 会议"], ["doi", "DOI"], ["arxiv_id", "arXiv ID"], ["abstract", "摘要"]].map(([value, label]) => ({ value, label }))}
-          onChange={(value) => filter("scope", value)} />}
+        <Select aria-label={conventional ? "检索字段" : "定位字段"} value={params.get("scope") || (conventional ? "all" : "title")}
+          options={(conventional ? [["all", "全部元数据"], ["title", "标题"], ["authors", "作者"], ["venue", "期刊 / 会议"], ["doi", "DOI"], ["arxiv_id", "arXiv ID"], ["abstract", "摘要"]] : [["title", "标题"], ["doi", "DOI"], ["authors", "作者"]]).map(([value, label]) => ({ value, label }))}
+          onChange={(value) => filter("scope", value)} />
         <Input.Search
-          aria-label={conventional ? "检索内容" : "搜索论文标题"}
+          aria-label={conventional ? "检索内容" : "快速定位论文"}
           key={`title-${params.get("q")}`}
           defaultValue={params.get("q") || ""}
-          placeholder={conventional ? "输入检索内容" : "搜索论文标题"}
+          placeholder={conventional ? "输入检索内容" : "输入标题、DOI 或作者"}
           allowClear
           onSearch={(value) => filter("q", value)}
         />
@@ -95,7 +107,7 @@ export default function Library({
           allowClear
           onSearch={(value) => filter("author", value)}
         />}
-        <Select
+        {conventional && <Select
           aria-label="处理状态"
           value={params.get("status") || ""}
           onChange={(value) => filter("status", value)}
@@ -108,7 +120,7 @@ export default function Library({
             { label: "失败", value: "FAILED" },
             { label: "已存储", value: "STORED" },
           ]}
-        />
+        />}
       </div>
       {conventional && <div className="list-toolbar">
         <Input.Search aria-label="筛选标签" placeholder="标签" defaultValue={params.get("tag") || ""}
@@ -159,7 +171,7 @@ export default function Library({
             key: "paper",
             render: (_, paper) => (
               <div className="paper-cell">
-                {hasOriginal(paper) ? (
+                {!conventional ? <Button type="link" className="paper-title-button" onClick={() => onManage?.(paper)}>{paper.title || "未命名论文"}</Button> : hasOriginal(paper) ? (
                   <Link
                     to={readerPath(paper.paper_id)}
                     state={{ from: location.pathname + location.search }}
@@ -176,17 +188,20 @@ export default function Library({
                   </Button>
                 )}
                 <p>{paper.authors.slice(0, 4).join(" · ") || "作者未标注"}</p>
+                {!conventional && <p className="management-paper-details">{[paper.year, paper.venue, paper.doi].filter(Boolean).join(" · ")}</p>}
               </div>
             ),
           },
           {
             title: "年份",
+            hidden: !conventional,
             dataIndex: "year",
             width: 75,
             render: (year) => year || "—",
           },
           {
             title: "期刊 / 会议",
+            hidden: !conventional,
             dataIndex: "venue",
             width: 160,
             render: (venue) => venue || "—",
@@ -198,12 +213,21 @@ export default function Library({
             render: (value: string) => <Stage value={value} />,
           },
           {
-            title: "",
+            title: "原文",
+            key: "original",
+            hidden: conventional,
+            width: 100,
+            render: (_, paper) => <Tag color={hasOriginal(paper) ? "success" : "warning"}>{hasOriginal(paper) ? "有原文" : "待补充"}</Tag>,
+          },
+          {
+            title: conventional ? "" : "操作",
             key: "actions",
-            width: actions ? 125 : 85,
-            render: (_, paper) => (
+            width: conventional ? 85 : 150,
+            render: (_, paper) => !conventional ? <div className="inline">
+              <Button type="text" icon={<Pencil size={16} />} aria-label={`管理论文 ${paper.title}`} onClick={() => onManage?.(paper)}>管理</Button>
+              {hasOriginal(paper) && <Tooltip title="查看原文"><Link aria-label={`查看原文 ${paper.title}`} to={readerPath(paper.paper_id)} state={{ from: location.pathname + location.search }}><ArrowUpRight size={16} /></Link></Tooltip>}
+            </div> : (
               <div className="inline">
-                {actions?.(paper)}
                 <Tooltip title="论文信息">
                   <Button
                     type="text"

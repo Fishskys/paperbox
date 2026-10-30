@@ -1,5 +1,4 @@
-import { Button, Drawer, Tooltip } from "antd";
-import { Pencil } from "lucide-react";
+import { Drawer } from "antd";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Library from "./Library";
@@ -19,20 +18,11 @@ export default function LibraryManagement() {
       <Library
         title="论文库管理"
         revision={revision}
-        actions={(paper) => (
-          <Tooltip title="管理论文">
-            <Button
-              type="text"
-              aria-label={`管理论文 ${paper.title}`}
-              icon={<Pencil size={16} />}
-              onClick={() => {
-                const next = new URLSearchParams(params);
-                next.set("paper", paper.paper_id);
-                setParams(next);
-              }}
-            />
-          </Tooltip>
-        )}
+        onManage={(paper) => {
+          const next = new URLSearchParams(params);
+          next.set("paper", paper.paper_id);
+          setParams(next);
+        }}
       />
       <Drawer
         title="管理论文"

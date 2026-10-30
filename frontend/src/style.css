@@ -453,6 +453,8 @@ h1 {
 .data-table {
   margin-top: 16px;
 }
+.management-status { margin-bottom: 8px; min-width: 0; }
+.management-paper-details { overflow-wrap: anywhere; }
 .data-table .ant-table {
   background: transparent;
 }

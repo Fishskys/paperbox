@@ -16,13 +16,12 @@ try {
   await page.goto(`${origin}/manage/library`);
   const rows = page.locator(".ant-table-tbody .ant-table-row");
   await expect(rows.first()).toBeVisible();
-  await page.getByRole("combobox", { name: "处理状态" }).click();
   const pending = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return url.pathname === "/api/papers" && url.searchParams.get("status") === "INDEXED";
   });
   const started = performance.now();
-  await page.locator(".ant-select-item-option-content").getByText("已索引", { exact: true }).click();
+  await page.getByRole("tab", { name: "已索引", exact: true }).click();
   const response = await pending;
   if (!response.ok()) throw new Error(`Indexed list unavailable: HTTP ${response.status()}`);
   const report = await response.json();
@@ -38,7 +37,10 @@ try {
   await page.reload();
   await expect(rows).toHaveCount(report.papers.length);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("combobox", { name: "处理状态" })).toBeVisible();
+  await expect(page.locator(".management-status")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "已索引", exact: true })).toHaveAttribute("aria-selected", "true");
+  if (!(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)))
+    throw new Error("Management layout overflows on mobile");
   await page.screenshot({ path: resolve(output, "webui-library-indexed-live-390.png"), fullPage: true });
   console.log(JSON.stringify({ status: "passed", filter: "INDEXED", total: report.total,
     returned: report.papers.length, http_ms: Math.round(timing.responseEnd),

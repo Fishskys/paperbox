@@ -69,12 +69,39 @@ try {
         (response) => new URL(response.url()).pathname === "/api/papers",
       );
       await page.getByRole("link", { name: "论文库管理", exact: true }).click();
-      const paperList = await (await listing).json();
+      if (!(await listing).ok()) throw new Error("Management list unavailable");
       await expect(
         page.getByRole("heading", { name: "论文库管理", exact: true }),
       ).toBeVisible();
+      await expect(page.getByRole("columnheader", { name: "原文", exact: true })).toBeVisible();
+      await expect(page.getByRole("columnheader", { name: "年份", exact: true })).toHaveCount(0);
+      const indexed = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/papers" && url.searchParams.get("status") === "INDEXED";
+      });
+      await page.getByRole("tab", { name: "已索引", exact: true }).click();
+      const indexedList = await (await indexed).json();
+      if (indexedList.papers.some((paper) => paper.status !== "INDEXED")) throw new Error("Incorrect management status filter");
+      const sample = indexedList.papers.find((paper) => paper.doi);
+      if (sample) {
+        await page.getByRole("combobox", { name: "定位字段" }).click();
+        await page.locator(".ant-select-item-option-content").getByText("DOI", { exact: true }).click();
+        await page.getByLabel("快速定位论文").fill(sample.doi);
+        const located = page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return url.pathname === "/api/papers" && url.searchParams.get("q") === sample.doi && url.searchParams.get("scope") === "doi";
+        });
+        await page.getByLabel("快速定位论文").press("Enter");
+        if (!(await (await located).json()).papers.some((paper) => paper.paper_id === sample.paper_id)) throw new Error("DOI locator did not find the sample paper");
+      }
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), { message: `Management list fits at ${width}` }).toBe(true);
+        await page.screenshot({ path: resolve(output, `webui-management-list-${width}.png`) });
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
       const manage = page.getByRole("button", { name: /^管理论文 / }).first();
-      if (paperList.total > 0) {
+      if (indexedList.total > 0) {
         await expect(manage).toBeVisible();
         await manage.click();
         const drawer = page.getByRole("dialog", {
