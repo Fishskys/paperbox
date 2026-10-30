@@ -45,6 +45,8 @@ test("management filters shell and processing states and preserves filters on re
     } });
   });
   await page.goto("/manage/library?q=clock&author=Chen&page=3");
+  await expect(page.getByLabel("筛选作者", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("作者：Chen", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "待补原文", exact: true }).click();
   await expect(page).toHaveURL(/status=AWAITING_FILE/);
   expect(new URL(page.url()).searchParams.has("page")).toBe(false);
@@ -56,6 +58,11 @@ test("management filters shell and processing states and preserves filters on re
     await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe(value);
   }
   expect(requests.every((url) => url.searchParams.get("q") === "clock" && url.searchParams.get("author") === "Chen")).toBe(true);
+  await page.locator(".active-paper-filters .ant-tag-close-icon").click();
+  await expect.poll(() => requests.at(-1)?.searchParams.has("author")).toBe(false);
+  await page.getByRole("combobox", { name: "定位字段" }).click();
+  await page.locator(".ant-select-item-option-content").getByText("作者", { exact: true }).click();
+  await expect.poll(() => requests.at(-1)?.searchParams.get("scope")).toBe("authors");
 });
 
 test("management prioritizes every state and locates papers by DOI without catalog facets", async ({ page }) => {
@@ -85,7 +92,7 @@ test("management prioritizes every state and locates papers by DOI without catal
   await expect.poll(() => requests.length).toBe(count + 1);
   expect(requests.at(-1)?.searchParams.get("q")).toBe("10.1234/clock");
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test("library management edits only changed fields and previews destructive actions", async ({

@@ -450,6 +450,18 @@ h1 {
 .list-toolbar .ant-select {
   min-width: 130px;
 }
+.active-paper-filters { margin-bottom: 16px; }
+.catalog-filters { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+.catalog-filters .catalog-tag { width: 191px; max-width: 100%; }
+.catalog-filters .catalog-venue { width: 650px; max-width: 100%; }
+.catalog-filters .catalog-type { width: 130px; }
+.catalog-years { display: flex; gap: 12px; max-width: 100%; }
+.catalog-years .ant-input-number { width: 114px; min-width: 0; }
+.catalog-sort { display: inline-flex; gap: 10px; align-items: center; }
+.catalog-sort .ant-select { width: 140px; }
+.catalog-table .ant-table-pagination { align-items: center; }
+.catalog-table .ant-table-pagination .ant-pagination-total-text { height: auto; margin-inline-end: auto; }
+.catalog-table .ant-table-pagination ~ .ant-table-pagination .ant-pagination-total-text { display: none; }
 .data-table {
   margin-top: 16px;
 }
@@ -617,6 +629,10 @@ h1 {
   text-align: left;
 }
 @media (max-width: 760px) {
+  .catalog-table .ant-table-pagination .ant-pagination-total-text {
+    flex-basis: 100%;
+    margin-bottom: 8px;
+  }
   .metadata-form-grid {
     grid-template-columns: minmax(0, 1fr);
   }

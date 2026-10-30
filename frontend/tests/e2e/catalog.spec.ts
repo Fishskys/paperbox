@@ -11,6 +11,8 @@ test("conventional search uses metadata scopes, server pagination and restorable
     } });
   });
   await page.goto("/search/standard");
+  await expect(page.getByLabel("筛选作者", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".ant-table-pagination").first().getByRole("combobox", { name: "结果排序" })).toBeVisible();
   await page.getByLabel("检索内容", { exact: true }).fill("clock");
   await page.getByLabel("检索内容", { exact: true }).press("Enter");
   await expect(page).toHaveURL(/q=clock/);
@@ -23,6 +25,11 @@ test("conventional search uses metadata scopes, server pagination and restorable
   await page.reload();
   await expect(page).toHaveURL(/page=2/);
   expect(requests.at(-1)?.searchParams.get("scope")).toBe("authors");
+  await page.getByRole("combobox", { name: "结果排序" }).click();
+  await page.locator(".ant-select-item-option-content").getByText("年份从新到旧", { exact: true }).click();
+  await expect.poll(() => requests.at(-1)?.searchParams.get("sort")).toBe("year_desc");
+  expect(new URL(page.url()).searchParams.has("page")).toBe(false);
+  await expect(page.locator(".ant-pagination-item-active")).toHaveText(["1", "1"]);
   await page.goto("/search/history");
   await expect(page.getByRole("link", { name: "clock" }).first()).toHaveAttribute("href", /\/search\/standard\?/);
 });

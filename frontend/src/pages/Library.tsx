@@ -96,17 +96,6 @@ export default function Library({
           allowClear
           onSearch={(value) => filter("q", value)}
         />
-        {conventional ? <Select aria-label="筛选作者" placeholder="作者" showSearch allowClear
-          value={params.get("author") || undefined}
-          options={data?.facets?.authors?.map((item) => ({ value: item.key, label: `${item.key} (${item.count})` }))}
-          onChange={(value) => filter("author", value || "")} /> : <Input.Search
-          aria-label="筛选作者"
-          key={`author-${params.get("author")}`}
-          defaultValue={params.get("author") || ""}
-          placeholder="作者"
-          allowClear
-          onSearch={(value) => filter("author", value)}
-        />}
         {conventional && <Select
           aria-label="处理状态"
           value={params.get("status") || ""}
@@ -122,29 +111,29 @@ export default function Library({
           ]}
         />}
       </div>
-      {conventional && <div className="list-toolbar">
-        <Input.Search aria-label="筛选标签" placeholder="标签" defaultValue={params.get("tag") || ""}
+      {params.get("author") && <div className="active-paper-filters"><Tag closable onClose={() => filter("author", "")}>作者：{params.get("author")}</Tag></div>}
+      {conventional && <div className="catalog-filters">
+        <Input.Search className="catalog-tag" aria-label="筛选标签" placeholder="标签" defaultValue={params.get("tag") || ""}
           allowClear onSearch={(value) => filter("tag", value)} />
-        <Select aria-label="筛选期刊或会议" placeholder="期刊 / 会议" showSearch allowClear
+        <Select className="catalog-venue" aria-label="筛选期刊或会议" placeholder="期刊 / 会议" showSearch allowClear
           value={params.get("venue") || undefined}
           options={data?.facets?.venue?.map((item) => ({ value: item.key, label: `${item.key} (${item.count})` }))}
           onChange={(value) => filter("venue", value || "")} />
-        <Select aria-label="文献类型" value={params.get("paper_type") || ""}
+        <Select className="catalog-type" aria-label="文献类型" value={params.get("paper_type") || ""}
           options={[["", "全部类型"], ["journal", "期刊论文"], ["conference", "会议论文"], ["preprint", "预印本"], ["early_access", "在线优先"], ["standard", "标准"]].map(([value, label]) => ({ value, label }))}
           onChange={(value) => filter("paper_type", value)} />
+        <div className="catalog-years">
         <InputNumber aria-label="起始年份" placeholder="起始年份" min={1900} max={2100} precision={0}
           value={params.get("year_from") ? Number(params.get("year_from")) : null} onChange={(value) => filter("year_from", value ? String(value) : "")} />
         <InputNumber aria-label="结束年份" placeholder="结束年份" min={1900} max={2100} precision={0}
           value={params.get("year_to") ? Number(params.get("year_to")) : null} onChange={(value) => filter("year_to", value ? String(value) : "")} />
-        <Select aria-label="结果排序" value={params.get("sort") || "relevance"}
-          options={[["relevance", "相关度"], ["newest", "最新入库"], ["year_desc", "年份从新到旧"], ["year_asc", "年份从旧到新"], ["title", "标题"]].map(([value, label]) => ({ value, label }))}
-          onChange={(value) => filter("sort", value)} />
+        </div>
       </div>}
       {error && (
         <Failure message={error} retry={() => setRefresh((v) => v + 1)} />
       )}
       <Table<Paper>
-        className="data-table"
+        className={`data-table${conventional ? " catalog-table" : ""}`}
         rowKey="paper_id"
         loading={loading}
         dataSource={data?.papers || []}
@@ -159,6 +148,9 @@ export default function Library({
           showQuickJumper: true,
           responsive: true,
           showLessItems: true,
+          showTotal: conventional ? () => <span className="catalog-sort"><span>排序</span><Select aria-label="结果排序" value={params.get("sort") || "relevance"}
+            options={[["relevance", "相关度"], ["newest", "最新入库"], ["year_desc", "年份从新到旧"], ["year_asc", "年份从旧到新"], ["title", "标题"]].map(([value, label]) => ({ value, label }))}
+            onChange={(value) => filter("sort", value)} /></span> : undefined,
           onChange: (value) => {
             const next = new URLSearchParams(params);
             next.set("page", String(value));
