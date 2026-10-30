@@ -109,7 +109,7 @@ def to_response(
         for item in results
     ]
     # The reranker "did something" only when a paper actually carries a score.
-    reranked = any(item.rerank_score is not None for item in results)
+    reranked = bool(telemetry.get("reranked")) or any(item.rerank_score is not None for item in results)
     return SearchResponse(
         query=request.query,
         rewritten_query=retrieval_query if rewrite_outcome.applied else None,
@@ -117,9 +117,13 @@ def to_response(
         backend=str(telemetry.get("backend") or request.backend or settings.search_backend),
         total=total,
         candidates=candidates,
+        recalled_papers=telemetry.get("recalled_papers"), recall_k=request.recall_k, offset=request.offset,
+        total_scope="candidate_window" if request.recall_k is not None else "query",
         took_ms=took_ms,
         rerank=SearchRerankInfo(
             enabled=bool(rerank_service.settings.rerank_enabled),
+            requested=request.rerank, applied=reranked,
+            status=("not_requested" if not request.rerank else "applied" if reranked else "disabled" if not rerank_service.settings.rerank_enabled else "empty" if not results else "failed"),
             model=rerank_service.settings.rerank_model if reranked else None,
             took_ms=telemetry.get("rerank_took_ms") if reranked else None,
         ),
@@ -186,7 +190,8 @@ async def run_search(request: SearchRequest) -> SearchResponse:
     started = time.perf_counter()
     filters = request.filters.to_query_filters() if request.filters else None
 
-    rewrite_outcome = await asyncio.to_thread(maybe_rewrite, request.query)
+    rewrite_outcome = (query_rewrite_service.RewriteOutcome(request.query, request.query, False)
+                       if request.rewrite is False else await asyncio.to_thread(maybe_rewrite, request.query))
     retrieval_query = rewrite_outcome.rewritten if rewrite_outcome.applied else request.query
 
     telemetry: dict[str, Any] = {}
@@ -200,6 +205,7 @@ async def run_search(request: SearchRequest) -> SearchResponse:
         telemetry=telemetry,
         facets=request.facets,
         backend=request.backend,
+        **({"recall_k": request.recall_k, "offset": request.offset} if request.recall_k is not None else {}),
     )
     took_ms = round((time.perf_counter() - started) * 1000, 3)
     response = to_response(

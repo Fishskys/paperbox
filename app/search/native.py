@@ -63,6 +63,8 @@ from app.search.hybrid import (
     SearchError,
     _hit_from_source,
     build_filters,
+    build_keyword_query,
+    build_semantic_query,
     build_reference_exclusion,
 )
 from app.search.opensearch import ALIAS, get_client
@@ -298,6 +300,7 @@ def native_search(
     pipeline: str = PIPELINE_RRF,
     query_vector: list[float] | None = None,
     include_references: bool | None = None,
+    mode: str = "hybrid",
 ) -> list[ChunkHit]:
     """Run one native hybrid request and return its collapsed chunks.
 
@@ -310,7 +313,7 @@ def native_search(
     if not query:
         return []
     try:
-        vector = query_vector if query_vector is not None else embed_text(query)
+        vector = [] if mode == "keyword" else (query_vector if query_vector is not None else embed_text(query))
     except EmbeddingError as exc:
         raise SearchError(f"embedding the query failed: {exc}") from exc
 
@@ -324,9 +327,13 @@ def native_search(
         include_references=include_references,
     )
     client = client or get_client()
+    if mode == "keyword":
+        body["query"] = build_keyword_query(query, filters)
+    elif mode == "semantic":
+        body["query"] = build_semantic_query(vector, filters, k=int(size) * CANDIDATE_MULTIPLIER)
     try:
         response = client.search(
-            index=index, body=body, params={"search_pipeline": pipeline}
+            index=index, body=body, params={"search_pipeline": pipeline} if mode == "hybrid" else {}
         )
     except NotFoundError as exc:
         raise SearchError(f"search index {index!r} does not exist") from exc

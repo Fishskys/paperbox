@@ -309,9 +309,19 @@ h1 {
 }
 .search-options {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 18px 0 2px;
+}
+.search-options > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.search-options .ant-input-number {
+  width: 88px;
 }
 .search-options .ant-select {
   width: 130px;

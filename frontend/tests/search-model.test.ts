@@ -13,6 +13,10 @@ describe("search and reading contracts", () => {
       query: "clock",
       mode: "hybrid",
       top_k: 20,
+      recall_k: 100,
+      offset: 0,
+      backend: "native",
+      rewrite: false,
       rerank: true,
       filters: { authors: ["Chen"], venue: ["ISSCC"], year_from: 2020 },
     });

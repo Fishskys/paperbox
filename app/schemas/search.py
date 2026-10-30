@@ -251,6 +251,9 @@ class SearchRequest(BaseModel):
     )
     mode: SearchModeLiteral = DEFAULT_MODE
     top_k: int = Field(default=10, ge=MIN_TOP_K, le=MAX_TOP_K)
+    recall_k: int | None = Field(default=None, ge=1, le=500, description="Native paper candidate budget, independent of final results.")
+    offset: int = Field(default=0, ge=0, le=499)
+    rewrite: bool | None = Field(default=None, description="False bypasses query rewriting; null preserves server policy.")
     filters: SearchFilters | None = None
     rerank: bool = Field(
         default=False,
@@ -289,6 +292,18 @@ class SearchRequest(BaseModel):
         if not normalized:
             raise ValueError("query must not be blank")
         return normalized
+
+    @model_validator(mode="after")
+    def _check_candidate_window(self):
+        if self.recall_k is not None:
+            if self.top_k > self.recall_k or self.offset >= self.recall_k:
+                raise ValueError("recall_k must cover top_k and the page offset")
+            if self.backend == "python":
+                raise ValueError("paper recall_k requires the native backend")
+            self.backend = "native"
+        elif self.offset:
+            raise ValueError("offset requires recall_k")
+        return self
 
     @field_validator("backend", mode="before")
     @classmethod
@@ -359,6 +374,9 @@ class SearchRerankInfo(BaseModel):
 
     #: Whether server-side reranking is configured at all.
     enabled: bool = False
+    requested: bool = False
+    applied: bool = False
+    status: str = "not_requested"
     #: Model that reranked the candidates; ``None`` when it did not run.
     model: str | None = None
     #: Rerank duration in milliseconds; ``None`` when it did not run.
@@ -423,6 +441,10 @@ class SearchResponse(BaseModel):
     total: int
     #: 喂给论文聚合的 chunk 候选池大小（2026-09-30 前，这个数字被当成 ``total``）。
     candidates: int
+    recalled_papers: int | None = None
+    total_scope: str = "query"
+    recall_k: int | None = None
+    offset: int = 0
     took_ms: float
     rerank: SearchRerankInfo = Field(default_factory=SearchRerankInfo)
     rewrite: SearchRewriteInfo = Field(default_factory=SearchRewriteInfo)

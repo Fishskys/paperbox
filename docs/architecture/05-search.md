@@ -8,6 +8,10 @@
 
 ## 1. 职责边界（做什么 / 不做什么）
 
+常规检索通过 `GET /api/papers` 查询当前 PG 元数据，字段、排序与分面见 [WebUI 架构](13-webui.md)，不进入本模块的模型链路。
+智能检索的 `POST /api/search` 可显式设置 `recall_k`（最多 500 篇）和 `offset`，三种模式均走 OpenSearch 原生论文 collapse，在候选窗口内重排和分页。
+省略 recall_k 的请求保留原有原生混合或 Python 片段检索路径。响应分别报告实际召回论文数与聚合片段数；重排状态以实际执行为准。
+
 **做**：
 
 - 把一条自然语言查询变成**论文级**结果：`POST /api/search`（`app/api/search.py` 的 `search()`）。

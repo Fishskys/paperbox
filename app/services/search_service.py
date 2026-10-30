@@ -333,6 +333,8 @@ def search_papers(
     index: str | None = None,
     count_total: bool = True,
     facets: bool = False,
+    recall_k: int | None = None,
+    offset: int = 0,
     **search_kwargs: Any,
 ) -> SearchOutcome:
     """Run the chunk search and aggregate it into paper-level results.
@@ -367,10 +369,14 @@ def search_papers(
         except EmbeddingError as exc:
             raise SearchError(f"embedding the query failed: {exc}") from exc
 
+    if recall_k is not None:
+        search_kwargs["recall_k"] = recall_k
+        if telemetry is None:
+            telemetry = {}
     hits = search_chunks(
         query,
         mode,
-        top_k,
+        top_k + offset,
         filters,
         client=client,
         index=index or ALIAS,
@@ -380,8 +386,10 @@ def search_papers(
         query_vector=query_vector,
         **search_kwargs,
     )
-    results = normalize_scores(aggregate_papers(hits, top_k=top_k))
+    results = normalize_scores(aggregate_papers(hits, top_k=top_k + offset))[offset:offset + top_k]
     computed_facets = _facet_counts(filters, facets, client=client, index=index)
+    if recall_k is not None:
+        return SearchOutcome(results, int(telemetry.get("recalled_papers", 0)), len(hits), computed_facets)
     if not count_total:
         return SearchOutcome(
             results, len({hit.paper_id for hit in hits}), len(hits), computed_facets

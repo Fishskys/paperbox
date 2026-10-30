@@ -20,10 +20,21 @@ export function searchBody(params: URLSearchParams) {
     filters.authors = [params.get("author")!.trim()];
   if (params.get("venue")?.trim())
     filters.venue = [params.get("venue")!.trim()];
+  for (const key of ["paper_type", "tag", "doi", "arxiv_id"])
+    if (params.get(key)?.trim()) filters[key] = params.get(key)!.trim();
+  const topK = Number(params.get("top_k") || 20);
+  const recallK = Number(params.get("recall_k") || 100);
+  const offset = (positivePage(params.get("page")) - 1) * topK;
+  if (!Number.isInteger(topK) || topK < 1 || topK > 50 || !Number.isInteger(recallK) || recallK < topK || recallK > 500 || offset >= recallK)
+    throw new Error("结果数应为 1–50，召回数应覆盖当前页且不超过 500");
   return {
     query,
     mode,
-    top_k: 20,
+    top_k: topK,
+    recall_k: recallK,
+    offset,
+    backend: "native",
+    rewrite: params.get("rewrite") === "true",
     rerank: params.get("rerank") === "true",
     filters,
   };

@@ -12,6 +12,11 @@
 `sort=relevance|newest|year_desc|year_asc|title`，`facets=true` 返回当前查询的作者、刊物、年份和类型论文计数。
 该接口直接读取当前元数据，保持现有过滤、`limit`/`offset` 和精确总数，不进入模型流水线。
 
+`POST /api/search` 可选 `recall_k`（1..500，至少为 top_k），启用原生论文召回窗口；`offset` 须小于该窗口，可返回不足 top_k 的最后一页。
+不传 recall_k 的请求保持既有行为；显式 Python 后端不支持论文窗口。`rewrite=false` 跳过改写模型，null 保持服务策略。
+响应追加 `recalled_papers`、`recall_k`、`offset`，`rerank` 追加 requested/applied/status，区分未请求、未启用、已执行、失败降级和无候选。
+窗口请求返回 `total_scope=candidate_window`，total 为实际召回论文数，避免额外的全库 kNN 计数；旧请求保持 `total_scope=query` 与既有计数策略。
+
 做什么：
 
 - 把 HTTP 请求翻译成服务层调用：路由声明、请求体解析、Bearer 鉴权、错误码映射、响应模型序列化。

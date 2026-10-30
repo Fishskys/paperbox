@@ -3,6 +3,7 @@ import {
   Collapse,
   Input,
   InputNumber,
+  Pagination,
   Select,
   Skeleton,
   Switch,
@@ -39,6 +40,11 @@ export default function Search() {
     params.get("year_to") ? Number(params.get("year_to")) : null,
   );
   const [rerank, setRerank] = useState(params.get("rerank") === "true");
+  const [rewrite, setRewrite] = useState(params.get("rewrite") === "true");
+  const [recallK, setRecallK] = useState(Number(params.get("recall_k") || 100));
+  const [topK, setTopK] = useState(Number(params.get("top_k") || 20));
+  const [paperType, setPaperType] = useState(params.get("paper_type") || "");
+  const [tag, setTag] = useState(params.get("tag") || "");
   const [state, setState] = useState<{
     data?: SearchResponse;
     error?: string;
@@ -56,6 +62,11 @@ export default function Search() {
     setYearFrom(p.get("year_from") ? Number(p.get("year_from")) : null);
     setYearTo(p.get("year_to") ? Number(p.get("year_to")) : null);
     setRerank(p.get("rerank") === "true");
+    setRewrite(p.get("rewrite") === "true");
+    setRecallK(Number(p.get("recall_k") || 100));
+    setTopK(Number(p.get("top_k") || 20));
+    setPaperType(p.get("paper_type") || "");
+    setTag(p.get("tag") || "");
     if (!p.get("q")) {
       setState({ loading: false });
       return;
@@ -64,7 +75,7 @@ export default function Search() {
     setState({ loading: true });
     try {
       const body = searchBody(p);
-      post<SearchResponse>("/api/search", body, controller.signal)
+      post<SearchResponse>("/api/search", body, controller.signal, 180000)
         .then((data) => {
           if (controller.signal.aborted) return;
           setState({ data, loading: false });
@@ -95,6 +106,11 @@ export default function Search() {
     if (yearFrom !== null) next.set("year_from", String(yearFrom));
     if (yearTo !== null) next.set("year_to", String(yearTo));
     if (rerank) next.set("rerank", "true");
+    next.set("recall_k", String(recallK));
+    next.set("top_k", String(topK));
+    if (rewrite) next.set("rewrite", "true");
+    if (paperType) next.set("paper_type", paperType);
+    if (tag.trim()) next.set("tag", tag.trim());
     try {
       searchBody(next);
     } catch (error) {
@@ -157,13 +173,17 @@ export default function Search() {
               { label: "语义检索", value: "semantic" },
             ]}
           />
-          <span className="muted">精排</span>
+          <span className="inline">精排
           <Switch
             aria-label="开启精排"
             size="small"
             checked={rerank}
             onChange={setRerank}
           />
+          </span>
+          <span className="inline">查询改写 <Switch aria-label="查询改写" checked={rewrite} onChange={setRewrite} size="small" /></span>
+          <label>召回论文数 <InputNumber aria-label="召回论文数" min={1} max={500} value={recallK} onChange={(value) => setRecallK(value || 100)} /></label>
+          <label>每页结果数 <InputNumber aria-label="每页结果数" min={1} max={50} value={topK} onChange={(value) => setTopK(value || 20)} /></label>
         </div>
         <Collapse
           ghost
@@ -177,6 +197,9 @@ export default function Search() {
               ),
               children: (
                 <div className="filter-grid">
+                  <label>文献类型<Select aria-label="智能检索文献类型" value={paperType} onChange={setPaperType}
+                    options={[["", "全部类型"], ["journal", "期刊论文"], ["conference", "会议论文"], ["preprint", "预印本"], ["early_access", "在线优先"], ["standard", "标准"]].map(([value, label]) => ({value, label}))} /></label>
+                  <label>标签<Input value={tag} onChange={(event) => setTag(event.target.value)} /></label>
                   <label>
                     作者
                     <Input
@@ -230,11 +253,20 @@ export default function Search() {
         <>
           <div className="result-summary">
             <span>
-              找到 <strong>{state.data.total}</strong> 篇论文 · 显示{" "}
+              {state.data.total_scope === "candidate_window" ? "候选窗口" : "找到"} <strong>{state.data.total}</strong> 篇论文 · 显示{" "}
               {state.data.results.length} 篇
             </span>
             <span>{Math.round(state.data.took_ms)} ms</span>
           </div>
+          <div className="data-summary">
+            <span>执行模式：{state.data.mode || mode} / {state.data.backend || "未知"}</span>
+            <span>召回论文：{state.data.recalled_papers ?? "未知"}</span>
+            <span>重排：{({ not_requested: "未请求", disabled: "服务未启用", applied: "已执行", failed: "失败，使用召回排序", empty: "无候选结果" } as Record<string, string>)[state.data.rerank?.status || ""] || "状态未知"}</span>
+            <span>改写：{state.data.rewrite?.applied ? "已执行" : "未执行"}</span>
+          </div>
+          <Pagination current={Number(params.get("page") || 1)} pageSize={topK}
+            total={state.data.recalled_papers ?? state.data.results.length} showSizeChanger={false}
+            onChange={(page) => { const next = new URLSearchParams(params); next.set("page", String(page)); setParams(next); }} />
           <div className="results">
             {state.data.results.map((paper) => (
               <article className="search-result" key={paper.paper_id}>

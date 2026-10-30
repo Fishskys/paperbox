@@ -759,6 +759,7 @@ def search_chunks(
     telemetry: dict[str, Any] | None = None,
     backend: str | None = None,
     query_vector: list[float] | None = None,
+    recall_k: int | None = None,
 ) -> list[ChunkHit]:
     """Retrieve chunks for ``query`` with the requested retrieval mode.
 
@@ -793,7 +794,13 @@ def search_chunks(
     resolved_backend = _resolve_backend(backend)
     fetch_k = _first_stage_k(top_k, rerank)
 
-    if normalized_mode == "keyword":
+    paper_recall = recall_k is not None
+    if paper_recall:
+        from app.search.native import DEFAULT_INNER_HITS, native_search
+        ordered = native_search(query, recall_k, filters, client=client, index=index,
+            inner_hits=max(DEFAULT_INNER_HITS, _rerank_chunks_per_paper() - 1) if rerank else DEFAULT_INNER_HITS,
+            query_vector=query_vector, mode=normalized_mode)
+    elif normalized_mode == "keyword":
         hits = _keyword_hits(
             query, fetch_k, filters, client=client, index=index
         )
@@ -867,7 +874,8 @@ def search_chunks(
     # The native backend returns whole papers -- a collapsed winner plus its
     # ``inner_hits`` siblings -- so both truncations below count *papers*; on the
     # Python path one hit is one candidate and the limit counts chunks.
-    by_paper = normalized_mode == "hybrid" and resolved_backend == "native"
+    by_paper = paper_recall or (normalized_mode == "hybrid" and resolved_backend == "native")
+    recalled_papers = len({hit.paper_id for hit in ordered})
 
     rerank_took_ms: int | None = None
     if rerank:
@@ -881,9 +889,10 @@ def search_chunks(
         telemetry["rerank_took_ms"] = rerank_took_ms
         telemetry["reranked"] = rerank_took_ms is not None
         telemetry["candidates"] = len(ordered)
+        telemetry["recalled_papers"] = recalled_papers
         # Which retriever actually ran: only ``hybrid`` has a backend choice, the
         # single-leg modes always use the Python path.
-        telemetry["backend"] = resolved_backend if normalized_mode == "hybrid" else "python"
+        telemetry["backend"] = "native" if paper_recall else (resolved_backend if normalized_mode == "hybrid" else "python")
 
     for position, hit in enumerate(ordered):
         hit.rank = position

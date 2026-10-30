@@ -424,13 +424,11 @@ def test_response_reports_an_applied_rewrite() -> None:
     assert payload["rewrite"]["took_ms"] == 42
 
 
-def test_search_request_has_no_rewrite_switch() -> None:
-    """The feature is server-side only: clients keep sending plain queries."""
+def test_search_request_has_an_explicit_rewrite_opt_out_and_legacy_default() -> None:
+    """Plain callers retain server policy; explicit false bypasses the model."""
     request = SearchRequest(query="中文查询")
-
-    # ``facets`` (2026-09-30, T-A3) is a plain output switch, not a rewrite one.
-    # ``backend`` (2026-10-01, M5) picks the hybrid fusion path; it is not a
-    # rewrite switch either (the rewritten text is still server-side only).
+    assert request.rewrite is None
+    assert SearchRequest(query="中文查询", rewrite=False).rewrite is False
     assert set(request.model_dump()) == {
         "query",
         "mode",
@@ -439,4 +437,5 @@ def test_search_request_has_no_rewrite_switch() -> None:
         "rerank",
         "facets",
         "backend",
+        "rewrite", "recall_k", "offset",
     }

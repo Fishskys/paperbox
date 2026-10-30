@@ -70,6 +70,13 @@ export type Evidence = {
 };
 export type SearchResult = Paper & { evidence: Evidence[]; score: number };
 export type SearchResponse = {
+  total_scope?: "query" | "candidate_window";
+  mode?: string;
+  backend?: string;
+  recalled_papers?: number;
+  recall_k?: number;
+  rerank?: { enabled: boolean; requested?: boolean; applied?: boolean; status?: string; model?: string | null };
+  rewrite?: { applied: boolean };
   total: number;
   took_ms: number;
   results: SearchResult[];

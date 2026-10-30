@@ -68,7 +68,7 @@
 ## 4. 调用链（从入口到落地，逐跳）
 
 1. `POST /api/search` → `api.search.search`；`rerank` 请求字段默认 `false`（`app/schemas/search.py`）。
-2. `_maybe_rewrite(query)`（跑在 `asyncio.to_thread` 里）→ 开关关或 `needs_rewrite()` 为假即返回透传 `RewriteOutcome`→ 否则 `query_rewrite_service.rewrite_query`。
+2. `rewrite=false` 直接透传，不进入模型；否则 `maybe_rewrite(query)`（跑在 `asyncio.to_thread` 里）→ 服务开关关闭或 `needs_rewrite()` 为假即透传 → 否则 `query_rewrite_service.rewrite_query`。省略 rewrite 时保留服务策略。
 3. `retrieval_query = rewritten if applied else request.query`→ `RewriteInfo` 组装。
 4. `search_service.search_papers(retrieval_query, ..., rerank=request.rerank, telemetry=...)`（`clean_rewrite()`）。
 5. → `hybrid.search_chunks(...)`（`search_service.py`）→ `_first_stage_k(top_k, rerank)`（`hybrid.py`）：非精排 = `top_k`，精排 = `top_k × RERANK_CANDIDATES`。
@@ -132,7 +132,7 @@
 | 文件 | 覆盖 |
 |---|---|
 | `tests/test_rerank.py` | `rerank_service` 全失败面：抛异常/HTTP 500/条数不匹配/非 JSON/结构畸形 → `None`；禁用即 `None`；解析并按分降序；发送 `top_n` 与截断后文档；空候选不发请求；`is_available` 三态；`search_chunks`：关闭取 `top_k`、开启过取 `top_k × rerank_candidates`、返回 `top_k*2`、重排且保留 `retrieval_score`、降级回一阶段序、归一化到 0..1、hybrid 模式同样精排；响应契约 `rerank_score`/`retrieval_score` 与 `rerank` 块；请求字段 `rerank` 生效 |
-| `tests/test_query_rewrite.py` | CJK 触发与 ASCII/空/超长不触发；消息体形状；`clean_rewrite` 规范化与截断；成功路径与尾斜杠 URL；传输错误/非 200/非 JSON/无 content/清洗为空/与原查询相同 → 降级；禁用与空查询；网关 `text` 字段兼容；配置默认关闭、开启需 URL+MODEL+KEY、`MAX_CHARS` 必须为正；API 门控三态；响应契约 `rewritten_query`/`rewrite`；请求体无改写开关 |
+| `tests/test_query_rewrite.py` | CJK 与配置门控、提示与消息体、输出清洗、失败透传及响应契约；省略 rewrite 保留服务策略，显式 false 跳过改写 |
 
 ## 8. 未做 / 已知缺口
 
