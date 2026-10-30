@@ -49,6 +49,7 @@ const ImportsPage = lazy(() => import("./pages/Imports"));
 const MetadataImportPage = lazy(() => import("./pages/MetadataImport"));
 const JobsPage = lazy(() => import("./pages/Jobs"));
 const DataCheckPage = lazy(() => import("./pages/DataCheck"));
+const MaintenancePage = lazy(() => import("./pages/Maintenance"));
 
 const groups = [
   {
@@ -93,6 +94,8 @@ const groups = [
     items: [
       { label: "运行状态", path: "/system/status" },
       { label: "数据检查", path: "/system/data" },
+      { label: "索引维护", path: "/system/index" },
+      { label: "元数据维护", path: "/system/metadata" },
     ],
   },
 ];
@@ -313,6 +316,8 @@ function Workspace() {
                         <Route path="/imports/jobs" element={<JobsPage />} />
                       </Route>
                       <Route element={<RequireAccess capability="admin" />}>
+                        <Route path="/system/index" element={<MaintenancePage key="index" kind="index" />} />
+                        <Route path="/system/metadata" element={<MaintenancePage key="metadata" kind="metadata" />} />
                         <Route path="/system/status" element={<Status />} />
                         <Route
                           path="/system/data"

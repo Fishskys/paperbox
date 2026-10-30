@@ -49,11 +49,14 @@ export type PaperMetadata = {
 };
 export type ReextractReport = {
   dry_run: boolean;
+  papers: number;
   changed_papers: number;
   skipped_no_file: number;
   failed: number;
-  changes: { field: string; old: unknown; new: unknown; action: string }[];
-  errors: { paper_id: string; error: string }[];
+  changes: { paper_id: string; field: string; old: unknown; new: unknown; action: string }[];
+  errors: { paper_id: string; error: string; message?: string }[];
+  note: string;
+  index_documents: number;
 };
 export type PaperList = {
   facets?: Record<string, { key: string; count: number }[]> | null;
@@ -183,11 +186,31 @@ export type Consistency = {
     documents_os: number;
     objects_minio: number;
     problems: number;
+    orphan_objects?: number;
+    orphan_documents?: number;
   };
+  parser_backends?: { papers: Record<string, number>; documents: Record<string, number> };
+  embedding_models?: { chunks: Record<string, number>; documents: Record<string, number> };
+  orphan_objects?: string[];
+  orphan_documents?: string[];
   problems: {
     paper_id: string;
     title?: string | null;
     issues: string[];
     deleted: boolean;
+    status?: string;
+    files_pg?: number;
+    objects_minio?: number;
+    chunks_pg?: number;
+    chunks_os?: number;
+    missing_objects?: string[];
+    orphan_objects?: string[];
+    embedding_models?: string[];
+    parser_backend?: string | null;
   }[];
 };
+
+export type ReindexReport = { dry_run: boolean; selected: number; queued: number; job_ids: string[];
+  skipped: Record<string, unknown>[]; reasons: Record<string, unknown>[]; skipped_reasons: Record<string, unknown>[]; note: string };
+export type IdentifierCheck = { checked_at: string; consistent: boolean; papers_live: number; errors: string[]; truncated: boolean;
+  drifts: { paper_id: string; kind: string; scheme: string; mirror_value: unknown; identifier_values: string[]; detail: string }[] };

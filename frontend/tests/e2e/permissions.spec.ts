@@ -31,6 +31,10 @@ for (const role of ["read", "write", "admin"] as const) {
       ).toHaveCount(0);
       await page.goto("/system/data");
       await expect(page).toHaveURL(/\/search$/);
+      await page.goto("/system/index");
+      await expect(page).toHaveURL(/\/search$/);
+      await page.goto("/system/metadata");
+      await expect(page).toHaveURL(/\/search$/);
       await expect(
         page.getByRole("heading", { name: "智能检索", exact: true }),
       ).toBeVisible();

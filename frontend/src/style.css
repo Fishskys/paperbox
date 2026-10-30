@@ -828,3 +828,4 @@ h1 {
     padding: 0 !important;
   }
 }
+.report-value { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: 12px; }
