@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.db.models import Paper, PaperSource, new_uuid
 from app.services import metadata_merge as merge
+from app.services import metadata_sources as sources
 from app.services import provenance_service as prov
 
 
@@ -173,8 +174,29 @@ def test_pdf_embedded_cannot_replace_bibliographic_metadata(db_session) -> None:
         source_type="pdf_embedded",
     )
 
-    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert report.decisions[0].action == merge.ACTION_ARCHIVED
+    assert report.conflicts == []
     assert paper.abstract == "Curated abstract"
+
+
+def test_lower_priority_values_are_archived_without_reporting_pending_conflicts(db_session):
+    paper = make_paper(db_session, abstract="Imported abstract")
+    seed(db_session, paper, "abstract", "Imported abstract", "import_file")
+    pdf = sources.upsert_source(db_session, source_type="pdf_embedded", source_ref=f"pdf:{paper.id}", raw={}, paper_id=paper.id)
+    report = merge.merge_values(db_session, paper, {"abstract": "Journal;2020;DOI"}, source_type="pdf_embedded", source_id=pdf.id)
+    assert report.decisions[0].action == merge.ACTION_ARCHIVED
+    assert merge.conflict_report(report) == []
+    assert prov.conflict_page(db_session) == ([], 0)
+    assert len(prov.field_history(db_session, paper.id, "abstract")) == 2
+
+
+def test_import_formatting_differences_do_not_change_current_values(db_session):
+    paper = make_paper(db_session, title="A Flash–TDC & ADC")
+    seed(db_session, paper, "title", paper.title, "ieee_api")
+    report = merge.merge_values(db_session, paper, {"title": "a flash-TDC &amp; ADC"}, source_type="import_file")
+    assert report.decisions[0].action == merge.ACTION_UNCHANGED
+    assert report.conflicts == []
+    assert paper.title == "A Flash–TDC & ADC"
 
 
 def test_a_heuristic_does_not_override_a_heuristic(db_session) -> None:
@@ -197,7 +219,7 @@ def test_a_heuristic_does_not_override_a_structured_value(db_session) -> None:
         db_session, paper, {"title": "From a PDF"}, source_type="pdf_heuristic"
     )
 
-    assert [item.action for item in report.decisions] == [merge.ACTION_CONFLICT]
+    assert [item.action for item in report.decisions] == [merge.ACTION_ARCHIVED]
     assert paper.title == "From IEEE"
 
 
@@ -411,7 +433,7 @@ def test_a_heuristic_list_cannot_outgrow_a_structured_one(db_session) -> None:
     )
 
     decision = report.decisions[0]
-    assert decision.action == merge.ACTION_CONFLICT
+    assert decision.action == merge.ACTION_ARCHIVED
     assert decision.reason == "a weak source cannot outgrow a structured one"
     assert prov.read_field(paper, "authors") == clean, "干净的那份必须留下"
 
@@ -428,7 +450,7 @@ def test_a_heuristic_abstract_cannot_outgrow_a_structured_one(db_session) -> Non
         source_type="pdf_heuristic",
     )
 
-    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert report.decisions[0].action == merge.ACTION_ARCHIVED
     assert prov.read_field(paper, "abstract") == "Short but structured."
 
 
@@ -502,7 +524,7 @@ def test_pdf_embedded_title_cannot_replace_a_metadata_title(db_session) -> None:
     )
 
     decision = report.decisions[0]
-    assert decision.action == merge.ACTION_CONFLICT
+    assert decision.action == merge.ACTION_ARCHIVED
     assert decision.reason == "a less trustworthy source cannot replace the title"
     assert prov.read_field(paper, "title") == good
 

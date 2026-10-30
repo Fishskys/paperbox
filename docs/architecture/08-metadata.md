@@ -260,11 +260,15 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 1 | `pdf_embedded` | 可覆盖首页启发式和文件名值，不能覆盖外部书目元数据 |
 | 0 | `pdf_heuristic` / `filename` | 只填空；不同弱来源互相冲突时保留现值 |
 
-`decide` 的顺序是：空值直接 `filled`；同值 `unchanged`；人工来源 `overridden`；标题走独立可信度阶梯；其余字段比较 `SOURCE_AUTHORITY`。新来源级别更高则 `overridden`，更低则 `conflict`，同级分歧保留现值并登记历史声明。标题仍把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免 PDF 的运行页眉或生成文件名覆盖正确标题。
+`decide` 的顺序是：空值直接 `filled`；相同或仅格式不同的值 `unchanged`；人工来源 `overridden`；标题走独立可信度阶梯；其余字段比较 `SOURCE_AUTHORITY`。新来源级别更高则 `overridden`，更低则 `archived`，保留现值及历史声明但不计入导入报告的冲突。同级实质分歧保留现值并登记待复核声明。来源级别与格式比较由 `metadata_policy.py` 统一提供；`metadata_merge.py` 复用这些规则。标题仍把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免 PDF 的运行页眉或生成文件名覆盖正确标题。
 
 字段特例（`_special_winner`）只在**同一非弱级别**内生效：`abstract` 取更长文本，`authors` 取更多作者，`year` 保留现值。低级别来源不能靠内容更长越级覆盖。`tag:<kind>` 在覆盖时调用 `metadata_tags.replace_kind`，替换该 kind 的旧链接；不同 kind 互不影响，旧声明仍保留在 provenance 中。
 
-人工裁决（`_dismiss`/回滚）不删除声明：要么采纳历史值，要么保留现值并把分歧标为已处理。落库与报告链为 `apply_decision` → `merge_values` → `conflict_report`；只有未被规则解决的同级或降级分歧进入复核清单。
+人工裁决（`_dismiss`/回滚）不删除声明：要么采纳历史值，要么保留现值并把分歧标为已处理。落库与报告链为 `apply_decision` → `merge_values` → `conflict_report`。`provenance_service.conflict_page` 先在 SQL 中排除现值优先级更高的历史声明，再用共享格式比较排除等价值，之后按论文和字段去重、计数、分页；计数与页面采用相同口径。沿用首页启发式旧声明和人工历史声明不进入待复核清单的规则。
+
+格式比较只用于判断，不改写当前字段、来源原文或历史账本。归一化包括 Unicode 兼容字符、空白、HTML 实体、常见上下标/斜体标记及排版引号、连接号；标题和姓名比较忽略大小写，关键词按集合比较。作者顺序、数量、重音、缩写和实质标点差异保留，不把 PDF 创建时间等同于发表日期。
+
+来源未知、同级实质分歧、历史声明优先级高于当前值时继续复核，避免隐藏过去选错现值的问题。已登记的同级自动字段裁决，仅在现值标记为 `structured_override`、时间晚于历史声明且满足现有摘要/作者规则时作为历史。历史页及回滚仍能访问所有声明，不批量改写为人工已处理，也不删除记录。
 
 ### 4.4 证据匹配器（`match_record`）
 

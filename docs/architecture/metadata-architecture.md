@@ -220,11 +220,13 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 3. `pdf_embedded`：可覆盖首页启发式与文件名值，不能覆盖外部书目元数据。
 4. 弱来源：`pdf_heuristic` / `filename`，只填空，互相矛盾时保留现值。
 
-同级来源分歧不静默覆盖：保留现值并记录历史声明，供复核和回滚。`abstract` 取最长、`authors` 取最多仅在同一非弱级别内生效；`year` 同级冲突保留现值。标题使用独立阶梯，把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免运行页眉覆盖正确标题。
+同级来源实质分歧不静默覆盖：保留现值并记录历史声明，供复核和回滚。`abstract` 取最长、`authors` 取最多仅在同一非弱级别内生效；`year` 同级冲突保留现值。标题使用独立阶梯，把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免运行页眉覆盖正确标题。级别更低的输入登记为 `archived`，不计入导入冲突；仅格式不同的输入为 `unchanged`，原始来源仍保留。
 
 覆盖是字段级替换：标量写回 `papers`；authors 重建顺序；identifier 替换同 scheme 并同步镜像列和指纹；`tag:<kind>` 只替换该 kind 的链接，不与旧值并存，也不影响其他 tag kind。被替换声明仍保留为 `is_current=false`，因此所有自动覆盖都可追溯、可回滚。
 
 人工裁决有两个出口：`POST /api/papers/{id}/metadata/rollback` 采纳历史值，`POST /api/papers/{id}/metadata/conflicts/dismiss` 保留现值。两者都不删除声明，已裁决字段不再进入复核清单。
+
+复核清单排除已由更高优先级现值解决的差异、仅格式差异以及明确记录的自动字段裁决；历史值及原始来源不删除。来源未知、同级实质分歧及历史值优先级高于现值时仍可复核；首页启发式旧声明继续只作为历史。格式比较、完整的复核口径和分页约束见 [元数据合并与复核](./08-metadata.md#43-合并规则-r2现状)。共享规则在 `metadata_policy.py`，合并和复核查询不各自维护优先级。
 
 ---
 
@@ -352,7 +354,7 @@ JSONL 每个非空行是一条论文对象；`load_payload` 解码为列表后�
 | 主标识符 | `paper_identifiers.is_primary` 的那条，决定 `papers.fingerprint` |
 | 壳论文（shell paper） | 只有元数据、还没有 PDF 的论文（`status='AWAITING_FILE'`） |
 | 主版本（primary file） | 该论文唯一入库（解析/索引）的那份 PDF |
-| R2 | 合并规则：只填空 + 结构化来源可覆盖启发式；结构化之间不比较权威性 |
+| R2 | 合并规则：先填空，再按来源级别覆盖；更低级别只存历史，同级实质分歧待复核 |
 
 ---
 

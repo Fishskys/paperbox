@@ -8,8 +8,8 @@ which is what makes both the "who overwrote me" view (``GET
 Three kinds of decision are recorded in ``decided_by``:
 
 * ``initial`` -- a source simply stated a value;
-* ``structured_override`` -- a structured source corrected a ``pdf_heuristic``
-  value (the single exception to rule R2);
+* ``structured_override`` -- a higher-authority source or an automatic field
+  tie-break replaced the previous value;
 * ``manual`` -- a human overrode everything (decision 12), never subject to R2.
 
 ``write_field`` is the only place that knows how a claim maps onto a ``papers``
@@ -23,12 +23,13 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.logging import get_logger
 from app.db.models import Paper, PaperFieldProvenance, PaperSource, new_uuid
 from app.services import metadata_identifiers as identifiers
+from app.services import metadata_policy as policy
 from app.services import metadata_sources as source_vocab
 from app.services import venue_service as venues
 
@@ -669,40 +670,32 @@ def recorded_conflicts(session: Session, limit: int = 50, offset: int = 0) -> li
 
 
 def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
-    """Disagreements the merge engine filed: a losing claim plus the winning one.
+    """Page unresolved fields without deleting or rewriting historical claims.
 
-    A conflict is a *non-current* claim whose value differs from the current one for
-    the same field -- exactly what rule R2 records instead of overwriting (section 8
-    of the design). This is the second half of ``GET /api/metadata/review``.
-
-    Four things are deliberately *not* conflicts:
-
-    * a heuristic value that a structured source replaced -- that is rule 2 doing its
-      job, not a disagreement between sources;
-    * a claim a human dismissed with ``POST .../metadata/conflicts/dismiss`` (kept the
-      current value), or a field a human ruled on by editing it (either side is
-      ``manual``): the older value is history, and reporting it as an open dispute
-      would make the review list unemptiable -- the queue is for *undecided*
-      disagreements (2026-10-10);
-    * anything belonging to a deleted paper.
-
-    Each entry carries the losing claim's ``provenance_id`` so the caller can settle
-    it without another lookup (``POST /api/papers/{id}/metadata/rollback``).
-
-    排序按落败声明的 ``decided_at``（= 它**写入账本**的时刻）倒序 —— 清单里全是未决分歧，
-    ``decision_at`` 在这里恒为 ``NULL``，排不了也排不出意义（2026-10-10 澄清）。
+    SQL removes claims resolved by authority. Shared field rules then remove
+    formatting-only differences and resolved tie-breaks before deduplication,
+    counting and pagination. Higher-priority historical claims remain reviewable.
     """
     current_row = aliased(PaperFieldProvenance)
     loser_source = aliased(PaperSource)
     current_source = aliased(PaperSource)
+    def authority(source):
+        normalized = func.lower(func.trim(source.source_type))
+        return case(
+            (PaperFieldProvenance.field == FIELD_TITLE, case(policy.TITLE_TRUST, value=normalized)),
+            else_=case(policy.SOURCE_AUTHORITY, value=normalized),
+        )
+    kept_rank, rejected_rank = authority(current_source), authority(loser_source)
     statement = (
         select(
             PaperFieldProvenance.id.label("provenance_id"), PaperFieldProvenance.paper_id,
             PaperFieldProvenance.field, current_row.value.label("kept"),
             PaperFieldProvenance.value.label("rejected"), PaperFieldProvenance.source_id,
             PaperFieldProvenance.decided_at,
-            func.row_number().over(partition_by=(PaperFieldProvenance.paper_id, PaperFieldProvenance.field),
-                order_by=(PaperFieldProvenance.decided_at.desc(), PaperFieldProvenance.id)).label("position"),
+            loser_source.source_type.label("rejected_source"),
+            current_source.source_type.label("kept_source"),
+            current_row.decided_at.label("current_written_at"),
+            current_row.decided_by.label("current_decider"),
         )
         .join(Paper, Paper.id == PaperFieldProvenance.paper_id)
         .join(current_row, (current_row.paper_id == PaperFieldProvenance.paper_id)
@@ -713,20 +706,28 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
             PaperFieldProvenance.is_current.is_(False),
             Paper.deleted_at.is_(None),
             PaperFieldProvenance.decided_by != DECIDED_DISMISSED,
+            PaperFieldProvenance.decided_by != DECIDED_MANUAL,
+            PaperFieldProvenance.decision_at.is_(None),
+            current_row.decided_by != DECIDED_MANUAL,
             PaperFieldProvenance.value.is_distinct_from(current_row.value),
-            or_(loser_source.source_type.is_(None), func.lower(func.trim(loser_source.source_type)).not_in((
-                source_vocab.SOURCE_TYPE_PDF_HEURISTIC, source_vocab.SOURCE_TYPE_MANUAL,
-            ))),
+            or_(loser_source.source_type.is_(None), func.lower(func.trim(loser_source.source_type)).not_in(policy.HISTORY_ONLY_SOURCES)),
             or_(current_source.source_type.is_(None), func.lower(func.trim(current_source.source_type)) != source_vocab.SOURCE_TYPE_MANUAL),
+            or_(kept_rank.is_(None), rejected_rank.is_(None), kept_rank <= rejected_rank),
         )
+        .order_by(PaperFieldProvenance.decided_at.desc(), PaperFieldProvenance.id)
     )
-    candidates = statement.subquery()
-    distinct_fields = select(candidates).where(candidates.c.position == 1)
-    total = session.scalar(select(func.count()).select_from(distinct_fields.subquery()))
-    page = distinct_fields.order_by(candidates.c.decided_at.desc(), candidates.c.provenance_id).limit(max(1, min(limit, 200))).offset(max(0, offset))
-    conflicts = [{key: value for key, value in row.items() if key != "position"}
-                 for row in session.execute(page).mappings()]
-    return conflicts, int(total or 0)
+    start, size = max(0, offset), max(1, min(limit, 200))
+    seen: set[tuple[str, str]] = set()
+    conflicts = []
+    for row in session.execute(statement.execution_options(yield_per=250)).mappings():
+        key = (row["paper_id"], row["field"])
+        resolved = row["current_decider"] == DECIDED_STRUCTURED_OVERRIDE and row["current_written_at"] > row["decided_at"]
+        if key in seen or not policy.needs_review(row["field"], row["kept"], row["rejected"], row["kept_source"], row["rejected_source"], resolved_by_rule=resolved):
+            continue
+        seen.add(key)
+        if start < len(seen) <= start + size:
+            conflicts.append({key: value for key, value in row.items() if key not in ("kept_source", "rejected_source", "current_written_at", "current_decider")})
+    return conflicts, len(seen)
 
 
 def utcnow() -> datetime:  # pragma: no cover - trivial helper used by callers

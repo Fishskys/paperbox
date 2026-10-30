@@ -29,6 +29,7 @@ from app.core.logging import get_logger
 from app.db.models import Paper, PaperSource
 from app.services import metadata_sources as sources
 from app.services import provenance_service as prov
+from app.services import metadata_policy as policy
 
 logger = get_logger(__name__)
 
@@ -74,16 +75,7 @@ UNRESTRICTED_SOURCE_TYPES: frozenset[str] = frozenset({SOURCE_TYPE_MANUAL})
 #: the matcher has selected one conflict-free paper, so an external bibliographic
 #: record can safely replace values produced by the document itself. Sources in
 #: the same tier still disagree visibly instead of silently replacing each other.
-SOURCE_AUTHORITY: dict[str, int] = {
-    SOURCE_TYPE_MANUAL: 3,
-    SOURCE_TYPE_IEEE_API: 2,
-    SOURCE_TYPE_ARXIV_API: 2,
-    SOURCE_TYPE_CROSSREF: 2,
-    SOURCE_TYPE_IMPORT_FILE: 2,
-    SOURCE_TYPE_PDF_EMBEDDED: 1,
-    SOURCE_TYPE_PDF_HEURISTIC: 0,
-    SOURCE_TYPE_FILENAME: 0,
-}
+SOURCE_AUTHORITY = policy.SOURCE_AUTHORITY
 
 #: Sources whose *title* claim is not trustworthy, even though they are otherwise
 #: "structured". ``pdf_embedded`` reads the PDF's XMP/Info ``dc:title``, which for
@@ -95,30 +87,22 @@ LOW_TRUST_TITLE_SOURCES: frozenset[str] = frozenset({SOURCE_TYPE_PDF_EMBEDDED})
 
 #: Title trust, highest first. Only consulted for the ``title`` field; every other
 #: field keeps the plain structured/weak classification above.
-_TITLE_TRUST: dict[str, int] = {
-    SOURCE_TYPE_MANUAL: 3,
-    SOURCE_TYPE_IEEE_API: 2,
-    SOURCE_TYPE_ARXIV_API: 2,
-    SOURCE_TYPE_CROSSREF: 2,
-    SOURCE_TYPE_IMPORT_FILE: 2,
-    SOURCE_TYPE_PDF_HEURISTIC: 1,
-    SOURCE_TYPE_PDF_EMBEDDED: 1,
-    SOURCE_TYPE_FILENAME: 0,
-}
+_TITLE_TRUST = policy.TITLE_TRUST
 
 
 def _title_trust(source_type: str | None) -> int | None:
     """Trust level for a title claim, or ``None`` when the source is unknown."""
-    return _TITLE_TRUST.get((source_type or "").strip().lower())
+    return policy.title_trust(source_type)
 
 
 def source_authority(source_type: str | None) -> int | None:
     """Generic-field authority tier, or ``None`` for an unknown source."""
-    return SOURCE_AUTHORITY.get((source_type or "").strip().lower())
+    return policy.source_authority(source_type)
 
 ACTION_FILLED = "filled"
 ACTION_OVERRIDDEN = "overridden"
 ACTION_CONFLICT = "conflict"
+ACTION_ARCHIVED = "archived"
 ACTION_UNCHANGED = "unchanged"
 ACTION_SPECIAL = "special_rule"
 
@@ -228,11 +212,7 @@ def _special_winner(field_name: str, current: Any, incoming: Any) -> bool:
     rejects a weak incoming value against a structured current one before it gets
     here, so "longer" cannot be bought by misreading the page.
     """
-    if field_name == ABSTRACT_FIELD:
-        return len(str(incoming)) > len(str(current))
-    if field_name == AUTHORS_FIELD:
-        return len(list(incoming)) > len(list(current))
-    return False
+    return policy.prefers_incoming(field_name, current, incoming)
 
 
 def decide(
@@ -271,7 +251,7 @@ def decide(
             source_type=incoming_type,
         )
 
-    same = prov._same_value(current_value, value) or _same_value_deep(current_value, value)
+    same = prov._same_value(current_value, value) or policy.equivalent_values(field_name, current_value, value)
     if same:
         return MergeDecision(
             field=field_name,
@@ -325,7 +305,7 @@ def decide(
             if incoming_trust < existing_trust:
                 return MergeDecision(
                     field=field_name,
-                    action=ACTION_CONFLICT,
+                    action=ACTION_ARCHIVED,
                     kept=current_value,
                     rejected=value,
                     reason="a less trustworthy source cannot replace the title",
@@ -366,7 +346,7 @@ def decide(
             )
             return MergeDecision(
                 field=field_name,
-                action=ACTION_CONFLICT,
+                action=ACTION_ARCHIVED,
                 kept=current_value,
                 rejected=value,
                 reason=reason,
@@ -398,19 +378,6 @@ def decide(
         reason="keep the current value and record the disagreement",
         source_type=incoming_type,
     )
-
-
-def _same_value_deep(left: Any, right: Any) -> bool:
-    """Structural equality for list/dict claims (JSON round-trip tolerant)."""
-    if isinstance(left, Mapping) and isinstance(right, Mapping):
-        if set(left) != set(right):
-            return False
-        return all(_same_value_deep(left[key], right[key]) for key in left)
-    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
-        return len(left) == len(right) and all(
-            _same_value_deep(a, b) for a, b in zip(left, right)
-        )
-    return prov._same_value(left, right)
 
 
 def apply_decision(
@@ -457,7 +424,8 @@ def apply_decision(
         )
         return decision
 
-    # Conflict: keep the current value, file the other one as history.
+    # Keep the current value and archive the other claim. Only unresolved
+    # disagreements (ACTION_CONFLICT) enter the import report's conflicts.
     prov.record_claim(
         session,
         paper_id=paper.id,
@@ -548,6 +516,7 @@ def decisions_summary(decisions: Sequence[MergeDecision]) -> dict[str, int]:
 
 
 __all__ = [
+    "ACTION_ARCHIVED",
     "ABSTRACT_FIELD",
     "ACTION_CONFLICT",
     "ACTION_FILLED",

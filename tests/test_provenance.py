@@ -194,6 +194,83 @@ def test_two_structured_sources_disagreeing_is_a_conflict(db_session) -> None:
     assert conflicts[0]["kept"] == "62" and conflicts[0]["rejected"] == "63"
 
 
+@pytest.mark.parametrize("field,old,new", [
+    ("title", "untitled", "Real paper title"),
+    ("year", 2021, 2020),
+    ("authors", ["Wrong", "Student Member"], ["Real Author"]),
+    ("abstract", "Journal;2020;10.1234/example", "Actual abstract"),
+])
+def test_import_override_is_history_not_pending_review(db_session, field, old, new):
+    paper = make_paper(db_session)
+    pdf = make_source(db_session, paper.id, "pdf_embedded")
+    imported = make_source(db_session, paper.id, "import_file")
+    prov.record_claim(db_session, paper_id=paper.id, field=field, value=old, source_id=pdf.id, make_current=True)
+    current = prov.record_claim(db_session, paper_id=paper.id, field=field, value=new,
+                                source_id=imported.id, make_current=True, decided_by="structured_override")
+    assert prov.conflict_page(db_session) == ([], 0)
+    assert len(prov.field_history(db_session, paper.id, field)) == 2
+    assert prov.current_claim(db_session, paper.id, field).id == current.id
+
+
+@pytest.mark.parametrize("field,current,other", [
+    ("title", "A Flash–TDC & ADC", "A Flash-TDC &amp; ADC"),
+    ("title", "A 0.48mm² TDC", "a 0.48mm<sup>2</sup>  TDC"),
+    ("authors", ["Alice Smith", "José Chen"], ["alice\u00a0smith", "Jose\u0301 Chen"]),
+    ("tag:author_terms", ["TDC", "ADC"], ["adc", "tdc", "TDC"]),
+])
+def test_format_only_disagreements_are_history(db_session, field, current, other):
+    paper = make_paper(db_session)
+    first = make_source(db_session, paper.id, "ieee_api")
+    second = make_source(db_session, paper.id, "import_file")
+    prov.record_claim(db_session, paper_id=paper.id, field=field, value=current, source_id=first.id, make_current=True)
+    prov.record_claim(db_session, paper_id=paper.id, field=field, value=other, source_id=second.id)
+    assert prov.conflict_page(db_session) == ([], 0)
+    assert len(prov.field_history(db_session, paper.id, field)) == 2
+
+
+def test_higher_priority_historical_value_stays_reviewable(db_session):
+    paper = make_paper(db_session)
+    weak = make_source(db_session, paper.id, "pdf_heuristic")
+    embedded = make_source(db_session, paper.id, "pdf_embedded")
+    prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Alice", "Student Member"], source_id=weak.id, make_current=True)
+    prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Alice"], source_id=embedded.id)
+    conflicts, total = prov.conflict_page(db_session)
+    assert total == 1
+    assert conflicts[0]["rejected"] == ["Alice"]
+
+
+def test_format_filter_runs_before_deduplication_and_pagination(db_session):
+    first = make_source(db_session, source_type="ieee_api")
+    second = make_source(db_session, source_type="import_file")
+    expected = set()
+    for i in range(5):
+        paper = make_paper(db_session)
+        prov.record_claim(db_session, paper_id=paper.id, field="title", value=f"Paper {i}", source_id=first.id, make_current=True)
+        genuine = prov.record_claim(db_session, paper_id=paper.id, field="title", value=f"Different research {i}", source_id=second.id)
+        expected.add(genuine.id)
+        prov.record_claim(db_session, paper_id=paper.id, field="title", value=f" PAPER  {i} ", source_id=second.id)
+    a, total = prov.conflict_page(db_session, limit=3)
+    b, total_b = prov.conflict_page(db_session, limit=3, offset=3)
+    assert total == total_b == 5
+    assert len(a) == 3 and len(b) == 2
+    assert {row["provenance_id"] for row in a + b} == expected
+
+
+def test_recorded_automatic_tie_break_is_history_but_a_new_disagreement_is_pending(db_session):
+    paper = make_paper(db_session)
+    api = make_source(db_session, paper.id, "ieee_api")
+    imported = make_source(db_session, paper.id, "import_file")
+    old = prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Alice"], source_id=api.id)
+    current = prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Alice", "Bob"], source_id=imported.id, make_current=True, decided_by="structured_override")
+    old.decided_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    current.decided_at = datetime(2020, 1, 2, tzinfo=timezone.utc)
+    db_session.flush()
+    assert prov.conflict_page(db_session) == ([], 0)
+    newer = prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Charlie"], source_id=api.id)
+    conflicts, total = prov.conflict_page(db_session)
+    assert total == 1 and conflicts[0]["provenance_id"] == newer.id
+
+
 def test_conflict_pages_reach_old_records_beyond_the_previous_scan_cap(db_session):
     for _ in range(205):
         paper = make_paper(db_session)
