@@ -64,6 +64,8 @@ const stages: Record<string, string> = {
   COMPLETED: "已完成",
   FAILED: "失败",
   AWAITING_FILE: "待补原文",
+  PENDING: "待处理",
+  PROCESSING: "处理中",
   ready: "可阅读",
   indexed: "已索引",
   INDEXED: "已索引",

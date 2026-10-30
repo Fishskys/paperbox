@@ -78,10 +78,12 @@ export default function Library({
           onChange={(value) => filter("status", value)}
           options={[
             { label: "全部状态", value: "" },
+            { label: "待补原文（空壳论文）", value: "AWAITING_FILE" },
+            { label: "待处理", value: "PENDING" },
+            { label: "处理中", value: "PROCESSING" },
             { label: "已索引", value: "INDEXED" },
             { label: "失败", value: "FAILED" },
             { label: "已存储", value: "STORED" },
-            { label: "待补原文", value: "AWAITING_FILE" },
           ]}
         />
       </div>

@@ -181,6 +181,23 @@ def test_tag_filter_matches_any_kind_and_lists_a_paper_once(factory) -> None:  #
     assert listed_ids(factory, tag=["Low Power SRAM", "sram"]) == [both]
 
 
+@pytest.mark.parametrize("status", ["AWAITING_FILE", "PENDING", "PROCESSING", "INDEXED", "FAILED", "STORED"])
+def test_status_filter_combines_with_title_and_pagination(factory, status):
+    match = add_paper(factory, title="Clock design", status=status)
+    add_paper(factory, title="Unrelated", status=status)
+    add_paper(factory, title="Clock design", status="OTHER")
+    session = factory()
+    try:
+        rows, total = paper_service.list_papers(session, status=status, query="clock", limit=1)
+        assert [row.id for row in rows] == [match]
+        assert total == 1
+        rows, total = paper_service.list_papers(session, status=status, query="clock", limit=1, offset=1)
+        assert rows == []
+        assert total == 1
+    finally:
+        session.close()
+
+
 def test_filters_combine(factory) -> None:  # noqa: F811
     match = add_paper(
         factory, venue="ISSCC", year=2021, paper_type="conference", tags=(("sram", "source_tag"),)

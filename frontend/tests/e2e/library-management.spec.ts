@@ -1,5 +1,32 @@
 import { expect, test } from "./fixtures";
 
+test("management filters shell and processing states and preserves filters on reload", async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route("**/api/papers?*", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    return route.fulfill({ json: {
+      total: 100,
+      papers: [{ paper_id: "shell", title: "Clock shell", authors: ["Chen"], status: url.searchParams.get("status"), files: [] }],
+    } });
+  });
+  await page.goto("/manage/library?q=clock&author=Chen&page=3");
+  const state = page.getByRole("combobox", { name: "处理状态" });
+  await state.click();
+  await page.getByText("待补原文（空壳论文）", { exact: true }).click();
+  await expect(page).toHaveURL(/status=AWAITING_FILE/);
+  expect(new URL(page.url()).searchParams.has("page")).toBe(false);
+  await expect(page.getByRole("button", { name: "管理论文 Clock shell", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("待补原文（空壳论文）", { exact: true })).toBeVisible();
+  for (const [label, value] of [["待处理", "PENDING"], ["处理中", "PROCESSING"], ["失败", "FAILED"]]) {
+    await state.click();
+    await page.locator(".ant-select-item-option-content").getByText(label, { exact: true }).click();
+    await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe(value);
+  }
+  expect(requests.every((url) => url.searchParams.get("q") === "clock" && url.searchParams.get("author") === "Chen")).toBe(true);
+});
+
 test("library management edits only changed fields and previews destructive actions", async ({
   page,
 }) => {
