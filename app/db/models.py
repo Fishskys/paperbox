@@ -81,6 +81,13 @@ class Paper(TimestampMixin, Base):
         Index("ix_papers_arxiv_id", "arxiv_id"),
         Index("ix_papers_year", "year"),
         Index("ix_papers_status", "status"),
+        # Cover live status counts and the list's stable newest-first order.
+        Index(
+            "ix_papers_live_status_created_id",
+            "status", text("created_at DESC"), "id",
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_papers_created_at", "created_at"),
         Index("ix_papers_venue_year", "venue_year"),
         # Only live papers claim a fingerprint: deleting a paper releases it so the

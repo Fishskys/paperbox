@@ -67,6 +67,11 @@
 | `venue_editions` | `id` PK；`venue_id` FK CASCADE 非空；`year` int 非空；`location`/`dates` text 空；`publication_number` varchar64 空；`is_number` varchar64 空（无时间戳列） | `UNIQUE(venue_id,year)` |
 | `search_queries` | `id` PK；`request_id` varchar64 空；`query` text 非空；`rewritten_query` text 空；`mode` varchar16 非空；`top_k` int 非空；`rerank` bool 非空 默认 false；`filters` JSONB 空；`candidates` int 空；`returned` int 非空；`took_ms` int 空；`results` JSONB 空；`created_at` 非空 默认 now() | `ix_search_queries_created_at`、`ix_search_queries_mode` |
 
+论文列表的存活状态统计与分页共用部分索引 `ix_papers_live_status_created_id`：
+`(status, created_at DESC, id) WHERE deleted_at IS NULL`，由迁移 `d49b2a6e710c` 创建。
+它让 `GET /api/papers?status=...` 的精确计数可使用索引扫描，并匹配最新优先、ID 打破同时间并列的分页顺序，避免仅为统计状态而扫描整张论文表。
+模型同时声明 SQLite 的相同谓词，迁移的升降级、计数与稳定分页在隔离 SQLite 中回归验证。
+
 ### 4 个部分唯一索引表达的不变量
 
 | 索引（定义处） | 谓词 | 不变量 |

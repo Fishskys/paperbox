@@ -27,6 +27,7 @@ PDF worker、CMap、字体及 WASM 随本机构建产物提供，不依赖 CDN�
 
 论文管理提供 `/manage/library` 论文库管理，复用列表的筛选和分页，管理抽屉通过 `paper` 参数定位。
 列表支持待补原文（空壳论文）、待处理、处理中、已索引、失败和已存储状态，状态可与标题、作者组合筛选；切换筛选重置页码，翻页和刷新保留筛选条件。
+状态筛选的精确总数和分页由 PostgreSQL 存活论文状态索引支持，部署须执行 `uv run alembic upgrade head`；不缓存状态计数，写入后重新查询即可获得当前结果。
 支持修改元数据、查看来源与字段历史、单篇重建索引、预览后重新提取或清除元数据、确认删除论文。
 保存仅提交变化的字段，明确保留空值清除语义；修改或清除元数据后提示检索索引需要重建。
 无 PDF 的论文显示待补原文，禁用下载、重建与重新提取；阅读器不会请求不存在的原文。
@@ -98,6 +99,8 @@ Node.js 要求 `20.19+`（20 系列）、`22.13+`（22 系列）或 `24+`，依�
 `uv run python scripts/check_webui_permissions.py` 为真实浏览器验收临时创建 read/write/admin 密钥，核对角色导航、只读页面与受保护路由，并只读打开管理抽屉；结束或失败时删除本次创建的密钥，不修改论文。
 `uv run python scripts/check_original_attachment.py` 创建临时无原文论文与 write 密钥，验证定向补传、解析索引、原文下载和三端结果；完成后删除本次创建的论文、任务、元数据、对象、索引记录和密钥。
 `node scripts/check_webui_jobs.mjs` 只读验证真实任务类型、按论文筛选、队列状态、详情与桌面/移动布局，不触发任务重试。
+`uv run python scripts/benchmark_paper_list.py --repeat 3 --explain` 只读测量真实论文列表，分开记录计数、分页、关联加载和序列化耗时，并输出 PostgreSQL 实际执行计划。
+`node scripts/check_webui_library.mjs` 只读验证管理页实际点击“已索引”的请求耗时、列表结果、刷新保留筛选和桌面/移动布局。
 
 ## 独立部署
 
