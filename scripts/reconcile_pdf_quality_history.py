@@ -84,14 +84,16 @@ def main() -> int:
                           "pending": sum(bool(row.get("pending")) for row in results)}, ensure_ascii=False))
         return int(bool(counts.get("failed") or counts.get("skipped")))
     candidates = json.loads(args.candidates.read_text(encoding="utf-8"))["items"] if args.candidates else None
+    if args.field and candidates is not None:
+        candidates = [candidate for candidate in candidates if candidate["field"] == args.field]
     with SessionLocal() as session:
         if session.bind.dialect.name == "postgresql":
             session.execute(text("SET TRANSACTION READ ONLY"))
         snapshots = history.snapshots(session, candidates)
-    if args.limit is not None:
-        snapshots = snapshots[:max(0, args.limit)]
     if args.field:
         snapshots = [snapshot for snapshot in snapshots if snapshot["field"] == args.field]
+    if args.limit is not None:
+        snapshots = snapshots[:max(0, args.limit)]
     recipe_id = recipe()
     cache = args.report.with_suffix(".cache")
     def extract(snapshot):

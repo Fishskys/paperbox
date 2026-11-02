@@ -71,6 +71,23 @@ def test_corroborated_pdf_spelling_variants_do_not_invalidate_a_complete_byline(
     assert evidence["byline_complete"] is True and not evidence.get("byline_conflict")
 
 
+@pytest.mark.parametrize("quantity", ["65 nm CMOS", "3.4 GHz operation", "16 comparators", "50 % duty cycle"])
+def test_wrapped_numeric_abstract_lines_are_not_section_headings(quantity):
+    from app.parsing.pdf import PageText
+    from app.services.metadata_service import detect_abstract
+
+    pages = [PageText(page=1, text=f"Abstract - We present a converter in\n{quantity}. It reduces power.\nI.\nINTRODUCTION\nBody text")]
+    assert detect_abstract(pages) == f"We present a converter in {quantity}. It reduces power."
+
+
+@pytest.mark.parametrize("heading", ["1 Introduction", "1 introduction", "I. INTRODUCTION", "Index Terms - converters"])
+def test_abstract_still_stops_at_section_and_keyword_headings(heading):
+    from app.parsing.pdf import PageText
+    from app.services.metadata_service import detect_abstract
+
+    assert detect_abstract([PageText(page=1, text=f"Abstract - A converter.\n{heading}\nBody text")]) == "A converter."
+
+
 @pytest.mark.parametrize("subject,expected", [("A compact TDC.", "A compact TDC."), ("IEEE Journal;2024;1;2;10.1234/example", None), ("An unrelated abstract.", None)])
 def test_subject_requires_validity_and_body_corroboration(db_session, monkeypatch, subject, expected):
     from app.db.models import Paper, PaperSource, new_uuid

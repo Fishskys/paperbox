@@ -50,6 +50,13 @@ def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None,
     if body and not abstract_problem(body):
         current_matches = corroborates(str(current), str(body))
         incoming_matches = corroborates(str(incoming), str(body))
+        if evidence.get("abstract_complete"):
+            current_full = equivalent_values("abstract", current, body)
+            incoming_full = equivalent_values("abstract", incoming, body)
+            if current_full and not incoming_full:
+                return "current", "preserve_complete_body_abstract"
+            if incoming_full and not current_full:
+                return "incoming", "corroborated_complete_body_abstract"
         if incoming_matches and not current_matches:
             return "incoming", "corroborated_body_abstract"
         if current_matches and not incoming_matches:

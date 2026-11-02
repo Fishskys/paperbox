@@ -363,7 +363,23 @@ def _plausible_author(name: str) -> bool:
     return all(re.search(r"[A-Za-z\u4e00-\u9fff]", word) for word in words)
 
 
-def detect_abstract(pages: Sequence[PageText], max_pages: int = 2) -> str | None:
+def _abstract_boundary(line: str) -> bool:
+    if re.fullmatch(r"[IVX]+[.)]", line) or line.casefold().startswith("index terms"):
+        return True
+    if not _SECTION_MARKER.match(line):
+        return False
+    numbered = re.match(r"^\d+(?:\.\d+)*[.)]?\s+(.+)$", line)
+    if numbered:
+        heading = numbered[1]
+        # Wrapped process nodes and measurements are prose, not section numbers.
+        if re.match(r"^(?:nm|[µμu]m|mm|ps|ns|[µμu]s|ms|[kmg]?hz|mw|uw|db|dbm|bits?|%)(?:\b|(?=\s))", heading, re.I):
+            return False
+        if heading[0].islower() and heading.casefold() not in ("introduction", "keywords", "index terms"):
+            return False
+    return True
+
+
+def _abstract_details(pages: Sequence[PageText], max_pages: int = 2) -> tuple[str | None, bool]:
     """The ``Abstract`` paragraph, joined across wrapped lines."""
     collected: list[str] = []
     in_abstract = False
@@ -379,12 +395,16 @@ def detect_abstract(pages: Sequence[PageText], max_pages: int = 2) -> str | None
                 continue
             if not line:
                 if collected:
-                    return _join_abstract(collected)
+                    return _join_abstract(collected), False
                 continue
-            if _SECTION_MARKER.match(line) or line.casefold().startswith("index terms"):
-                return _join_abstract(collected)
+            if _abstract_boundary(line):
+                return _join_abstract(collected), True
             collected.append(line)
-    return _join_abstract(collected) if collected else None
+    return (_join_abstract(collected) if collected else None), False
+
+
+def detect_abstract(pages: Sequence[PageText], max_pages: int = 2) -> str | None:
+    return _abstract_details(pages, max_pages)[0]
 
 
 def _join_abstract(lines: Iterable[str]) -> str | None:
@@ -472,10 +492,11 @@ def extract_metadata(
         authors = []
     result: "OrderedDict[str, object]" = OrderedDict()
     result["title"] = title
-    result["abstract"] = detect_abstract(ordered)
+    result["abstract"], abstract_complete = _abstract_details(ordered)
     result["year"] = detect_year(ordered, url=url)
     result["authors"] = authors
     result["quality"] = {"text_state": state, "byline": authors,
+                         "abstract_complete": abstract_complete,
                          "byline_origin": "body:geometry" if byline is not None else "body:text",
                          "byline_complete": bool(byline and state == "ok" and re.search(r"(?im)^\s*abstract\b", ordered[0].text if ordered else "")),
                          "needs_review": state != "ok"}

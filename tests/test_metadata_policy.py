@@ -47,3 +47,11 @@ def test_pdf_name_variants_corroborate_spelling_without_becoming_equivalent():
     assert not policy.byline_spelling_variants(left, list(reversed(right)))
     assert not policy.byline_spelling_variants(["A. Smith"], ["Alice Smith"])
     assert not policy.byline_spelling_variants(["Alice", "Alice"], ["Alice"])
+
+
+@pytest.mark.parametrize("complete,expected", [(True, "current"), (False, "review")])
+def test_only_a_bounded_body_abstract_resolves_an_old_prefix(complete, expected):
+    full = "This paper presents a converter in 65 nm CMOS. It reduces power."
+    evidence = {"text_state": "ok", "abstract": full, "abstract_complete": complete}
+    assert policy.pdf_choice("abstract", full, "This paper presents a converter in",
+                             "pdf_heuristic", "pdf_heuristic", evidence=evidence)[0] == expected
