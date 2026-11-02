@@ -101,14 +101,23 @@ def test_unverified_evidence_does_not_overwrite_materialized_spelling_drift(db_s
     assert prov.read_field(paper, "authors") == ["Tomislav Matić"]
 
 
-@pytest.mark.parametrize("before,after", [(["Y. Arai"], ["Y. Ami"]), (["Kwyro Lee"], ["Kwyro Lee'"]),
-                                        (["Gabor C. Temes"], ["Gabor. C. Temes"])])
+@pytest.mark.parametrize("before,after", [(["Y. Arai"], ["Y. Ami"]), (["Kwyro Lee"], ["Kwyro Lee'"])])
 def test_history_does_not_introduce_changed_letters_or_suspect_markers(db_session, before, after):
     paper, _, _, _, snapshot, extracted = fixture(db_session, kept=before, rejected=after)
     decision = history.plan(snapshot, extracted)
     assert decision["selected"] == before and not decision["changed"] and decision["pending"]
     history.apply(db_session, snapshot, extracted, decision)
     assert prov.read_field(paper, "authors") == before
+
+
+def test_history_archives_word_period_difference_without_introducing_it(db_session):
+    before = ["Gabor C. Temes"]
+    paper, _, _, _, snapshot, extracted = fixture(db_session, kept=before, rejected=["Gabor. C. Temes"])
+    decision = history.plan(snapshot, extracted)
+    assert decision["selected"] == before and not decision["changed"] and not decision["pending"]
+    history.apply(db_session, snapshot, extracted, decision)
+    assert prov.read_field(paper, "authors") == before
+    assert prov.conflict_page(db_session)[1] == 0
 
 
 def test_author_edits_enqueue_transactional_metadata_sync(db_session):

@@ -12,6 +12,9 @@ from app.services import metadata_policy as policy
     ("authors", ["José Chen"], ["Jose\u0301 Chen"]),
     ("authors", ["E.A. Wulf", "J.D. Kurfess"], ["E. A. Wulf", "J. D. Kurfess"]),
     ("authors", ["L.H.C.Braga"], ["L. H. C. Braga"]),
+    ("authors", ["Changqing. Feng", "Shubin Liu", "Qi An"], ["Changqing Feng", "Shubin Liu", "Qi An"]),
+    ("authors", ["Gabor. C. Temes"], ["Gabor C. Temes"]),
+    ("authors", ["Alice Smith."], ["Alice Smith"]),
     ("identifier:doi", "https://doi.org/10.1109/TEST.2020.1", "10.1109/test.2020.1"),
     ("tag:author_terms", ["TDC", "ADC"], ["adc", "tdc", "TDC"]),
 ])
@@ -26,6 +29,10 @@ def test_presentation_differences_compare_equal(field, left, right):
     ("authors", ["A. Smith"], ["Alice Smith"]),
     ("authors", ["Ann-Marie Smith"], ["Ann Marie Smith"]),
     ("authors", ["Alice", "Alice"], ["Alice"]),
+    ("authors", ["Y. Arai"], ["Y. Ami'"]),
+    ("authors", ["A. Smith"], ["A Smith"]),
+    ("authors", ["Changqing.Feng"], ["Changqing Feng"]),
+    ("authors", ["Changqing.. Feng"], ["Changqing Feng"]),
     ("title", "1-2 GHz", "12 GHz"),
     ("abstract", "A+B", "AB"),
     ("publication_date", "2020-01-01", "D:20200101000000"),
@@ -47,6 +54,15 @@ def test_pdf_name_variants_corroborate_spelling_without_becoming_equivalent():
     assert not policy.byline_spelling_variants(left, list(reversed(right)))
     assert not policy.byline_spelling_variants(["A. Smith"], ["Alice Smith"])
     assert not policy.byline_spelling_variants(["Alice", "Alice"], ["Alice"])
+
+
+def test_full_name_word_periods_do_not_require_pdf_boundary_evidence_or_rewrite_values():
+    kept = ["Changqing. Feng", "Shubin Liu", "Qi An"]
+    rejected = ["Changqing Feng", "Shubin Liu", "Qi An"]
+    assert not policy.needs_review("authors", kept, rejected, "pdf_heuristic", "pdf_embedded",
+                                   evidence={"byline_complete": False})
+    assert kept[0] == "Changqing. Feng"
+    assert rejected[0] == "Changqing Feng"
 
 
 @pytest.mark.parametrize("complete,expected", [(True, "current"), (False, "review")])

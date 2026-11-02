@@ -111,6 +111,8 @@ def _canonical(field: str, value: Any) -> Any:
         value = _PRESENTATION_TAG.sub("", html.unescape(value))
         value = " ".join(unicodedata.normalize("NFKC", value).translate(_TYPOGRAPHY).split())
         if field == "authors":
+            # Ignore a word-final period, preserving dotted initials and word boundaries.
+            value = re.sub(r"(?<![\w.])([^\W\d_]{2,})\.(?=\s|$)", r"\1", value)
             value = re.sub(r"(?<![^\W\d_])([^\W\d_]\.)\s+(?=[^\W\d_])", r"\1", value)
         return value.casefold() if field in ("title", "authors", "venue", "language") or field.startswith("tag:") else value
     return value
