@@ -44,7 +44,7 @@ def test_preview_does_not_mutate_claims_or_create_audit(db_session):
 @pytest.mark.parametrize("field", ["authors", "abstract"])
 def test_apply_keeps_history_and_records_machine_audit(db_session, field):
     paper, current, losing, decision = seed(db_session, field=field)
-    assert prov.conflict_page(db_session)[1] == 1
+    assert prov.conflict_page(db_session)[1] == int(field == "authors")
     result = quality.apply_review(db_session, [decision], apply=True)
     db_session.commit()
     assert result["changed"] == int(field == "authors")
@@ -86,7 +86,7 @@ def test_stale_or_protected_preview_is_rejected(db_session, change):
         quality.apply_review(db_session, [decision], apply=True)
 
 
-@pytest.mark.parametrize("patch", [{"value": []}, {"value": ["Alice", "Alice"]}, {"evidence": ""}, {"reason": ""}, {"field": "year"}])
+@pytest.mark.parametrize("patch", [{"value": []}, {"evidence": ""}, {"reason": ""}, {"field": "year"}])
 def test_invalid_decisions_fail_before_writing(db_session, patch):
     _, _, _, decision = seed(db_session)
     decision.update(patch)
@@ -107,7 +107,7 @@ def test_batch_failure_can_rollback_every_change(db_session):
 
 def test_explicit_materialized_snapshot_is_validated_and_audited(db_session):
     paper, _, _, decision = seed(db_session)
-    paper.paper_authors[1].author.name = "(Student Member"
+    paper.paper_authors[1].display_name = "(Student Member"
     decision["materialized_kept"] = ["Alice Smith", "(Student Member"]
     quality.apply_review(db_session, [decision], apply=True)
     audit = db_session.scalar(select(PaperSource).where(PaperSource.importer == quality.IMPORTER))

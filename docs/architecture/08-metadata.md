@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 依据 commit `2196176` 的工作树实测（2026-09-22）。本文只写**现状**：表怎么设计、代码怎么组织、有几张表、表里有什么 |
-| 表 | 元数据落在 **10 张表**上：4 张元数据专用表（`paper_sources` / `paper_identifiers` / `paper_field_provenance` / `venue_editions`）+ 6 张复用表（`papers` / `venues` / `paper_files` / `authors` + `paper_authors` / `paper_tags` + `papers_tags`）；全库共 14 张表 |
-| 代码 | `app/services/metadata_*.py`（8 个）+ `provenance_service.py` + `venue_service.py` = 11 个模块 / 4727 行；`app/api/metadata.py`、`app/api/papers.py`；`app/schemas/metadata.py`；`app/workers/tasks.py`；`app/db/models.py` |
+| 状态 | 当前元数据模型、合并规则、质量审计和索引同步契约 |
+| 表 | 当前值、来源、字段声明、标识符、刊会、作者和标签，以及 `metadata_quality_decisions` / `metadata_index_updates` |
+| 代码 | `app/services/metadata_*.py`、`provenance_service.py`、`venue_service.py`；解析策略在 `app/parsing/metadata_fields.py`，重试任务在 `app/workers/metadata_sync.py` |
 | 脚本 | `scripts/backfill_metadata.py`（历史论文回填，幂等）、`scripts/import_metadata.py`（CLI 导入）、`scripts/acceptance_metadata.py`（真机验收 7 项） |
 | 相关文档 | `docs/architecture/metadata-architecture.md`（设计背景、逐字段映射、术语表）、`docs/progress/project.md` [#17](../progress/project.md#17-元数据架构多来源--通用格式--外部导入2026-09-21)（实测数字） |
 
@@ -12,7 +12,7 @@
 
 ## 1. 数据模型总览
 
-### 1.1 十张表各是什么
+### 1.1 表的职责
 
 | 表 | 一行代表 | 谁写它 | 出处 |
 |---|---|---|---|
@@ -25,6 +25,8 @@
 | `paper_files` | 一个 PDF 版本（含主版本标记、来源归属） | `paper_service.register_original_file` / `select_primary_file` | `models.py` |
 | `authors` + `paper_authors` | 作者字典 + 论文↔作者（带顺序） | `paper_service.get_or_create_author` | `models.py` / |
 | `paper_tags` + `papers_tags` | 标签字典 + 论文↔标签（带 `kind`） | `metadata_tags.link_tags` / `replace_kind` | `models.py` / |
+| `metadata_quality_decisions` | 版本化自动决策、前后值及证据 | `metadata_quality.record` | `models.py` |
+| `metadata_index_updates` | 一篇论文最新待同步的元数据版本 | `metadata_index_sync.enqueue` / `flush_pending` | `models.py` |
 
 关系主轴（三层 + 一个骨架）：
 
@@ -47,7 +49,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | 字段级账本 | PostgreSQL `paper_field_provenance` | 历史行永不删除，回滚靠翻 `is_current` |
 | 标识符、venue、标签 | PostgreSQL 对应表 | 见 [#3](#3-表里有什么) |
 | PDF 原件 | MinIO（`papers/<paper_id>/…`） | 元数据层只存 `paper_files.object_key` / `sha256` |
-| 可检索文本 + 向量 + **过滤字段快照** | OpenSearch chunk 文档 | 过滤字段（venue/year/tags/doi）是**索引时的快照**，所以改元数据要 `POST /api/papers/{id}/reindex` 才影响过滤（路由 `app/api/papers.py` 的 `rollback_paper_metadata()`，契约见 `07-api.md`） |
+| 可检索文本 + 向量 + **过滤字段快照** | OpenSearch chunk 文档 | 字段服务改元数据时事务内登记同步任务，后台只更新快照；不需要重算向量 |
 
 ---
 
@@ -58,6 +60,14 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 `EmbeddedMetadata` 区分 XMP `description` 摘要与 Info `Subject` 主题，`field_origins` 保留字段出处并随原始 Info/XMP 写入来源快照。Subject 不直接成为摘要，只有通过出版信息/模板检查且与正文摘要相符时，重新提取服务才提供该候选。DOI 的显式出版标记识别独立于摘要处理。
 
 作者解析先解码 HTML 实体，再区分多人字符串、数组及倒置姓名。正文作者提取使用首页标题与摘要之间的原生行位置，过滤单位、邮箱、会员身份及脚注，支持单词姓名与非英文姓名。文字层缺失、损坏或检测到不同文字占用同一行位置时，来源快照记录 `quality.text_state` 和 `needs_review`，不从该文字层自动提供作者。
+
+`metadata_reextract.pdf_candidates` 是摄取、重新提取和只读验收共用的候选提取入口。原生作者区块在首次机构/邮箱行前截止；有效内嵌名单与正文名单不一致时，正文完整性不能自行确认为真。正文边界不确定的候选不直接填空，而是保留待复核声明；两份有效名单有实质差异时，不靠人数取胜。文字层缺失等文档级问题写入质量审计及计数，不伪造一个可采纳的作者候选。
+
+### 持续自动决策与审计
+
+`metadata_policy.pdf_choice` 统一服务于合并和复核。规则版本 `pdf-fields-v1` 先拒绝出版/模板摘要、机构/邮箱等无效作者候选，再比较 PDF 正文证据；结构化导入和人工结果仍受原有权威级别保护。摘要正文印证、可信且完整的作者区块可以修正另一个 PDF 来源；证据不足保留复核。
+
+`metadata_quality_decisions` 以决策载荷指纹唯一约束实现幂等，保存规则版本、执行者、字段、前值、候选、所选值、原声明、来源、证据和执行时间。候选自身无效的拒绝按候选、来源和证据去重，不因后续正文填空反复记账；依赖现值的比较保留完整上下文。自动处理不写人工 `decision_at`；当前人工值及已人工否决的相同候选跨规则版本受到保护。机器拒绝的候选在新规则需要复核时可重新开放，旧审计仍保留。重复候选复用字段历史，内容或证据变化则保留新的来源快照。`quality_counts` 与结构化日志按动作和原因统计拒绝、自动解决、复核及文字层问题。
 
 ### PDF 历史冲突质量处理
 
@@ -104,7 +114,7 @@ uv run python scripts/reconcile_pdf_metadata.py \
 
 ### 2.5 作者只存名字
 
-- **做法**：`authors` 是字典表（`name` / `normalized_name` 唯一），`paper_authors` 记顺序；`orcid` / `affiliation` 列存在但元数据层不写。
+- **做法**：`authors` 是归一化字典表；`paper_authors.display_name` 保存该论文的实际姓名拼写，`author_order` 保序且唯一。同一名单允许同名作者重复出现；旧行没有 `display_name` 时回退到字典姓名。`orcid` / `affiliation` 列存在但元数据层不写。
 - **边界**：不建 `author_identifiers`，IEEE 记录里的作者 id 直接丢弃——记下所有作者名字就够用。
 
 ### 2.6 标签带 kind
@@ -221,7 +231,7 @@ uv run python scripts/reconcile_pdf_metadata.py \
 | 表 | 列 | 约束 |
 |---|---|---|
 | `authors` | `id`、`name`(512)、`normalized_name`(512)、`orcid`(64)、`affiliation`(TEXT)、时间戳 | `ix_authors_name` + **`uq_authors_normalized_name`（UNIQUE，迁移 `0de3ab5e24dc`）** |
-| `paper_authors` | `paper_id`、`author_id`、`author_order`(INT NOT NULL，默认 0)、`is_corresponding`(BOOL) | `UNIQUE(paper_id, author_id)`、`UNIQUE(paper_id, author_order)` |
+| `paper_authors` | `paper_id`、`author_id`、`display_name`(TEXT，可空)、`author_order`(INT NOT NULL，默认 0)、`is_corresponding`(BOOL) | `UNIQUE(paper_id, author_order)`；同名作者允许多次出现 |
 | `paper_tags` | `id`、`name`(128)、`normalized_name`(128)、时间戳 | `UNIQUE(normalized_name)` |
 | `papers_tags` | `paper_id`、`tag_id`、`kind`(32 NOT NULL，默认 `source_tag`)、`created_at` | `UNIQUE(paper_id, tag_id)`、`ix_papers_tags_tag_id` |
 
@@ -282,18 +292,18 @@ uv run python scripts/reconcile_pdf_metadata.py \
 |---|---|---|
 | 3 | `manual` | 人工值可强制覆盖，并保留旧声明供回滚 |
 | 2 | `ieee_api` / `arxiv_api` / `crossref` / `import_file` | 已精确匹配的外部书目元数据，可覆盖 PDF 自带值和弱抽取值 |
-| 1 | `pdf_embedded` | 可覆盖首页启发式和文件名值，不能覆盖外部书目元数据 |
-| 0 | `pdf_heuristic` / `filename` | 只填空；不同弱来源互相冲突时保留现值 |
+| 1 | `pdf_embedded` | 通用字段可覆盖弱来源；作者与摘要先走 PDF 质量策略；不能覆盖外部书目元数据 |
+| 0 | `pdf_heuristic` / `filename` | 通用字段只填空；正文作者与摘要可凭可靠证据修正 PDF 值；文件名只提供未占用的标识符 |
 
-`decide` 的顺序是：空值直接 `filled`；相同或仅格式不同的值 `unchanged`；人工来源 `overridden`；标题走独立可信度阶梯；其余字段比较 `SOURCE_AUTHORITY`。新来源级别更高则 `overridden`，更低则 `archived`，保留现值及历史声明但不计入导入报告的冲突。同级实质分歧保留现值并登记待复核声明。来源级别与格式比较由 `metadata_policy.py` 统一提供；`metadata_merge.py` 复用这些规则。标题仍把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免 PDF 的运行页眉或生成文件名覆盖正确标题。
+`decide` 先判断等值和人工保护，再对 PDF 作者/摘要执行 `pdf_choice`，其余有效空字段可 `filled`；人工来源可 `overridden`；标题走独立可信度阶梯；其余字段比较 `SOURCE_AUTHORITY`。来源级别更低则 `archived`，同级实质分歧登记待复核声明。标题把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免运行页眉覆盖正确标题。
 
-字段特例（`_special_winner`）只在**同一非弱级别**内生效：`abstract` 取更长文本，`authors` 取更多作者，`year` 保留现值。低级别来源不能靠内容更长越级覆盖。`tag:<kind>` 在覆盖时调用 `metadata_tags.replace_kind`，替换该 kind 的旧链接；不同 kind 互不影响，旧声明仍保留在 provenance 中。
+不按摘要长度或作者数量选择。除 PDF 证据规则外，`_special_winner` 仅接受显式省略号截断且新摘要保留原文前缀的补全；`year` 同级冲突保留现值。`tag:<kind>` 覆盖时调用 `metadata_tags.replace_kind`，不同 kind 互不影响。
 
-人工裁决（`_dismiss`/回滚）不删除声明：要么采纳历史值，要么保留现值并把分歧标为已处理。落库与报告链为 `apply_decision` → `merge_values` → `conflict_report`。`provenance_service.conflict_page` 先在 SQL 中排除现值优先级更高的历史声明，再用共享格式比较排除等价值，之后按论文和字段去重、计数、分页；计数与页面采用相同口径。沿用首页启发式旧声明和人工历史声明不进入待复核清单的规则。
+人工裁决（`_dismiss`/回滚）不删除声明。落库与报告链为 `apply_decision` → `merge_values` → `conflict_report`。`provenance_service.conflict_page` 使用同一质量与格式策略，再按论文和字段去重、计数、分页；已拒绝、人工处理和低权威历史声明不反复告警。PDF 作者/摘要不受通用弱来源历史过滤限制；即使当前无作者，不确定的正文名单也能进入复核。
 
 格式比较只用于判断，不改写当前字段、来源原文或历史账本。归一化包括 Unicode 兼容字符、空白、HTML 实体、常见上下标/斜体标记及排版引号、连接号；标题和姓名比较忽略大小写，关键词按集合比较。作者顺序、数量、重音、缩写和实质标点差异保留，不把 PDF 创建时间等同于发表日期。
 
-来源未知、同级实质分歧、历史声明优先级高于当前值时继续复核，避免隐藏过去选错现值的问题。已登记的同级自动字段裁决，仅在现值标记为 `structured_override`、时间晚于历史声明且满足现有摘要/作者规则时作为历史。历史页及回滚仍能访问所有声明，不批量改写为人工已处理，也不删除记录。
+来源未知、同级实质分歧、历史声明优先级高于当前值时继续复核，避免隐藏过去选错现值的问题。旧自动裁决也重新通过共享策略判断，不能仅凭作者人数或摘要长度隐藏差异。历史页及回滚仍能访问所有声明。
 
 ### 4.4 证据匹配器（`match_record`）
 
@@ -351,14 +361,14 @@ uv run python scripts/reconcile_pdf_metadata.py \
 | `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | |
 
 导入报告的每个 `sources[]` 条目除 `match_method` / `match_confidence` 外，还返回 `reason`、`evidence[]`、`match_conflicts[]` 和 `candidates[]`；dry-run 与 apply 使用同一解释结构，便于批量复核自动匹配与否决原因。
-| `POST /api/metadata/reextract` | **全库**对已存 PDF 重跑元数据提取并合并缺口，**默认 dry_run**，admin | |
-| `POST /api/papers/{id}/metadata/reextract` | **单篇**重跑元数据提取并合并缺口，**默认 dry_run**，write | `api/papers.py` |
-| `GET /api/papers/{id}/metadata` | 当前值 + 字段账本视图 | `api/papers.py` 的 `get_paper_metadata()` |
+| `POST /api/metadata/reextract` | **全库**对已存 PDF 重跑元数据质量合并，**默认 dry_run**，admin | |
+| `POST /api/papers/{id}/metadata/reextract` | **单篇**重跑元数据质量合并，**默认 dry_run**，write | `api/papers.py` |
+| `GET /api/papers/{id}/metadata` | 当前值、字段账本、最近 100 条 `quality_decisions`、`index_sync` 状态 | `api/papers.py` 的 `get_paper_metadata()` |
 | `PATCH /api/papers/{id}/metadata` | 人工编辑（未知键进 `rejected`；改 `doi`/`arxiv_id` 会升级指纹） | |
 | `POST /api/papers/{id}/metadata/rollback` | 把某字段回滚到历史声明 | `patch_paper_metadata()` |
 | `POST /api/papers/{id}/reindex` | 让元数据改动进入检索过滤（配套，不是元数据端点） | |
 
-单篇与全库的 reextract 共用 `app/services/metadata_reextract.py` 的实现（同一份三层发现 + R2 合并），只是作用范围与权限不同（对齐 `papers/{id}/reindex`(write) vs `papers/reindex`(admin) 的惯例）。两者都**不重解析正文、不重切块、不重嵌入**，`refresh_index`（默认 true）只重写受影响论文的索引元数据快照。
+单篇与全库 reextract 共用三层发现与质量合并；dry-run 在 SAVEPOINT 内执行相同规则后回滚，不写来源、审计或同步任务。两者都**不重解析正文、不重切块、不重嵌入**。`refresh_index=true` 提交后立即尝试快照同步，失败由后台重试；false 仅省略立即刷新，不关闭可靠的后台同步。响应增加 `quality_counts`、`index_pending`；`index_documents` 表示此次立即更新的文档数。
 
 契约：请求体支持 multipart 文件、`application/json`，以及 JSONL 的 `application/x-ndjson`、
 `application/ndjson`、`application/jsonl`，其它类型 → 415（`_payload_from_request`）；
@@ -380,7 +390,9 @@ IEEE Xplore 的 `issue` 偶尔采用“期号: 专题名”（如 `1: Single-Pho
 | 脚本 | 作用 |
 |---|---|
 | `scripts/backfill_metadata.py` | 给历史论文补来源行 / 声明 / 标识符 / 主版本标记，**幂等**，`--dry-run` / `--limit`；从不改 `papers.fingerprint` |
-| `scripts/reextract_metadata.py` | 对已存 PDF **重跑元数据提取**并合并缺口（不重解析正文/不重嵌入），`--dry-run`（默认）/`--apply`/`--paper-id`/`--limit`/`--no-index`；先 dry-run 出清单再 apply |
+| `scripts/reextract_metadata.py` | 对已存 PDF 重跑质量合并，`--dry-run`（默认）/`--apply`/`--paper-id`/`--limit`/`--no-index`；`--no-index` 省略立即刷新，后台仍重试 |
+| `scripts/audit_pdf_metadata_quality.py` | 只读回放已显式复核的历史摘要与指定数量的真实 PDF 作者样本；数据库事务只读，错误自动覆盖或提取失败退出非零；无复核基准也不算通过 |
+| `scripts/acceptance_pdf_metadata_quality.py` | 使用临时 PostgreSQL schema 和 OpenSearch 索引验证 PDF 候选、dry-run 回滚、重导入幂等、人工保护及快照同步；结束或异常均清理，不写既有论文数据 |
 | `scripts/import_metadata.py` | CLI 导入（`--apply` / `--limit` / `--source-type` / `--report`） |
 | `scripts/acceptance_metadata.py` | 真机验收 7 项：动态盘点当前库并验证回填不变量、IEEE 按 DOI 命中并 apply、无 DOI 记录进复核、手动改+回滚+指纹升级、venue 检索（需 reindex）、元数据先 PDF 后、索引一致性。**只在自己的壳论文上造数据**，`--cleanup` 删掉本次造的行 |
 | `scripts/audit_identifier_mirrors.py` | **只读**核对 `papers.doi`/`arxiv_id` 镜像列与 `paper_identifiers`（6 类漂移），`--json`/`--limit`/`--no-fail`；有漂移 exit 1，不修复 |
@@ -391,7 +403,7 @@ IEEE Xplore 的 `issue` 偶尔采用“期号: 专题名”（如 `1: Single-Pho
 ### 4.9 元数据如何传播到检索与读接口
 
 - **索引快照**：`app/search/snapshot.py::paper_metadata_snapshot`（`Checker.check()`）把当前值写成 chunk 文档上的可过滤字段（`venue`/`venue_year`/`paper_type`/卷期页/`publication_date`/`identifiers`/四个 tag kind），INDEXING 阶段由
- `_index_rows`（`tasks.py`）调用。**改元数据不会自动改变检索过滤**：要么 `POST /api/papers/{id}/reindex`（重算向量，≈1 chunk/s），要么 `uv run python scripts/refresh_index_metadata.py`（只改快照、秒级；真机 2883 文档全部更新、0 失败）。
+ `_index_rows`（`tasks.py`）调用。`provenance_service.write_field` 为已有分块的论文在同一 PG 事务内 upsert `metadata_index_updates`。后台 `metadata_sync` 批量锁定任务，只更新标题、作者、年份、标识符和过滤快照；保留文本与向量。成功仅删除已同步版本，失败记录尝试次数和安全错误类型，并移动到队尾避免阻塞其他论文。后续修改生成新版本，防止同步完成时误删更新。无分块的壳论文无需任务。
 - **读接口**：`PaperOut`直接输出当前值列 `volume/issue/pages/publication_date/
  paper_type/venue_edition_id/venue_year`；`GET /api/papers` 支持 `venue`/`year_from`/`year_to`/`paper_type`/`tag`/`author`
  过滤（**读 PG 当前值**，与检索读快照是两条路）。`author` 按 `authors.normalized_name` 匹配、多人 AND；
@@ -401,10 +413,12 @@ IEEE Xplore 的 `issue` 偶尔采用“期号: 专题名”（如 `1: Single-Pho
 
 ## 5. 配置项
 
-元数据层**没有自己的配置键**：来源类型、scheme、置信度、字段名、主版本优先级、R2 三类集合全是代码常量（`app/services/metadata_*.py` 顶部）。只有这些既有键会间接影响它：
+来源、字段和质量规则为代码常量；同步周期和批量大小由环境变量控制：
 
 | 键 | 作用 | 出处 |
 |---|---|---|
+| `METADATA_SYNC_INTERVAL_S` | 失败后的后台重试周期，默认 5 秒，大于 0 | `app/core/config.py` |
+| `METADATA_SYNC_BATCH_SIZE` | 每批待同步论文数，默认 20，范围 1–200 | 同上 |
 | `OPENSEARCH_URL` | 验收脚本直查文档数 | `app/core/config.py` |
 | `PAPER_API_KEY` | 验收脚本调 API 的鉴权头 | |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | 写进 chunk 文档，随过滤字段进索引 | |
@@ -427,6 +441,8 @@ CLI 参数（非配置）：`backfill_metadata.py --dry-run/--limit`、`import_m
 | `tests/test_awaiting_file.py` | 元数据先建壳 → PDF 到达复用同一 `paper_id` |
 | `tests/test_manual_metadata.py` | `manual` 编辑立即生效且可回滚 |
 | `tests/test_primary_version.py` | 主版本优先级；非主版本不解析；`needs_reindex` 标志 |
+| `tests/test_pdf_field_quality.py` | Subject 印证、作者分隔和区块、非英文/单词姓名、文字层质量 |
+| `tests/test_pdf_quality_workflows.py` | 自动拒绝/修正/复核、审计幂等、人工保护、同名作者、事务同步与失败重试 |
 
 测试选择标准见[测试行为边界](testing-policy.md)。
 

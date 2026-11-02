@@ -193,6 +193,13 @@ def record_claim(
         if make_current and not existing.is_current:  # pragma: no cover - defensive
             existing.is_current = True
         return existing
+    if not make_current:
+        historical = next((row for row in session.scalars(select(PaperFieldProvenance).where(
+            PaperFieldProvenance.paper_id == paper_id, PaperFieldProvenance.field == field,
+            PaperFieldProvenance.source_id == source_id,
+            PaperFieldProvenance.is_current.is_(False))) if _same_value(row.value, value)), None)
+        if historical is not None:
+            return historical
 
     row = PaperFieldProvenance(
         id=new_uuid(),
@@ -349,7 +356,15 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def write_field(
+def write_field(session: Session, paper: Paper, field: str, value: Any, *, override: bool = False, source_id: str | None = None) -> bool:
+    changed = _write_field(session, paper, field, value, override=override, source_id=source_id)
+    if changed:
+        from app.services import metadata_index_sync
+        metadata_index_sync.enqueue(session, paper.id)
+    return changed
+
+
+def _write_field(
     session: Session,
     paper: Paper,
     field: str,
@@ -688,6 +703,8 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
             else_=case(policy.SOURCE_AUTHORITY, value=normalized),
         )
     kept_rank, rejected_rank = authority(current_source), authority(loser_source)
+    pdf_pair = (PaperFieldProvenance.field.in_((FIELD_AUTHORS, FIELD_ABSTRACT))
+                & loser_source.source_type.in_(policy.PDF_SOURCES) & current_source.source_type.in_(policy.PDF_SOURCES))
     statement = (
         select(
             PaperFieldProvenance.id.label("provenance_id"), PaperFieldProvenance.paper_id,
@@ -698,9 +715,10 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
             current_source.source_type.label("kept_source"),
             current_row.decided_at.label("current_written_at"),
             current_row.decided_by.label("current_decider"),
+            current_source.raw.label("current_raw"), loser_source.raw.label("rejected_raw"), Paper.title.label("paper_title"),
         )
         .join(Paper, Paper.id == PaperFieldProvenance.paper_id)
-        .join(current_row, (current_row.paper_id == PaperFieldProvenance.paper_id)
+        .outerjoin(current_row, (current_row.paper_id == PaperFieldProvenance.paper_id)
               & (current_row.field == PaperFieldProvenance.field) & current_row.is_current.is_(True))
         .outerjoin(loser_source, loser_source.id == PaperFieldProvenance.source_id)
         .outerjoin(current_source, current_source.id == current_row.source_id)
@@ -710,11 +728,13 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
             PaperFieldProvenance.decided_by.not_in((DECIDED_DISMISSED, DECIDED_QUALITY_REJECTED)),
             PaperFieldProvenance.decided_by != DECIDED_MANUAL,
             PaperFieldProvenance.decision_at.is_(None),
-            current_row.decided_by != DECIDED_MANUAL,
+            or_(current_row.decided_by.is_(None), current_row.decided_by != DECIDED_MANUAL),
+            current_row.decision_at.is_(None),
             PaperFieldProvenance.value.is_distinct_from(current_row.value),
-            or_(loser_source.source_type.is_(None), func.lower(func.trim(loser_source.source_type)).not_in(policy.HISTORY_ONLY_SOURCES)),
+            or_(pdf_pair, current_row.id.is_(None) & PaperFieldProvenance.field.in_((FIELD_AUTHORS, FIELD_ABSTRACT)), loser_source.source_type.is_(None), func.lower(func.trim(loser_source.source_type)).not_in(policy.HISTORY_ONLY_SOURCES)),
+            or_(current_row.id.is_not(None), loser_source.source_type.in_(policy.PDF_SOURCES) & PaperFieldProvenance.field.in_((FIELD_AUTHORS, FIELD_ABSTRACT))),
             or_(current_source.source_type.is_(None), func.lower(func.trim(current_source.source_type)) != source_vocab.SOURCE_TYPE_MANUAL),
-            or_(kept_rank.is_(None), rejected_rank.is_(None), kept_rank <= rejected_rank),
+            or_(pdf_pair, kept_rank.is_(None), rejected_rank.is_(None), kept_rank <= rejected_rank),
         )
         .order_by(PaperFieldProvenance.decided_at.desc(), PaperFieldProvenance.id)
     )
@@ -724,11 +744,12 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
     for row in session.execute(statement.execution_options(yield_per=250)).mappings():
         key = (row["paper_id"], row["field"])
         resolved = row["current_decider"] == DECIDED_STRUCTURED_OVERRIDE and row["current_written_at"] > row["decided_at"]
-        if key in seen or not policy.needs_review(row["field"], row["kept"], row["rejected"], row["kept_source"], row["rejected_source"], resolved_by_rule=resolved):
+        evidence = (row["current_raw"] or {}).get("quality") or (row["rejected_raw"] or {}).get("quality") or {}
+        if key in seen or not policy.needs_review(row["field"], row["kept"], row["rejected"], row["kept_source"], row["rejected_source"], resolved_by_rule=resolved, evidence=evidence, title=row["paper_title"]):
             continue
         seen.add(key)
         if start < len(seen) <= start + size:
-            conflicts.append({key: value for key, value in row.items() if key not in ("kept_source", "rejected_source", "current_written_at", "current_decider")})
+            conflicts.append({key: value for key, value in row.items() if key not in ("kept_source", "rejected_source", "current_written_at", "current_decider", "current_raw", "rejected_raw", "paper_title")})
     return conflicts, len(seen)
 
 

@@ -174,7 +174,7 @@ def test_backfill_records_a_doi_file_name_source(factory) -> None:  # noqa: ANN0
     )
 
     assert paper.doi == "10.1109/name.2025.1234567"
-    source = session.query(PaperSource).filter_by(paper_id=paper.id).one()
+    source = session.query(PaperSource).filter_by(paper_id=paper.id, source_type="filename").one()
     assert source.source_type == metadata_sources.SOURCE_TYPE_FILENAME
     assert source.raw["identifier:doi"] == "10.1109/name.2025.1234567"
 
@@ -238,7 +238,7 @@ def test_backfill_records_a_file_name_source_when_the_pdf_knows_nothing(factory)
     tasks._backfill_metadata(session, paper, [], None, filename="1706.03762__计算机.pdf")
 
     assert paper.arxiv_id == "1706.03762"
-    sources = session.query(PaperSource).filter_by(paper_id=paper.id).all()
+    sources = session.query(PaperSource).filter_by(paper_id=paper.id, source_type="filename").all()
     assert [source.source_type for source in sources] == [metadata_sources.SOURCE_TYPE_FILENAME]
     assert sources[0].source_ref == metadata_sources.paper_filename_ref(paper.id)
     assert sources[0].raw["filename"] == "1706.03762__计算机.pdf"
@@ -253,7 +253,7 @@ def test_backfill_skips_layer_three_when_an_arxiv_id_is_already_known(factory) -
     tasks._backfill_metadata(session, paper, [], None, filename="1706.03762__计算机.pdf")
 
     assert paper.arxiv_id == "1512.03385"
-    assert session.query(PaperSource).filter_by(paper_id=paper.id).count() == 0
+    assert session.query(PaperSource).filter_by(paper_id=paper.id, source_type="filename").count() == 0
     assert session.query(PaperIdentifier).filter_by(paper_id=paper.id).count() == 0
 
 
@@ -267,7 +267,7 @@ def test_backfill_skips_a_guess_that_belongs_to_another_paper(factory) -> None: 
     tasks._backfill_metadata(session, fresh, [], None, filename="1706.03762__计算机.pdf")
 
     assert fresh.arxiv_id is None
-    assert session.query(PaperSource).filter_by(paper_id=fresh.id).count() == 0
+    assert session.query(PaperSource).filter_by(paper_id=fresh.id, source_type="filename").count() == 0
     assert provenance_service.current_claim(session, fresh.id, "identifier:arxiv") is None
     assert [row.normalized_value for row in _arxiv_rows(session, owner)] == ["1706.03762"]
 
@@ -281,17 +281,20 @@ def test_backfill_offers_a_guess_nobody_holds_yet(factory) -> None:  # noqa: ANN
     tasks._backfill_metadata(session, fresh, [], None, filename="2105.11453__半导体.pdf")
 
     assert fresh.arxiv_id == "2105.11453"
-    assert session.query(PaperSource).filter_by(paper_id=fresh.id).count() == 1
+    assert session.query(PaperSource).filter_by(paper_id=fresh.id, source_type="filename").count() == 1
 
 
-def test_backfill_without_a_file_name_touches_nothing(factory) -> None:  # noqa: ANN001
+def test_backfill_without_a_file_name_only_retains_quality_evidence(factory) -> None:  # noqa: ANN001
     session = factory()
     paper = _paper(session)
 
     tasks._backfill_metadata(session, paper, [], None, filename=None)
 
     assert paper.arxiv_id is None
-    assert session.query(PaperSource).filter_by(paper_id=paper.id).count() == 0
+    sources = session.query(PaperSource).filter_by(paper_id=paper.id).all()
+    assert {source.source_type for source in sources} == {"pdf_embedded", "pdf_heuristic"}
+    assert all(source.raw["quality"]["text_state"] == "missing_text" for source in sources)
+    assert session.query(PaperIdentifier).filter_by(paper_id=paper.id).count() == 0
 
 
 def test_source_filename_prefers_the_primary_file_row(factory) -> None:  # noqa: ANN001

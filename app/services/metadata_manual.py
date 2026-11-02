@@ -349,12 +349,18 @@ def dismiss_conflict(
 def metadata_view(session: Session, paper: Paper) -> dict[str, Any]:
     """Current values plus, per field, who claimed what and when."""
     history = prov.provenance_summary(session, paper.id)
+    from app.services import metadata_quality
+    from app.db.models import MetadataIndexUpdate
+    pending = session.get(MetadataIndexUpdate, paper.id)
     return {
         "paper_id": paper.id,
         "status": paper.status,
         "fingerprint": paper.fingerprint,
         "values": _current_values(session, paper),
         "provenance": history,
+        "quality_decisions": metadata_quality.for_paper(session, paper.id),
+        "index_sync": {"pending": pending is not None, "attempts": pending.attempts if pending else 0,
+                       "last_error": pending.last_error if pending else None},
         "sources": [sources.serialize_source(row) for row in sources.sources_for_paper(session, paper.id)],
         "identifiers": [
             {

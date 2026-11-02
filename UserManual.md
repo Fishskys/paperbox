@@ -197,6 +197,8 @@ uv run python scripts/healthcheck.py
 | `HEALTH_TIMEOUT_OVERRIDES` | 单个依赖的超时覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `docling=30,embedding=5`）；覆盖优先于统一默认值，写错直接报错 |
 | `HEALTH_PROBE_RETRIES` | 探针失败后的额外尝试次数 | `1` | 只作用于 HTTP 探针（PG / 对象存储由客户端自己重连） |
 | `HEALTH_PROBE_CACHE_TTL` | 每个依赖探针结论的复用时长（秒） | `300`（5 分钟） | **对所有依赖生效**（本地也缓存：批量上传期间 `/health` 被反复调用，不该每次都重探整个栈）。它同时就是"新鲜度"上限：依赖挂掉后最多这么久才会被改口 |
+| `METADATA_SYNC_INTERVAL_S` | 元数据索引同步重试周期（秒） | `5` | 大于 0；只更新快照，不重算向量 |
+| `METADATA_SYNC_BATCH_SIZE` | 每批同步论文数 | `20` | 范围 1–200；失败任务持久保留并轮转重试 |
 | `HEALTH_CACHE_TTL_OVERRIDES` | 单个依赖的缓存时长覆盖 | 空 | `name=seconds`，逗号或分号分隔（如 `opensearch=30,embedding=900`）；语法与超时覆盖一致，写错直接报错 |
 | `HEALTH_PROBE_ON_STARTUP` | 启动时把每个依赖探一次并写日志 | `true` | 失败只告警、不拦启动；结论同时落缓存。**探测只按需（这一次 + 每次调 `/health`），没有定时器** —— 周期探第三方 API 逐次计费；不想要这次启动探测就设 `false` |
 | `LOG_LEVEL` | 日志级别 | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |

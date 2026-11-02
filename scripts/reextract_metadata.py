@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-extract the metadata of already-stored papers and merge what is missing.
+"""Re-extract stored PDF metadata through the shared quality policy.
 
     uv run python scripts/reextract_metadata.py --dry-run
     uv run python scripts/reextract_metadata.py --dry-run --paper-id <uuid>
@@ -9,15 +9,16 @@
 Unlike ``POST /api/papers/{id}/reindex`` this does **not** re-parse the body, re-
 chunk, re-embed or rewrite the index from scratch: it only re-runs the metadata
 discovery layers (PDF Info/XMP + first two pages + file name) over each stored PDF
-and merges the result through the normal rule-R2 engine (fill a blank, never
-overwrite what a source already said). It is the way to push an improved
+and merges the result through the shared authority and PDF quality policy,
+protecting manual decisions and structured sources. It applies an improved
 extraction rule -- a new identifier source, a better DOI heuristic -- onto the
 library that was indexed before the rule existed.
 
 The default is ``--dry-run`` (report what would change, write nothing). ``--apply``
 writes the changes and, unless ``--no-index`` is given, rewrites the affected
 papers' index-metadata snapshot so the new identifiers reach search filters; the
-chunk text and embeddings are untouched.
+chunk text and embeddings are untouched. --no-index skips the immediate attempt;
+the durable background metadata queue still retries committed changes.
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ def main() -> int:
     parser.add_argument(
         "--no-index",
         action="store_true",
-        help="do not rewrite the index-metadata snapshot (DB only)",
+        help="skip immediate index refresh; background metadata sync still runs",
     )
     parser.add_argument(
         "--quiet", action="store_true", help="summary only, no per-paper detail"
@@ -100,11 +101,16 @@ def main() -> int:
     print(f"  skipped (no stored file): {summary.skipped_no_file}")
     print(f"  failed: {summary.failed}")
     if summary.added_fields:
-        print("  fields added:")
+        print("  fields changed:")
         for name, count in sorted(summary.added_fields.items()):
             print(f"    {name}: {count}")
     if args.apply:
         print(f"  index documents refreshed: {summary.index_documents}")
+        print(f"  papers pending index sync: {summary.index_pending}")
+    if summary.quality_counts:
+        print("  quality decisions:")
+        for reason, count in sorted(summary.quality_counts.items()):
+            print(f"    {reason}: {count}")
     if summary.errors:
         print("  errors:")
         for item in summary.errors:

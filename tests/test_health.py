@@ -72,6 +72,8 @@ def isolated_lifespan(monkeypatch):
     monkeypatch.setattr(main.job_queue, "stop", stopped)
     monkeypatch.setattr(main.housekeeping, "start", lambda: None)
     monkeypatch.setattr(main.housekeeping, "stop", stopped)
+    monkeypatch.setattr(main.metadata_sync, "start", lambda: None)
+    monkeypatch.setattr(main.metadata_sync, "stop", stopped)
 
 
 def spec(name: str) -> hs.ProbeSpec:

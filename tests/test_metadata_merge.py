@@ -276,7 +276,7 @@ def test_conflicts_are_reported_in_the_import_shape(db_session) -> None:
 # --------------------------------------------------------------------------- #
 # 4. field specifics
 # --------------------------------------------------------------------------- #
-def test_abstract_keeps_the_longest_text(db_session) -> None:
+def test_longer_abstract_alone_does_not_resolve_a_disagreement(db_session) -> None:
     paper = make_paper(db_session, abstract="short")
     seed(db_session, paper, "abstract", "short", "ieee_api")
 
@@ -284,8 +284,8 @@ def test_abstract_keeps_the_longest_text(db_session) -> None:
         db_session, paper, {"abstract": "a much longer abstract"}, source_type="arxiv_api"
     )
 
-    assert [item.action for item in report.decisions] == [merge.ACTION_SPECIAL]
-    assert paper.abstract == "a much longer abstract"
+    assert [item.action for item in report.decisions] == [merge.ACTION_CONFLICT]
+    assert paper.abstract == "short"
 
 
 def test_abstract_from_a_heuristic_is_overridden_not_compared(db_session) -> None:
@@ -314,7 +314,7 @@ def test_abstract_keeps_the_current_text_when_it_is_longer(db_session) -> None:
     assert paper.abstract == long_text
 
 
-def test_authors_keep_the_longest_list(db_session) -> None:
+def test_more_authors_alone_do_not_resolve_a_disagreement(db_session) -> None:
     paper = make_paper(db_session)
     seed(db_session, paper, "authors", ["Alice"], "ieee_api")
 
@@ -322,8 +322,8 @@ def test_authors_keep_the_longest_list(db_session) -> None:
         db_session, paper, {"authors": ["Alice", "Bob", "Carol"]}, source_type="arxiv_api"
     )
 
-    assert [item.action for item in report.decisions] == [merge.ACTION_SPECIAL]
-    assert prov.read_field(paper, "authors") == ["Alice", "Bob", "Carol"]
+    assert [item.action for item in report.decisions] == [merge.ACTION_CONFLICT]
+    assert prov.read_field(paper, "authors") == ["Alice"]
 
 
 def test_authors_conflict_when_the_incoming_list_is_shorter(db_session) -> None:
@@ -434,7 +434,7 @@ def test_a_heuristic_list_cannot_outgrow_a_structured_one(db_session) -> None:
 
     decision = report.decisions[0]
     assert decision.action == merge.ACTION_ARCHIVED
-    assert decision.reason == "a weak source cannot outgrow a structured one"
+    assert decision.reason == "author_title_or_prose"
     assert prov.read_field(paper, "authors") == clean, "干净的那份必须留下"
 
 
@@ -467,12 +467,12 @@ def test_two_weak_sources_keep_the_current_value(db_session) -> None:
     )
 
     assert report.decisions[0].action == merge.ACTION_CONFLICT
-    assert report.decisions[0].reason == "two weak sources disagree; the current value stays"
+    assert report.decisions[0].reason == "unverified_author_difference"
     assert prov.read_field(paper, "authors") == ["Alice", "Bob"]
 
 
-def test_structured_sources_still_let_the_longer_list_win(db_session) -> None:
-    """回归护栏：规则 4 在结构化来源之间照旧生效（两个真实 API 的列表长度不同）。"""
+def test_structured_sources_preserve_unverified_author_differences(db_session) -> None:
+    """Two bibliographic sources need review when they disagree on authors."""
     paper = make_paper(db_session)
     seed(db_session, paper, "authors", ["Alice"], "ieee_api")
 
@@ -480,8 +480,8 @@ def test_structured_sources_still_let_the_longer_list_win(db_session) -> None:
         db_session, paper, {"authors": ["Alice", "Bob", "Carol"]}, source_type="arxiv_api"
     )
 
-    assert report.decisions[0].action == merge.ACTION_SPECIAL
-    assert prov.read_field(paper, "authors") == ["Alice", "Bob", "Carol"]
+    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert prov.read_field(paper, "authors") == ["Alice"]
 
 
 # --------------------------------------------------------------------------- #

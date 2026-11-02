@@ -43,6 +43,7 @@ from app.services import embedding_service
 from app.services import health_service
 from app.services.api_key_service import AuthIdentity
 from app.workers import housekeeping
+from app.workers import metadata_sync
 from mcp.server import MCPServer
 
 from app.mcp.auth import McpAuthMiddleware, warn_about_shared_keys
@@ -108,6 +109,7 @@ async def lifespan(_: FastAPI):
     # Housekeeping runs once right after recovery (it cleans the debris of the
     # process that died) and then on its own interval.
     housekeeping.start()
+    metadata_sync.start()
     if mcp_server is not None:
         # The MCP session manager has to be entered by the *host* app: a mounted
         # sub-application's own lifespan never runs, and without this line the
@@ -116,6 +118,7 @@ async def lifespan(_: FastAPI):
             yield
     else:
         yield
+    await metadata_sync.stop()
     await housekeeping.stop()
     await job_queue.stop()
     logger.info("paperbox stopping")

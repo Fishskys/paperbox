@@ -38,6 +38,8 @@ from app.db.models import (
     PaperFigureAsset,
     PaperIdentifier,
     PaperSource,
+    MetadataQualityDecision,
+    MetadataIndexUpdate,
     PaperTag,
     PapersTag,
     Venue,
@@ -91,6 +93,8 @@ def factory():
         FigureExtractionRun.__table__,
         PaperFigure.__table__,
         PaperFigureAsset.__table__,
+        MetadataQualityDecision.__table__,
+        MetadataIndexUpdate.__table__,
     )
     for table in tables:
         columns = [c._copy() for c in table.columns]
@@ -100,6 +104,8 @@ def factory():
                     column.type = replacement
         meta = sqlalchemy.MetaData()
         sqlalchemy.Table(table.name, meta, *columns)
+        if table.name == "metadata_quality_decisions":
+            meta.tables[table.name].append_constraint(sqlalchemy.UniqueConstraint("fingerprint"))
         meta.create_all(engine)
 
     session_factory = sessionmaker(

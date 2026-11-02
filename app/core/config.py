@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     # --- application ---
     app_name: str = "paperbox"
     app_env: str = Field(default="local", alias="APP_ENV")
+    metadata_sync_interval_s: float = Field(default=5, gt=0, alias="METADATA_SYNC_INTERVAL_S")
+    metadata_sync_batch_size: int = Field(default=20, ge=1, le=200, alias="METADATA_SYNC_BATCH_SIZE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- PostgreSQL (fact source for paper metadata) ---

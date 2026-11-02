@@ -256,7 +256,7 @@ def test_format_filter_runs_before_deduplication_and_pagination(db_session):
     assert {row["provenance_id"] for row in a + b} == expected
 
 
-def test_recorded_automatic_tie_break_is_history_but_a_new_disagreement_is_pending(db_session):
+def test_legacy_list_length_tie_break_is_not_proof_of_author_completeness(db_session):
     paper = make_paper(db_session)
     api = make_source(db_session, paper.id, "ieee_api")
     imported = make_source(db_session, paper.id, "import_file")
@@ -265,7 +265,7 @@ def test_recorded_automatic_tie_break_is_history_but_a_new_disagreement_is_pendi
     old.decided_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
     current.decided_at = datetime(2020, 1, 2, tzinfo=timezone.utc)
     db_session.flush()
-    assert prov.conflict_page(db_session) == ([], 0)
+    assert prov.conflict_page(db_session)[1] == 1
     newer = prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Charlie"], source_id=api.id)
     conflicts, total = prov.conflict_page(db_session)
     assert total == 1 and conflicts[0]["provenance_id"] == newer.id
@@ -577,7 +577,7 @@ def test_a_field_a_human_edited_drops_off_the_list(db_session) -> None:
         db_session,
         paper_id=paper.id,
         field="authors",
-        value=["msi"],
+        value=["Other Author"],
         source_id=structured.id,
         decided_by="conflict",
         make_current=False,

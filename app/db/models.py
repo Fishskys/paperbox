@@ -71,6 +71,28 @@ class TimestampMixin:
     )
 
 
+class MetadataQualityDecision(Base):
+    __tablename__ = "metadata_quality_decisions"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_metadata_quality_fingerprint"),
+                     Index("ix_metadata_quality_paper", "paper_id", "created_at"))
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    paper_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False)
+    field: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class MetadataIndexUpdate(Base):
+    __tablename__ = "metadata_index_updates"
+    paper_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True)
+    revision: Mapped[str] = mapped_column(String(36), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 # --------------------------------------------------------------------------- #
 # papers
 # --------------------------------------------------------------------------- #
@@ -265,7 +287,6 @@ class Venue(TimestampMixin, Base):
 class PaperAuthor(Base):
     __tablename__ = "paper_authors"
     __table_args__ = (
-        UniqueConstraint("paper_id", "author_id", name="uq_paper_authors_paper_author"),
         UniqueConstraint("paper_id", "author_order", name="uq_paper_authors_order"),
         Index("ix_paper_authors_author_id", "author_id"),
     )
@@ -280,6 +301,7 @@ class PaperAuthor(Base):
         UUID(as_uuid=False), ForeignKey("authors.id", ondelete="CASCADE"), nullable=False
     )
     author_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    display_name: Mapped[str | None] = mapped_column(Text)
     is_corresponding: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

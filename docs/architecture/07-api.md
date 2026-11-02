@@ -63,14 +63,14 @@
 | POST | `/api/papers/{paper_id}/metadata/rollback` | 单字段回滚到历史主张（裁决「采纳被拒值」） | write | — | `app/api/papers.py` 的 `delete_paper()` |
 | POST | `/api/papers/{paper_id}/metadata/conflicts/dismiss` | 裁决「保留现值」：值不动，只把该分歧标为已裁决 | write | — | `app/api/papers.py` 的 `delete_paper()` |
 | DELETE | `/api/papers/{paper_id}` | 删除（204） | write | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |
-| POST | `/api/papers/{paper_id}/metadata/reextract` | 单篇重跑元数据提取并合并缺口（默认 `dry_run=true`） | write | — | `app/api/papers.py` |
+| POST | `/api/papers/{paper_id}/metadata/reextract` | 单篇重跑 PDF 质量合并（默认 `dry_run=true`） | write | — | `app/api/papers.py` |
 | POST | `/api/papers/reindex` | **批量/整库重建索引**（先检测"为什么要重建"，默认 `dry_run=true` 只报告） | admin | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
 | POST | `/api/papers/{paper_id}/reindex` | 重建单篇索引（202） | write | — | `app/api/papers.py` 的 `rollback_paper_metadata()` |
 | POST | `/api/metadata/import` | 外部元数据导入；`sources[]` 带 `reason`、`evidence[]`、`match_conflicts[]`、`candidates[]` | write | `dry_run`（默认 true）、`apply`、`limit`、`source_type` | `app/api/metadata.py` |
 | GET | `/api/metadata/review` | 来源与冲突分别分页；`total` 为来源完整总数，`conflicts_total` 为冲突完整总数 | read | `status`（可重复）、`limit`（1..200，默认 50）、`offset`、`conflicts_offset`（非负） | `app/api/metadata.py` |
 | POST | `/api/metadata/sources/{source_id}/attach` | 人工归属来源 | write | — | `app/api/metadata.py` |
 | POST | `/api/metadata/apply` | 按报告批量应用人工决定 | write | — | `app/api/metadata.py` |
-| POST | `/api/metadata/reextract` | **全库**重跑元数据提取并合并缺口（默认 `dry_run=true`） | admin | `paper_id`、`limit`、`dry_run`、`refresh_index`、`detail` | `app/api/metadata.py` |
+| POST | `/api/metadata/reextract` | **全库**重跑 PDF 质量合并（默认 `dry_run=true`） | admin | `paper_id`、`limit`、`dry_run`、`refresh_index`、`detail` | `app/api/metadata.py` |
 | POST | `/api/search` | 论文级混合检索 | read | — | `app/api/search.py` 的 `search()` |
 | GET | `/api/search-logs` | 检索日志（只读） | read | `limit`、`since`、`mode` | `app/api/search_logs.py` |
 
@@ -243,7 +243,9 @@
 
 ## 4. 调用链（逐跳）
 
-**启动**：uvicorn → `app.main:lifespan`(`main.py`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → 请求可服务。
+**启动**：uvicorn → `app.main:lifespan`(`main.py`) → `configure_logging` → `job_queue.start` → `job_queue.recover` → `housekeeping.start` → `metadata_sync.start` → 请求可服务。
+
+**元数据质量响应**：`GET /api/papers/{paper_id}/metadata` 在既有字段账本外提供 `quality_decisions`（最近 100 条自动决策：版本、时间、原因、前后值及证据）与 `index_sync`（`pending`、`attempts`、`last_error`）。自动决策独立于人工裁决时间。单篇/全库 reextract 响应增加 `quality_counts`（按动作和原因计数）及 `index_pending`（待同步论文数）；`index_documents` 为立即同步成功文档数。dry-run 回滚所有来源、审计及队列写入；`refresh_index=false` 只省略立即刷新，持久后台同步仍执行。规则与表结构见[元数据层](08-metadata.md)。
 
 **`POST /api/papers/{paper_id}/file`**（`ingestion.py` 的 `attach_original()`）：
 

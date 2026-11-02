@@ -33,4 +33,4 @@ def test_substantive_differences_remain_distinct(field, left, right):
 def test_unknown_sources_and_unresolved_shorter_author_lists_are_not_hidden():
     assert policy.needs_review("title", "Current", "Other", None, "ieee_api")
     assert policy.needs_review("authors", ["Alice", "Bob"], ["Alice"], "ieee_api", "arxiv_api")
-    assert not policy.needs_review("authors", ["Alice", "Bob"], ["Alice"], "ieee_api", "arxiv_api", resolved_by_rule=True)
+    assert policy.needs_review("authors", ["Alice", "Bob"], ["Alice"], "ieee_api", "arxiv_api", resolved_by_rule=True)

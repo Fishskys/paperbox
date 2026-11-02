@@ -241,28 +241,23 @@ def get_or_create_author(session: Session, name: str) -> Author:
 
 
 def set_paper_authors(session: Session, paper: Paper, names: Sequence[str]) -> None:
-    """Replace the paper author list (order preserved, duplicates dropped).
+    """Replace one byline, preserving spelling, order and repeated names.
 
     The previous links are removed first: reprocessing a paper (reindex, or a
     re-ingest that reaches the metadata stage twice) would otherwise collide with
-    the ``uq_paper_authors_paper_author`` unique constraint on insert.
+    the unique per-paper author positions on insert.
     """
     session.query(PaperAuthor).filter(PaperAuthor.paper_id == paper.id).delete(
         synchronize_session=False
     )
     session.flush()
 
-    seen: set[str] = set()
     links: list[PaperAuthor] = []
     order = 0
     for raw_name in names:
         name = (raw_name or "").strip()
         if not name:
             continue
-        normalized = normalize_text(name) or name.casefold()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
         author = get_or_create_author(session, name)
         links.append(
             PaperAuthor(
@@ -270,6 +265,7 @@ def set_paper_authors(session: Session, paper: Paper, names: Sequence[str]) -> N
                 paper_id=paper.id,
                 author_id=author.id,
                 author_order=order,
+                display_name=name,
             )
         )
         order += 1
@@ -283,7 +279,7 @@ def set_paper_authors(session: Session, paper: Paper, names: Sequence[str]) -> N
 def paper_author_names(paper: Paper) -> list[str]:
     """Author names ordered by ``paper_authors.author_order``."""
     links = sorted(paper.paper_authors, key=lambda link: link.author_order)
-    return [link.author.name for link in links if link.author is not None]
+    return [link.display_name or link.author.name for link in links if link.author is not None]
 
 
 # --------------------------------------------------------------------------- #

@@ -43,9 +43,6 @@ def apply_review(session: Session, decisions: list[dict[str, Any]], *, apply: bo
         if field == "authors":
             if not isinstance(value, list) or not value or any(not isinstance(n, str) or not n.strip() for n in value):
                 raise ValueError("authors must be a nonempty list of names")
-            normalized = [paper_service.normalize_text(n) for n in value]
-            if len(set(normalized)) != len(normalized):
-                raise ValueError("duplicate authors in reviewed result")
             if not decision.get("evidence"):
                 raise ValueError("author corrections require PDF evidence")
         elif not isinstance(value, str) or not value.strip():

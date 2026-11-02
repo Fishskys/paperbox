@@ -21,7 +21,7 @@
 6. 作者只记名字即可；IEEE `article_number` 要存但归入标识符表。
 
 **元数据后端约束**：不引入 Redis/Celery；API 应用 `--workers 1`，通过既有接口供独立 WebUI 和 Agent 使用；
-不改动 `paper_chunks`/`ingestion_jobs`/`search_queries`/`authors` 的表结构；零新增 Python 运行依赖。
+不改动 `paper_chunks`/`ingestion_jobs`/`search_queries`/`authors` 的表结构；作者关联保存逐篇拼写与顺序，自动质量审计和同步任务使用独立表；零新增 Python 运行依赖。
 
 ---
 
@@ -136,11 +136,11 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 | kind 取值 | `original` / `arxiv_pdf` / `published_pdf` / `supplement` |
 | 约束 | `UNIQUE(paper_id) WHERE is_primary AND deleted_at IS NULL` |
 
-### 3.7 `papers_tags`（改造）与 `authors`（不动）
+### 3.7 标签与作者
 
 - `papers_tags` 加 `kind ∈ {ieee_terms, author_terms, dynamic_index_terms, source_tag}`：
   IEEE 的三类索引词（官方主题词 / 作者关键词 / 系统扩展词）得以区分与过滤；将来 arXiv categories 或自定义标签共用同一结构。
-- `authors` / `paper_authors` **表结构不动**：只写 `name` / `normalized_name` / `author_order`；
+- `authors` 复用归一化字典；`paper_authors` 写 `display_name` 保存每篇实际拼写和 `author_order` 保序，同名作者不按字典 ID 去重；
   `orcid` / `affiliation` 保留空列**不填**（IEEE 的作者 ID 与机构只留在 `paper_sources.raw`）。
 
 ---
@@ -217,10 +217,10 @@ papers（论文实体）──1:N── paper_sources（来源记录）──1:N
 
 1. `manual`：人工值可强制覆盖。
 2. 外部书目：`ieee_api` / `arxiv_api` / `crossref` / `import_file`。精确匹配后可覆盖 PDF 内嵌和弱抽取字段。
-3. `pdf_embedded`：可覆盖首页启发式与文件名值，不能覆盖外部书目元数据。
+3. `pdf_embedded`：通用字段可覆盖弱来源，作者/摘要先执行 PDF 质量策略；不能覆盖外部书目元数据。
 4. 弱来源：`pdf_heuristic` / `filename`，只填空，互相矛盾时保留现值。
 
-同级来源实质分歧不静默覆盖：保留现值并记录历史声明，供复核和回滚。`abstract` 取最长、`authors` 取最多仅在同一非弱级别内生效；`year` 同级冲突保留现值。标题使用独立阶梯，把 `pdf_embedded` 与 `pdf_heuristic` 视为同级，避免运行页眉覆盖正确标题。级别更低的输入登记为 `archived`，不计入导入冲突；仅格式不同的输入为 `unchanged`，原始来源仍保留。
+同级来源实质分歧保留复核；不按摘要长度或作者数量选值。PDF 作者/摘要通过共享有效性与正文印证策略决定拒绝、采纳或复核，不能仅凭 PDF 来源级别覆盖。人工决定、结构化来源保护、自动审计和可重试索引同步以[元数据层](08-metadata.md#43-合并规则-r2现状)为准。标题仍把两个 PDF 来源视为同级；其他低级别输入登记为 `archived`，格式等价为 `unchanged`。
 
 覆盖是字段级替换：标量写回 `papers`；authors 重建顺序；identifier 替换同 scheme 并同步镜像列和指纹；`tag:<kind>` 只替换该 kind 的链接，不与旧值并存，也不影响其他 tag kind。被替换声明仍保留为 `is_current=false`，因此所有自动覆盖都可追溯、可回滚。
 

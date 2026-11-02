@@ -68,6 +68,8 @@ class PaperMetadataOut(BaseModel):
     sources: list[SourceOut] = Field(default_factory=list)
     identifiers: list[IdentifierOut] = Field(default_factory=list)
     tags: dict[str, list[str]] = Field(default_factory=dict)
+    quality_decisions: list[dict[str, Any]] = Field(default_factory=list)
+    index_sync: dict[str, Any] = Field(default_factory=dict)
 
 
 class MetadataPatch(BaseModel):
@@ -319,6 +321,8 @@ class ReextractOut(BaseModel):
     added_fields: dict[str, int] = Field(default_factory=dict)
     added_identifiers: dict[str, int] = Field(default_factory=dict)
     index_documents: int = 0
+    index_pending: int = 0
+    quality_counts: dict[str, int] = Field(default_factory=dict)
     changes: list[ReextractChangeOut] = Field(default_factory=list)
     errors: list[dict[str, str]] = Field(default_factory=list)
     note: str = ""

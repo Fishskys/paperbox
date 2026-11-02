@@ -2,17 +2,16 @@
 
 The rules, in order:
 
-1. **Fill blanks.** Every non-empty source may fill an empty field.
+1. **Validate PDF fields.** Invalid author/abstract candidates are archived.
+   Uncertain body bylines stay reviewable, even when the current field is blank.
 2. **Authority tiers.** Manual edits are unrestricted. A matched external
    bibliographic record (IEEE/arXiv/Crossref/import file) may correct PDF embedded
    metadata; PDF embedded metadata may correct page heuristics and file names.
-   Lower-authority sources never replace higher-authority values.
+   PDF author/abstract corroboration may override the relative PDF tiers.
 3. **Equal-tier disagreements stay visible.** IEEE vs. arXiv, for example, keeps
    the current value and records the other claim for review.
-4. **Field specifics.** ``abstract`` keeps the longest text (sources truncate
-   differently), ``authors`` keeps the longest list, ``year`` keeps the current
-   value on a conflict. These tie-breaks apply only within one non-weak authority
-   tier; a lower-authority source cannot win merely by being longer.
+4. **Field specifics.** Use corroborated PDF evidence, explicit abstract
+   truncation, and stable author order, never author counts or raw text length.
 5. Nothing is ever deleted: the loser is a row in ``paper_field_provenance`` with
    ``is_current=false``, so anything can be rolled back.
 """
@@ -23,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -222,6 +222,7 @@ def decide(
     value: Any,
     *,
     source_type: str | None,
+    evidence: dict | None = None,
 ) -> MergeDecision:
     """Compute the merge outcome for one field without touching any row."""
     incoming_type = (source_type or "").strip().lower() or None
@@ -242,6 +243,27 @@ def decide(
         # None even though the claim exists. Fall back to the claim's own value so
         # an existing identifier is not re-claimed as "blank" on every import.
         current_value = current_claim.value
+    if not _is_blank(current_value) and policy.equivalent_values(field_name, current_value, value):
+        return MergeDecision(field_name, ACTION_UNCHANGED, current_value, reason="same value", source_type=incoming_type)
+    existing_type = current_source_type(session, paper, field_name)
+    adjudicated = next((row for row in session.scalars(select(prov.PaperFieldProvenance).where(
+        prov.PaperFieldProvenance.paper_id == paper.id, prov.PaperFieldProvenance.field == field_name,
+        prov.PaperFieldProvenance.is_current.is_(False))) if prov._same_value(row.value, value)
+        and (row.decision_at is not None or row.decided_by == prov.DECIDED_DISMISSED)), None)
+    if incoming_type not in UNRESTRICTED_SOURCE_TYPES and adjudicated is not None:
+        return MergeDecision(field_name, ACTION_ARCHIVED, current_value, value, "preserve prior human adjudication", incoming_type)
+    if incoming_type not in UNRESTRICTED_SOURCE_TYPES and current_claim is not None and (
+            current_claim.decision_at is not None or current_claim.decided_by == prov.DECIDED_MANUAL):
+        if not policy.equivalent_values(field_name, current_value, value):
+            return MergeDecision(field_name, ACTION_ARCHIVED, current_value, value, "preserve human decision", incoming_type)
+    choice = policy.pdf_choice(field_name, current_value, value, existing_type, incoming_type,
+                               title=paper.title, evidence=evidence)
+    if choice is not None and not policy.equivalent_values(field_name, current_value, value):
+        winner, reason = choice
+        action = {"reject": ACTION_ARCHIVED, "current": ACTION_ARCHIVED, "review": ACTION_CONFLICT,
+                  "incoming": ACTION_FILLED if _is_blank(current_value) else ACTION_OVERRIDDEN}[winner]
+        return MergeDecision(field_name, action, value if winner == "incoming" else current_value,
+                             current_value if winner == "incoming" else value, reason, incoming_type)
     if _is_blank(current_value):
         return MergeDecision(
             field=field_name,
@@ -274,7 +296,6 @@ def decide(
             source_type=incoming_type,
         )
 
-    existing_type = current_source_type(session, paper, field_name)
     if incoming_type in UNRESTRICTED_SOURCE_TYPES:
         return MergeDecision(
             field=field_name,
@@ -367,7 +388,7 @@ def decide(
             action=ACTION_SPECIAL,
             kept=value,
             rejected=current_value,
-            reason=f"{field_name}: the longer/more complete value wins",
+            reason=f"{field_name}: explicit truncation completed",
             source_type=incoming_type,
         )
     return MergeDecision(
@@ -426,7 +447,7 @@ def apply_decision(
 
     # Keep the current value and archive the other claim. Only unresolved
     # disagreements (ACTION_CONFLICT) enter the import report's conflicts.
-    prov.record_claim(
+    claim = prov.record_claim(
         session,
         paper_id=paper.id,
         field=decision.field,
@@ -435,6 +456,12 @@ def apply_decision(
         confidence=confidence,
         make_current=False,
     )
+    if (claim is not None and not claim.is_current and decision.action == ACTION_ARCHIVED and decision.source_type in policy.PDF_SOURCES
+            and decision.field in ("abstract", "authors") and claim.decision_at is None):
+        claim.decided_by = prov.DECIDED_QUALITY_REJECTED
+    elif (claim is not None and decision.action == ACTION_CONFLICT
+          and claim.decided_by == prov.DECIDED_QUALITY_REJECTED and claim.decision_at is None):
+        claim.decided_by = prov.DECIDED_INITIAL
     return decision
 
 
@@ -447,6 +474,7 @@ def merge_values(
     source_id: str | None = None,
     confidence: float | None = None,
     dry_run: bool = False,
+    evidence: dict | None = None,
 ) -> MergeReport:
     """Merge a mapping of ``field -> value`` into a paper (rule R2).
 
@@ -454,11 +482,25 @@ def merge_values(
     importer's default ``dry_run`` reports are built from.
     """
     report = MergeReport()
+    if evidence is None and source_id:
+        source = session.get(PaperSource, source_id)
+        evidence = (source.raw or {}).get("quality") if source else None
     for field_name, value in values.items():
-        decision = decide(session, paper, field_name, value, source_type=source_type)
+        original = value
+        if source_type in policy.PDF_SOURCES and field_name == "authors":
+            from app.parsing.metadata_fields import parse_authors
+            value = parse_authors(value) or value
+        context = evidence or {}
+        decision = decide(session, paper, field_name, value, source_type=source_type, evidence=context)
         report.decisions.append(decision)
         if dry_run or decision.action == ACTION_UNCHANGED:
             continue
+        previous = prov.current_claim(session, paper.id, field_name)
+        before = prov.read_field(paper, field_name)
+        previous_id = previous.id if previous else None
+        previous_source = previous.source_id if previous else None
+        previous_decider = previous.decided_by if previous else None
+        previous_human = previous.decision_at if previous else None
         apply_decision(
             session,
             paper,
@@ -467,6 +509,18 @@ def merge_values(
             source_id=source_id,
             confidence=confidence,
         )
+        if source_type in policy.PDF_SOURCES and field_name in ("abstract", "authors"):
+            from app.services import metadata_quality
+            from app.parsing.metadata_fields import abstract_problem, authors_problem
+            problem = abstract_problem(value) if field_name == "abstract" else authors_problem(value, title=paper.title)
+            metadata_quality.record(session, paper.id, field_name, {
+                "action": decision.action, "reason": decision.reason, "before": before,
+                "scope": "candidate" if decision.action == ACTION_ARCHIVED and decision.reason == problem else "comparison",
+                "candidate": original, "selected": prov.read_field(paper, field_name),
+                "previous_claim_id": previous_id, "previous_source_id": previous_source,
+                "previous_decided_by": previous_decider, "previous_human_decision_at": previous_human.isoformat() if previous_human else None,
+                "source_id": source_id, "evidence": context,
+            })
     session.flush()
     return report
 

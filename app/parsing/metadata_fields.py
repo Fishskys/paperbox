@@ -8,7 +8,7 @@ import re
 import unicodedata
 
 _ROLE = re.compile(r"\b(?:(?:graduate\s+student|senior|life|student)\s+)?(?:member|fellow)(?:\s*,?\s*IEEE)?\b", re.I)
-_ORGANIZATION = re.compile(r"\b(?:universit\w*|institut\w*|department|school|college|laborator\w*|labs?|research|corp(?:oration)?|inc|llc|ltd|company|IEEE)\b", re.I)
+_ORGANIZATION = re.compile(r"\b(?:universit\w*|institut\w*|department|school|college|laborator\w*|labs?|research|corp(?:oration)?|inc|llc|ltd|company|technologies|professor|scientist|IEEE)\b", re.I)
 _PUBLICATION = re.compile(r"^.+;\s*(?:19|20)\d{2}\s*;[^;]*;[^;]*(?:;.*)?$", re.S)
 _TEMPLATE = re.compile(r"^(?:instructions? for (?:paper|authors?)|paper preparation|session\b|PRIME \d{4} proceedings|(?:NSS-MIC|PPC) \d{4} (?:paper|manuscript)\b|https?://\S+$|www\.\S+$)", re.I)
 
@@ -36,6 +36,7 @@ def abstract_problem(value: object) -> str | None:
 
 def clean_author(value: str) -> str:
     value = unicodedata.normalize("NFKC", html.unescape(value))
+    value = re.sub(r"\s+([\u0301\u0308\u030c])([^\W\d_])", lambda m: unicodedata.normalize("NFC", m[2] + m[1]), value)
     value = re.sub(r"^(?:Dr|Prof|Mr|Mrs|Ms)\.\s*", "", value)
     value = _ROLE.sub("", value)
     value = re.sub(r"[0-9*\u2020\u2021\u00a7\u00b6\u2217#]+", "", value)
@@ -69,6 +70,8 @@ def author_problem(name: str, *, title: str | None = None) -> str | None:
         return "author_contact"
     if _ROLE.search(name) or _ORGANIZATION.search(name):
         return "author_affiliation_or_role"
+    if re.search(r"\b(?:for|using|based|platform|converters?|circuits?|digital|analog|ADC|TDC)\b", name, re.I):
+        return "author_title_or_prose"
     if re.search(r"[<>#=\\]|\ufffd", name):
         return "damaged_author"
     words = re.findall(r"[^\W\d_]+", text_key(name))

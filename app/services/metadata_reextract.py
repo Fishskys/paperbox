@@ -10,23 +10,23 @@ This is the same three-layer discovery the ingest pipeline runs
 
 all run **exactly one** implementation, never two that can drift.
 
-The merge goes through ``metadata_merge.merge_values`` (rule R2: fill a blank,
-never overwrite an existing or manual value), so re-running over the whole
-library can only *add* absent identifiers/fields -- it never rewrites what is
-already there. The chunk text, the embeddings and the stored PDF are not
-touched: this is a metadata refresh, not a reindex.
+The shared merge policy protects human decisions and structured sources while
+allowing corroborated PDF corrections. Chunk text, embeddings and stored PDFs
+are untouched; changed metadata is synchronized through a transactional outbox.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.models import Paper
 from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata
-from app.parsing.metadata_fields import abstract_problem, corroborates
+from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
 from app.services import metadata_identifiers, metadata_merge, metadata_sources
 from app.services import metadata_service, paper_service, provenance_service
 
@@ -68,6 +68,7 @@ class ReextractResult:
     paper_id: str
     filename: str | None = None
     changes: list[FieldChange] = field(default_factory=list)
+    quality_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def changed(self) -> bool:
@@ -116,18 +117,21 @@ def reextract_paper_metadata(
     does not need it, so it avoids a redundant read-only merge pass). The caller
     owns the transaction; apply mode flushes but never commits.
     """
+    if dry_run:
+        from app.services import metadata_quality
+        token = metadata_quality.preview_mode.set(True)
+        savepoint = session.begin_nested()
+        try:
+            return reextract_paper_metadata(session, paper, pages=pages, pdf_bytes=pdf_bytes, filename=filename,
+                collect_changes=collect_changes, importer=importer)
+        finally:
+            savepoint.rollback()
+            metadata_quality.preview_mode.reset(token)
     result = ReextractResult(paper_id=paper.id, filename=filename)
 
-    embedded = (
-        extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={})
-    )
-    heuristics = metadata_service.extract_metadata(pages, url=paper.url, pdf_bytes=pdf_bytes) if pages is not None else None
-    if (not embedded.abstract and embedded.subject and not abstract_problem(embedded.subject)
-            and heuristics and heuristics.get("quality", {}).get("text_state") == "ok"
-            and corroborates(embedded.subject, str(heuristics.get("abstract") or ""))):
-        embedded.abstract = embedded.subject
-        embedded.field_origins = {**(embedded.field_origins or {}), "abstract": "info:Subject+body:abstract"}
-        embedded.raw = {**(embedded.raw or {}), "field_origins": embedded.field_origins}
+    embedded, heuristics, context = pdf_candidates(pages, pdf_bytes=pdf_bytes, title=paper.title, url=paper.url)
+    if context.get("subject_status"):
+        result.quality_counts[f"ignored_subject:{context['subject_status']['reason']}"] = 1
     _merge_layer(
         session,
         paper,
@@ -151,7 +155,7 @@ def reextract_paper_metadata(
             metadata_service.heuristic_claim_values(heuristics),
             source_type=metadata_sources.SOURCE_TYPE_PDF_HEURISTIC,
             source_ref=metadata_sources.paper_heuristic_ref(paper.id),
-            raw=dict(heuristics),
+            raw={**dict(heuristics), "quality": context},
             match_method="heuristic",
             confidence=0.5,
             dry_run=dry_run,
@@ -186,7 +190,36 @@ def reextract_paper_metadata(
     if not dry_run:
         metadata_identifiers.mirror_legacy_columns(session, paper)
         session.flush()
+    from app.services import metadata_quality
+    if not metadata_quality.preview_mode.get():
+        logger.info("PDF metadata quality summary", extra={"extra_fields": {"paper_id": paper.id,
+            "rule_version": metadata_merge.policy.QUALITY_VERSION, "quality_counts": result.quality_counts}})
     return result
+
+
+def pdf_candidates(pages, *, pdf_bytes: bytes | None, title: str | None = None,
+                   url: str | None = None) -> tuple[EmbeddedMetadata, dict | None, dict]:
+    """Extract candidates and evidence without database or index writes."""
+    embedded = extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={})
+    subject_reason = (abstract_problem(embedded.subject) or "uncorroborated_subject") if embedded.subject else None
+    heuristics = metadata_service.extract_metadata(pages, url=url, pdf_bytes=pdf_bytes) if pages is not None else None
+    if (not embedded.abstract and embedded.subject and not abstract_problem(embedded.subject)
+            and heuristics and heuristics.get("quality", {}).get("text_state") == "ok"
+            and corroborates(embedded.subject, str(heuristics.get("abstract") or ""))):
+        embedded.abstract = embedded.subject
+        embedded.field_origins = {**(embedded.field_origins or {}), "abstract": "info:Subject+body:abstract"}
+        embedded.raw = {**(embedded.raw or {}), "field_origins": embedded.field_origins}
+        subject_reason = None
+    context = {**((heuristics or {}).get("quality") or {}), "abstract": (heuristics or {}).get("abstract"),
+               "field_origins": embedded.field_origins or {}, "rule_version": metadata_merge.policy.QUALITY_VERSION}
+    if (embedded.authors and not authors_problem(embedded.authors, title=title)
+            and context.get("byline") and not metadata_merge.policy.equivalent_values("authors", embedded.authors, context["byline"])):
+        context["byline_complete"] = False
+        context["byline_conflict"] = True
+    if subject_reason:
+        context["subject_status"] = {"action": "ignored", "reason": subject_reason}
+    embedded.raw = {**(embedded.raw or {}), "quality": context}
+    return embedded, heuristics, context
 
 
 def _merge_layer(
@@ -205,31 +238,10 @@ def _merge_layer(
     importer: str,
 ) -> None:
     """Merge one discovery layer, recording (and optionally applying) its changes."""
-    if not values:
-        return
-    if dry_run or collect_changes:
-        for decision in metadata_merge.merge_values(
-            session, paper, values, source_type=source_type, dry_run=True
-        ).decisions:
-            # Only a *winning* action changes the paper. A recorded conflict keeps
-            # the current value, so it is not a change and must not inflate the
-            # report (nor be counted as "this paper changed").
-            if decision.action not in (
-                metadata_merge.ACTION_FILLED,
-                metadata_merge.ACTION_OVERRIDDEN,
-                metadata_merge.ACTION_SPECIAL,
-            ):
-                continue
-            result.changes.append(
-                FieldChange(
-                    field=decision.field,
-                    old=decision.rejected,
-                    new=decision.kept,
-                    action=decision.action,
-                )
-            )
-    if dry_run:
-        return
+    existing = metadata_sources.find_source(session, source_type, source_ref)
+    if existing is not None and existing.raw != raw:
+        digest = hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()[:24]
+        source_ref = f"{source_ref}:{digest}"
     source = metadata_sources.upsert_source(
         session,
         source_type=source_type,
@@ -241,14 +253,28 @@ def _merge_layer(
         match_confidence=confidence,
         importer=importer,
     )
-    metadata_merge.merge_values(
+    report = metadata_merge.merge_values(
         session,
         paper,
         values,
         source_type=source_type,
         source_id=source.id,
         confidence=confidence,
+        evidence=raw.get("quality") or {},
     )
+    for decision in report.decisions:
+        if decision.field in ("authors", "abstract"):
+            key = f"{decision.action}:{decision.reason}"
+            result.quality_counts[key] = result.quality_counts.get(key, 0) + 1
+        if collect_changes and decision in report.applied:
+            result.changes.append(FieldChange(decision.field, decision.rejected, decision.kept, decision.action))
+    if source_type == metadata_sources.SOURCE_TYPE_PDF_HEURISTIC and raw.get("quality", {}).get("needs_review"):
+        from app.services import metadata_quality
+        metadata_quality.record(session, paper.id, "document", {"action": "conflict",
+            "reason": raw["quality"]["text_state"], "before": None, "candidate": None,
+            "selected": None, "source_id": source.id, "evidence": raw["quality"]})
+        key = f"conflict:{raw['quality']['text_state']}"
+        result.quality_counts[key] = result.quality_counts.get(key, 0) + 1
 
 
 __all__ = [
@@ -278,6 +304,8 @@ class ReextractSummary:
     added_identifiers: dict[str, int] = field(default_factory=dict)
     #: Index documents whose metadata snapshot was rewritten (0 on a dry run).
     index_documents: int = 0
+    index_pending: int = 0
+    quality_counts: dict[str, int] = field(default_factory=dict)
     #: Per-paper detail, only when ``detail=True``.
     details: list[ReextractResult] = field(default_factory=list)
     #: Paper ids that errored (with the message), for the operator to inspect.
@@ -305,6 +333,8 @@ class ReextractSummary:
             "added_fields": self.added_fields,
             "added_identifiers": self.added_identifiers,
             "index_documents": self.index_documents,
+            "index_pending": self.index_pending,
+            "quality_counts": self.quality_counts,
             "changes": changes,
             "errors": self.errors,
             "note": note,
@@ -329,36 +359,18 @@ def select_live_papers(
     return list(session.execute(statement).scalars().all())
 
 
-def _chunk_ids(session: Session, paper_id: str) -> list[str]:
-    from sqlalchemy import select
-
-    from app.db.models import PaperChunk
-
-    return [
-        str(row[0])
-        for row in session.execute(
-            select(PaperChunk.id).where(PaperChunk.paper_id == paper_id)
-        ).all()
-    ]
-
-
 def _refresh_index_for(session: Session, paper: Paper) -> int:
     """Rewrite the metadata snapshot of one paper's indexed chunks (seconds)."""
-    from app.search import opensearch, snapshot
+    from app.services import metadata_index_sync
 
-    chunk_ids = _chunk_ids(session, paper.id)
-    if not chunk_ids:
-        return 0
-    doc = snapshot.paper_metadata_snapshot(paper)
-    report = opensearch.bulk_update_documents(
-        [{"chunk_id": cid, "doc": doc} for cid in chunk_ids]
-    )
-    return int(report.get("updated", 0))
+    return metadata_index_sync.flush_pending(session, paper_id=paper.id)["updated"]
 
 
 def _accumulate(summary: ReextractSummary, result: ReextractResult) -> None:
     """Fold one paper's result into a run summary."""
     summary.papers += 1
+    for key, count in result.quality_counts.items():
+        summary.quality_counts[key] = summary.quality_counts.get(key, 0) + count
     if not result.changed:
         return
     summary.changed_papers += 1
@@ -416,8 +428,10 @@ def reextract_one(
 
     if apply:
         session.commit()
-        if refresh_index and result.changed:
+        if refresh_index:
             summary.index_documents += _refresh_index_for(session, paper)
+        from app.db.models import MetadataIndexUpdate
+        summary.index_pending = int(session.get(MetadataIndexUpdate, paper.id) is not None)
     else:
         session.rollback()  # discard the read-only probe's flushes
     return summary
@@ -472,6 +486,9 @@ def reextract_library(
         combined.changed_papers += one.changed_papers
         combined.skipped_no_file += one.skipped_no_file
         combined.index_documents += one.index_documents
+        combined.index_pending += one.index_pending
+        for key, count in one.quality_counts.items():
+            combined.quality_counts[key] = combined.quality_counts.get(key, 0) + count
         combined.details.extend(one.details)
         for source_map, dest in (
             (one.added_fields, combined.added_fields),

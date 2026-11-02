@@ -34,6 +34,8 @@ export type Paper = {
 export type PaperMetadata = {
   paper_id: string;
   values: Record<string, unknown>;
+  quality_decisions?: { id: string; field: string; rule_version: string; action: string; reason: string; created_at: string; before?: unknown; candidate?: unknown; selected?: unknown; evidence?: Record<string, unknown> }[];
+  index_sync?: { pending: boolean; attempts: number; last_error?: string | null };
   sources: { source_id: string; source_type: string; source_ref: string }[];
   provenance: Record<
     string,
@@ -57,6 +59,8 @@ export type ReextractReport = {
   errors: { paper_id: string; error: string; message?: string }[];
   note: string;
   index_documents: number;
+  index_pending?: number;
+  quality_counts?: Record<string, number>;
 };
 export type PaperList = {
   facets?: Record<string, { key: string; count: number }[]> | null;

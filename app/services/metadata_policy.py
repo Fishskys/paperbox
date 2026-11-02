@@ -9,6 +9,54 @@ import unicodedata
 
 from app.services import metadata_identifiers as identifiers
 from app.services import metadata_sources as sources
+from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
+
+QUALITY_VERSION = "pdf-fields-v1"
+PDF_SOURCES = (sources.SOURCE_TYPE_PDF_EMBEDDED, sources.SOURCE_TYPE_PDF_HEURISTIC)
+
+
+def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None, incoming_source: str | None,
+               *, title: str | None = None, evidence: dict | None = None) -> tuple[str, str] | None:
+    """Choose only from semantic validity or corroboration, never raw length."""
+    if field not in ("abstract", "authors") or incoming_source not in PDF_SOURCES:
+        return None
+    evidence = evidence or {}
+    problem = abstract_problem if field == "abstract" else lambda v: authors_problem(v, title=title)
+    incoming_problem = problem(incoming)
+    if incoming_problem:
+        return "reject", incoming_problem
+    if current not in (None, "", [], {}) and kept_source not in PDF_SOURCES:
+        return None  # Bibliographic sources and manual edits retain their authority.
+    if (field == "authors" and incoming_source == sources.SOURCE_TYPE_PDF_HEURISTIC
+            and evidence and not evidence.get("byline_complete")):
+        return "review", "unverified_byline_boundary"
+    if current in (None, "", [], {}):
+        return "incoming", "valid_blank_fill"
+    if evidence.get("text_state", "ok") != "ok":
+        return "review", "unreliable_text_layer"
+    if field == "authors":
+        byline = evidence.get("byline") or []
+        if evidence.get("byline_complete") and byline and not authors_problem(byline, title=title):
+            matches = lambda names: equivalent_values("authors", names, byline)
+            if matches(incoming) and not matches(current):
+                if (not problem(current) and len(current) > len(byline)
+                        and all(any(equivalent_values("authors", [name], [other]) for other in current) for name in byline)):
+                    return "review", "possibly_incomplete_byline"
+                return "incoming", "corroborated_complete_byline"
+            if matches(current):
+                return "current", "preserve_corroborated_byline"
+        return "review", "unverified_author_difference"
+    body = evidence.get("abstract")
+    if body and not abstract_problem(body):
+        current_matches = corroborates(str(current), str(body))
+        incoming_matches = corroborates(str(incoming), str(body))
+        if incoming_matches and not current_matches:
+            return "incoming", "corroborated_body_abstract"
+        if current_matches and not incoming_matches:
+            return "current", "preserve_body_abstract"
+    if problem(current):
+        return "incoming", "valid_abstract_replaces_invalid"
+    return "review", "different_valid_abstracts"
 
 SOURCE_AUTHORITY = {
     sources.SOURCE_TYPE_MANUAL: 3,
@@ -65,16 +113,20 @@ def equivalent_values(field: str, left: Any, right: Any) -> bool:
 
 def prefers_incoming(field: str, current: Any, incoming: Any) -> bool:
     if field == "abstract":
-        return len(str(incoming)) > len(str(current))
-    if field == "authors":
-        return isinstance(current, (list, tuple)) and isinstance(incoming, (list, tuple)) and len(incoming) > len(current)
+        prefix = str(current).rstrip()
+        if prefix.endswith(("...", "…")):
+            prefix = prefix.rstrip(".…").rstrip()
+            return bool(prefix) and str(incoming).startswith(prefix) and len(str(incoming)) > len(str(current))
     return False
 
 
-def needs_review(field: str, kept: Any, rejected: Any, kept_source: str | None, rejected_source: str | None, *, resolved_by_rule: bool = False) -> bool:
-    if (rejected_source or "").strip().lower() in HISTORY_ONLY_SOURCES:
-        return False
+def needs_review(field: str, kept: Any, rejected: Any, kept_source: str | None, rejected_source: str | None, *, resolved_by_rule: bool = False, evidence: dict | None = None, title: str | None = None) -> bool:
     if equivalent_values(field, kept, rejected):
+        return False
+    choice = pdf_choice(field, kept, rejected, kept_source, rejected_source, title=title, evidence=evidence)
+    if choice is not None:
+        return choice[0] in ("review", "incoming")
+    if (rejected_source or "").strip().lower() in HISTORY_ONLY_SOURCES:
         return False
     kept_rank = field_authority(field, kept_source)
     rejected_rank = field_authority(field, rejected_source)

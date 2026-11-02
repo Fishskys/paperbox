@@ -38,6 +38,28 @@ def test_unsafe_document_text_does_not_receive_normal_quality():
     assert document_state("Text", [{"bbox": [0, 0, 10, 10], "text": "Alice"}, {"bbox": [0, 0, 10, 10], "text": "Bob"}]) == "overlapping_text"
 
 
+def test_byline_stops_at_affiliation_before_name_shaped_locations():
+    from app.services.pdf_byline import extract_byline
+
+    def line(text, y, size=12):
+        return {"text": text, "bbox": [20, y, 400, y + 10], "dir": [1, 0], "size": size}
+    page = {"height": 800, "lines": [line("A Compact Time Converter", 20, 20),
+        line("Alice Smith and Bob Jones", 60), line("Department of Electronics", 80),
+        line("Beijing, China", 100), line("Abstract", 120)]}
+    assert extract_byline(page) == ["Alice Smith", "Bob Jones"]
+
+
+def test_conflicting_valid_embedded_and_body_lists_require_review(monkeypatch):
+    from app.parsing.pdf import EmbeddedMetadata
+    from app.services import metadata_reextract as reextract, metadata_service
+
+    monkeypatch.setattr(reextract, "extract_embedded_metadata", lambda _: EmbeddedMetadata(authors=["Alice Smith", "Bob Jones"], raw={}))
+    monkeypatch.setattr(metadata_service, "extract_metadata", lambda *a, **k: {"authors": ["Alice Smith"],
+        "quality": {"text_state": "ok", "byline": ["Alice Smith"], "byline_complete": True}})
+    _, _, evidence = reextract.pdf_candidates([], pdf_bytes=b"fixture")
+    assert evidence["byline_conflict"] is True and evidence["byline_complete"] is False
+
+
 @pytest.mark.parametrize("subject,expected", [("A compact TDC.", "A compact TDC."), ("IEEE Journal;2024;1;2;10.1234/example", None), ("An unrelated abstract.", None)])
 def test_subject_requires_validity_and_body_corroboration(db_session, monkeypatch, subject, expected):
     from app.db.models import Paper, PaperSource, new_uuid

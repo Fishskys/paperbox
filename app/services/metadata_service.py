@@ -276,11 +276,7 @@ def detect_authors(pages: Sequence[PageText], title: str | None = None) -> list[
         if _is_title_fragment(stripped, title_words):
             continue
         names = _names_from_line(stripped)
-        for name in names:
-            key = name.casefold()
-            if key not in seen:
-                seen.add(key)
-                authors.append(name)
+        authors.extend(names)
         if len(authors) >= 20:
             break
     return authors
@@ -362,7 +358,7 @@ def _plausible_author(name: str) -> bool:
             continue
         # ``str.isupper()`` 而不是 ``_CAPITALISED_WORD``：后者的大写区间只到拉丁-1
         # （U+00DE），会把 "Łukasz Kaiser" 这种名字判成不合法（真机误伤过）。
-        if not core[0].isupper():
+        if not core[0].isupper() and core[0].isascii():
             return False
     return all(re.search(r"[A-Za-z\u4e00-\u9fff]", word) for word in words)
 
@@ -479,6 +475,7 @@ def extract_metadata(
     result["authors"] = authors
     result["quality"] = {"text_state": state, "byline": authors,
                          "byline_origin": "body:geometry" if byline is not None else "body:text",
+                         "byline_complete": bool(byline and state == "ok" and re.search(r"(?im)^\s*abstract\b", ordered[0].text if ordered else "")),
                          "needs_review": state != "ok"}
     arxiv_id = arxiv_id_from_url(url)
     if arxiv_id is None:
