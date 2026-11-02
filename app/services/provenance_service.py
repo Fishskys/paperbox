@@ -715,7 +715,7 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
             current_source.source_type.label("kept_source"),
             current_row.decided_at.label("current_written_at"),
             current_row.decided_by.label("current_decider"),
-            current_source.raw.label("current_raw"), loser_source.raw.label("rejected_raw"), Paper.title.label("paper_title"),
+            current_source.id.label("current_source_id"), Paper.title.label("paper_title"),
         )
         .join(Paper, Paper.id == PaperFieldProvenance.paper_id)
         .outerjoin(current_row, (current_row.paper_id == PaperFieldProvenance.paper_id)
@@ -741,15 +741,27 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
     start, size = max(0, offset), max(1, min(limit, 200))
     seen: set[tuple[str, str]] = set()
     conflicts = []
-    for row in session.execute(statement.execution_options(yield_per=250)).mappings():
-        key = (row["paper_id"], row["field"])
-        resolved = row["current_decider"] == DECIDED_STRUCTURED_OVERRIDE and row["current_written_at"] > row["decided_at"]
-        evidence = (row["current_raw"] or {}).get("quality") or (row["rejected_raw"] or {}).get("quality") or {}
-        if key in seen or not policy.needs_review(row["field"], row["kept"], row["rejected"], row["kept_source"], row["rejected_source"], resolved_by_rule=resolved, evidence=evidence, title=row["paper_title"]):
-            continue
-        seen.add(key)
-        if start < len(seen) <= start + size:
-            conflicts.append({key: value for key, value in row.items() if key not in ("kept_source", "rejected_source", "current_written_at", "current_decider", "current_raw", "rejected_raw", "paper_title")})
+    quality = {}
+    candidates = session.execute(statement.execution_options(yield_per=250)).mappings()
+    for batch in candidates.partitions(250):
+        # Keep TOASTed source snapshots out of the broad joins and sort. Fetch
+        # only quality evidence for surviving PDF candidates, once per source.
+        source_ids = {source_id for row in batch
+                      if row["field"] in (FIELD_AUTHORS, FIELD_ABSTRACT) and row["rejected_source"] in policy.PDF_SOURCES
+                      for source_id in (row["current_source_id"], row["source_id"])
+                      if source_id and source_id not in quality}
+        if source_ids:
+            quality.update(session.execute(select(PaperSource.id, PaperSource.raw["quality"])
+                                           .where(PaperSource.id.in_(source_ids))).all())
+        for row in batch:
+            key = (row["paper_id"], row["field"])
+            resolved = row["current_decider"] == DECIDED_STRUCTURED_OVERRIDE and row["current_written_at"] > row["decided_at"]
+            evidence = quality.get(row["current_source_id"]) or quality.get(row["source_id"]) or {}
+            if key in seen or not policy.needs_review(row["field"], row["kept"], row["rejected"], row["kept_source"], row["rejected_source"], resolved_by_rule=resolved, evidence=evidence, title=row["paper_title"]):
+                continue
+            seen.add(key)
+            if start < len(seen) <= start + size:
+                conflicts.append({key: value for key, value in row.items() if key not in ("kept_source", "rejected_source", "current_written_at", "current_decider", "current_source_id", "paper_title")})
     return conflicts, len(seen)
 
 

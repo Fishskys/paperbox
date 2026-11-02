@@ -1,6 +1,7 @@
 """PDF quality policy is consistent across merge, review, history and index retry."""
 
 from copy import deepcopy
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -126,6 +127,23 @@ def test_changed_rules_can_reopen_machine_rejections_without_overriding_humans(d
     result = merge.merge_values(db_session, paper, {"authors": ["Bob Jones"]}, source_type="pdf_embedded", source_id=source.id)
     assert result.decisions[0].action == merge.ACTION_CONFLICT
     assert prov.conflict_page(db_session)[1] == 1
+
+
+def test_review_keeps_quality_decisions_and_counts_across_candidate_batches(db_session):
+    paper = make_paper(db_session)
+    seed(db_session, paper, "authors", ["Alice Smith"], "pdf_heuristic")
+    verified = make_source(db_session, paper.id, "pdf_embedded")
+    verified.raw = {"quality": context(["Alice Smith"]), "unused_payload": "x" * 10000}
+    db_session.add_all([PaperFieldProvenance(id=new_uuid(), paper_id=paper.id, field="authors",
+        source_id=verified.id, value=["Bob Jones"], is_current=False, decided_by="initial",
+        decided_at=datetime(2027, 1, 1, tzinfo=timezone.utc)) for _ in range(251)])
+    unverified = make_source(db_session, paper.id, "pdf_embedded")
+    candidate = prov.record_claim(db_session, paper_id=paper.id, field="authors",
+                                  value=["Carol White"], source_id=unverified.id)
+    db_session.flush()
+    rows, total = prov.conflict_page(db_session, limit=1)
+    assert total == 1 and rows[0]["provenance_id"] == candidate.id
+    assert "current_source_id" not in rows[0] and "quality" not in rows[0]
 
 
 def indexed(session):
