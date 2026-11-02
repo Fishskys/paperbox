@@ -41,6 +41,8 @@ DECIDED_MANUAL = "manual"
 #: 人工看过一条落败声明并决定维持现值。用 ``decided_by`` 记，不新增列 —— 值/source
 #: 都不动，所以仍然可回滚（规则 5），只是它不再是"待裁决的分歧"（2026-10-10）。
 DECIDED_DISMISSED = "dismissed"
+# Automated quality adjudication is distinct from a human click.
+DECIDED_QUALITY_REJECTED = "quality_rejected"
 
 DECIDED_BY_VALUES: tuple[str, ...] = (
     DECIDED_INITIAL,
@@ -705,7 +707,7 @@ def conflict_page(session: Session, limit: int = 50, offset: int = 0) -> tuple[l
         .where(
             PaperFieldProvenance.is_current.is_(False),
             Paper.deleted_at.is_(None),
-            PaperFieldProvenance.decided_by != DECIDED_DISMISSED,
+            PaperFieldProvenance.decided_by.not_in((DECIDED_DISMISSED, DECIDED_QUALITY_REJECTED)),
             PaperFieldProvenance.decided_by != DECIDED_MANUAL,
             PaperFieldProvenance.decision_at.is_(None),
             current_row.decided_by != DECIDED_MANUAL,

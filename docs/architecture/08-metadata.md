@@ -53,6 +53,25 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ## 2. 设计思路
 
+### PDF 历史冲突质量处理
+
+`scripts/reconcile_pdf_metadata.py` 接受已经对照 PDF 检查过的 JSON 决策数组，默认只验证和预览，传入 `--apply` 才提交。它不是导入流水线的新优先级策略。
+
+每项决策包含 `paper_id`、`field`、`current_id`、`provenance_id`、`kept`、`rejected`、`value`、`reason`；作者处理还必须包含 `evidence`。工具仅接受当前来源为 `pdf_heuristic`、历史来源为 `pdf_embedded` 的作者或摘要差异，拒绝已人工裁决或预览后发生变更的条目。作者字典按归一化姓名复用，展示名可能与历史声明的大小写、标点不同；此时必须在 `materialized_kept` 明确提供已复核的实际展示值。相同字段的相同历史候选可用 `duplicate_provenance_ids` 一并处理，不能夹带不同值或已人工裁决的候选。批次在同一数据库事务内执行，任一验证失败即不提交。
+
+处理保留原始声明及来源，在已匹配的 `paper_sources.raw` 内持久化处理前后值、实际展示前后值、原始声明 ID、原始来源 ID、原决策标记、理由、PDF 证据、规则版本、执行工具和时间。被排除的历史声明记为 `quality_rejected`，不再作为待复核冲突；机器处理不写代表人工点击的 `decision_at`。值发生变化时通过字段服务追加新声明并同步论文表或作者关系，原声明仍可通过回滚接口恢复。
+
+示例：
+
+```bash
+uv run python scripts/reconcile_pdf_metadata.py \
+  --plan logs/eval/pdf-review-plan.json --report logs/eval/pdf-review-preview.json
+uv run python scripts/reconcile_pdf_metadata.py \
+  --plan logs/eval/pdf-review-plan.json --report logs/eval/pdf-review-result.json --apply
+```
+
+数据库提交后，工具只更新受影响论文的 OpenSearch `authors` 关键词，不重算向量、不重写分块正文。数据库与索引并非同一事务：报告先落盘再刷新索引，完全相同的决策重试不重复改库，并可重试索引同步。该工具不改变持续导入时的候选识别、来源优先级或冲突规则。
+
 ### 2.1 当前值与历史声明分离
 
 - **要解决的问题**：多来源会互相覆盖同一个字段，覆盖之后就查不出"这个值是谁写的、之前是什么"。
@@ -137,7 +156,7 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 | `value` | JSONB NOT NULL | 标量或结构化值（venue 是对象、authors 是数组） |
 | `confidence` | FLOAT | 结构化来源 1.0、首页启发式 0.5 |
 | `is_current` | BOOLEAN NOT NULL，默认 `false` | 每个字段只有一条为真 |
-| `decided_by` | VARCHAR(32) NOT NULL，默认 `initial` | `initial` / `structured_override` / `manual`（`provenance_service.py`） |
+| `decided_by` | VARCHAR(32) NOT NULL，默认 `initial` | `initial` / `structured_override` / `manual`；人工保留现值使用 `dismissed`，PDF 质量处理排除的历史候选使用 `quality_rejected`（`provenance_service.py`） |
 | `decided_at` | DATETIME NOT NULL，默认 `now()` | **这条声明写入账本**的时刻（机器语义）；名字是历史遗留，别当裁决时刻用 |
 | `decision_at` | DATETIME NULL | 人类**裁决**这一行的时刻（`dismiss` / `rollback` / 手工 PATCH）；`NULL` = 没有人类碰过（迁移 `a41f7c2d9b30`） |
 | `identifier_id` | UUID，FK→`paper_identifiers.id` | `identifier:<scheme>` 类声明指向具体标识符行 |
