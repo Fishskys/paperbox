@@ -71,6 +71,25 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 `metadata_quality_decisions` 以决策载荷指纹唯一约束实现幂等，保存规则版本、执行者、字段、前值、候选、所选值、原声明、来源、证据和执行时间。候选自身无效的拒绝按候选、来源和证据去重，不因后续正文填空反复记账；依赖现值的比较保留完整上下文。自动处理不写人工 `decision_at`；当前人工值及已人工否决的相同候选跨规则版本受到保护。机器拒绝的候选在新规则需要复核时可重新开放，旧审计仍保留。重复候选复用字段历史，内容或证据变化则保留新的来源快照。`quality_counts` 与结构化日志按动作和原因统计拒绝、自动解决、复核及文字层问题。
 
+### PDF 历史证据补齐
+
+`scripts/reconcile_pdf_quality_history.py` 用于给既有 PDF 作者/摘要差异补齐证据。默认只读捕获当前声明、实际展示值、全部未裁决 PDF 候选和主文件 SHA256，再以受限并发读取前两页文字、首页布局与内嵌字段；提取缓存绑定文件、论文上下文和解析代码指纹。`--candidates` 可指定已有诊断报告中的 `items` 作为范围。
+
+`--apply --plan` 只应用已生成的预览，并重新计算决策。当前值、历史候选、主文件或规则发生变化会拒绝应用，人工结果始终受保护。只有正文证据支持的新值才能替换实际展示值；历史展示值与字段账本不一致时，证据不足便保留展示值并继续复核。
+
+历史作者修复还比较实际展示名单：有效名单出现实质字母、人数变化，或准备新引入末尾引号、姓名中的可疑句点时，不凭正文文字层自动覆盖。`--field authors` / `--field abstract` 可分别预览或应用。验证基准若经渲染 PDF 核实需要修正，`audit_pdf_metadata_quality.py --review-overrides` 接受带原值、校正值、PDF SHA256 和理由的独立记录；报告保留校正依据，不改写原始基准或放宽姓名等价规则。
+
+应用时追加带证据的来源和当前声明，保留原始来源快照及旧声明；同值刷新仅补来源证据，不重写作者关系。确定无效、已被正文排除或格式等价的旧候选标为 `quality_rejected`，其余保持待复核。自动审计记录处理前后值、原声明、逐候选理由和 PDF 校验值，不填写人工裁决时间。相同预览重试不重复应用，实际字段变更沿用事务索引同步队列。
+
+```bash
+uv run python scripts/reconcile_pdf_quality_history.py \
+  --report logs/eval/pdf-history-preview.json
+uv run python scripts/reconcile_pdf_quality_history.py \
+  --apply --plan logs/eval/pdf-history-preview.json --report logs/eval/pdf-history-result.json
+```
+
+预览、缓存及应用报告仅保存在忽略的运行目录。缺失文件、提取失败或失效的预览会明确报告；未成功处理不能作为已解决统计。
+
 ### PDF 历史冲突质量处理
 
 `scripts/reconcile_pdf_metadata.py` 接受已经对照 PDF 检查过的 JSON 决策数组，默认只验证和预览，传入 `--apply` 才提交。它不是导入流水线的新优先级策略。

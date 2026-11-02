@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -24,7 +25,8 @@ if str(ROOT) not in sys.path:
 from sqlalchemy import text  # noqa: E402
 
 from app.db.session import SessionLocal  # noqa: E402
-from app.parsing.pdf import extract_pages  # noqa: E402
+from app.parsing.pdf import PageText, normalize_page_text  # noqa: E402
+from app.parsing.mupdf import invoke  # noqa: E402
 from app.services import metadata_policy as policy, metadata_reextract, object_storage  # noqa: E402
 
 
@@ -63,10 +65,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authors", type=int, default=50)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--review-overrides", type=Path, help="explicit PDF-verified corrections to the reviewed baseline")
     args = parser.parse_args()
     if args.authors < 1:
         parser.error("--authors must be positive")
     rows = []
+    overrides = {}
+    if args.review_overrides:
+        for correction in json.loads(args.review_overrides.read_text(encoding="utf-8")):
+            key = (correction["paper_id"], correction["field"])
+            if key in overrides or key[1] != "authors" or not correction.get("reason") or not correction.get("pdf_sha256"):
+                raise ValueError("invalid or duplicate reviewed baseline correction")
+            overrides[key] = correction
+    used_overrides = []
     with SessionLocal() as session:
         session.execute(text("SET TRANSACTION READ ONLY"))
         cases = session.execute(text("""
@@ -88,18 +99,25 @@ def main() -> int:
                 author_count += 1
                 try:
                     pdf = object_storage.download_bytes(case["object_key"], bucket=case["bucket"])
-                    pages = extract_pages(pdf)
-                    embedded, body, evidence = metadata_reextract.pdf_candidates(pages, pdf_bytes=pdf, title=raw.get("title"))
+                    correction = overrides.get((raw["paper_id"], raw["field"]))
+                    if correction:
+                        if raw["value"] != correction["original_value"] or hashlib.sha256(pdf).hexdigest() != correction["pdf_sha256"]:
+                            raise ValueError("baseline correction is stale or belongs to another PDF")
+                        raw = {**raw, "value": correction["expected_value"]}
+                        used_overrides.append(correction)
+                    bundle = invoke("metadata_bundle", pdf)
+                    pages = [PageText(page=p["page"], text=normalize_page_text(p["text"])) for p in bundle["pages"]]
+                    embedded, body, evidence = metadata_reextract.pdf_candidates(pages, pdf_bytes=pdf, title=raw.get("title"), bundle=bundle)
                     rows.append(replay(raw, [("pdf_embedded", embedded.authors), ("pdf_heuristic", (body or {}).get("authors"))], evidence, case["kept_source"]))
                 except Exception as exc:
                     rows.append({"paper_id": raw["paper_id"], "field": "authors", "status": "error", "error": type(exc).__name__})
         session.rollback()
     counts = dict(Counter(row["status"] for row in rows))
     report = {"rule_version": policy.QUALITY_VERSION, "read_only": True, "counts": counts,
-              "fields": dict(Counter(row["field"] for row in rows)), "cases": rows}
+              "fields": dict(Counter(row["field"] for row in rows)), "baseline_corrections": used_overrides, "cases": rows}
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps({key: value for key, value in report.items() if key != "cases"}, ensure_ascii=False))
+    print(json.dumps({key: value if key != "baseline_corrections" else len(value) for key, value in report.items() if key != "cases"}, ensure_ascii=False))
     return int(not rows or counts.get("error", 0) > 0 or counts.get("incorrect_automatic_change", 0) > 0)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from functools import partial
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -28,12 +29,13 @@ from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.schema import CreateSchema, DropSchema  # noqa: E402
 
-from app.db.models import Base, MetadataIndexUpdate, MetadataQualityDecision, Paper, PaperChunk, PaperSource, new_uuid  # noqa: E402
+from app.db.models import Base, MetadataIndexUpdate, MetadataQualityDecision, Paper, PaperChunk, PaperFile, PaperSource, new_uuid  # noqa: E402
 from app.db.session import get_engine  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.parsing.pdf import extract_pages  # noqa: E402
 from app.search import opensearch  # noqa: E402
 from app.services import metadata_index_sync, metadata_manual, metadata_reextract, paper_service  # noqa: E402
+from app.services import metadata_history, provenance_service  # noqa: E402
 
 
 def run(session: Session, client, index: str) -> dict:
@@ -65,6 +67,22 @@ def run(session: Session, client, index: str) -> dict:
     session.commit()
     assert session.scalar(select(func.count()).select_from(MetadataQualityDecision)) == audits
     assert session.scalar(select(func.count()).select_from(PaperSource)) == sources
+    legacy = PaperSource(id=new_uuid(), paper_id=paper.id, source_type="pdf_embedded",
+                         source_ref=f"acceptance:{new_uuid()}", raw={"authors": ["Alice Acceptance"]}, match_status="matched")
+    session.add(legacy)
+    session.flush()
+    provenance_service.record_claim(session, paper_id=paper.id, field="authors", value=["Alice Acceptance"], source_id=legacy.id)
+    session.add(PaperFile(id=new_uuid(), paper_id=paper.id, kind="original", object_key="acceptance.pdf", bucket="acceptance",
+                         content_type="application/pdf", size_bytes=len(pdf), sha256=hashlib.sha256(pdf).hexdigest(), is_primary=True))
+    session.commit()
+    snapshot = metadata_history.snapshots(session, [{"paper_id": paper.id, "field": "authors"}])[0]
+    evidence = metadata_history.extract(snapshot, download=lambda *a, **k: pdf)
+    decision = metadata_history.plan(snapshot, evidence)
+    assert not decision["changed"] and not decision["pending"]
+    assert metadata_history.apply(session, snapshot, evidence, decision)["status"] == "applied"
+    session.commit()
+    assert provenance_service.conflict_page(session)[1] == 0
+    assert metadata_history.apply(session, snapshot, evidence, decision)["status"] == "already_applied"
     chunk = PaperChunk(id=new_uuid(), paper_id=paper.id, chunk_index=0, text="Preserved text", page_start=1, page_end=1)
     session.add(chunk)
     session.commit()
@@ -85,7 +103,8 @@ def run(session: Session, client, index: str) -> dict:
     assert actual["text"] == original["text"] and actual["embedding"] == original["embedding"]
     assert metadata_manual.metadata_view(session, paper)["index_sync"]["pending"] is False
     return {"dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
-            "manual_protected": True, "repeated_authors": True, "metadata_only_index_sync": True}
+            "manual_protected": True, "repeated_authors": True, "metadata_only_index_sync": True,
+            "historical_evidence": True}
 
 
 def main() -> int:
