@@ -101,7 +101,8 @@ def test_unverified_evidence_does_not_overwrite_materialized_spelling_drift(db_s
     assert prov.read_field(paper, "authors") == ["Tomislav Matić"]
 
 
-@pytest.mark.parametrize("before,after", [(["Y. Arai"], ["Y. Ami"]), (["Kwyro Lee"], ["Kwyro Lee'"])])
+@pytest.mark.parametrize("before,after", [(["Y. Arai"], ["Y. Ami"]), (["Kwyro Lee"], ["Kwyro Lee'"]),
+                                        (["Manho Kim"], ["ManhoKim"])])
 def test_history_does_not_introduce_changed_letters_or_suspect_markers(db_session, before, after):
     paper, _, _, _, snapshot, extracted = fixture(db_session, kept=before, rejected=after)
     decision = history.plan(snapshot, extracted)
@@ -118,6 +119,30 @@ def test_history_archives_word_period_difference_without_introducing_it(db_sessi
     history.apply(db_session, snapshot, extracted, decision)
     assert prov.read_field(paper, "authors") == before
     assert prov.conflict_page(db_session)[1] == 0
+
+
+def test_history_resolves_initials_only_with_complete_byline_and_keeps_spelling(db_session):
+    paper, _, candidate, _, snapshot, extracted = fixture(db_session, kept=["G. Avolio"], rejected=["Giuseppe Avolio"])
+    decision = history.plan(snapshot, extracted)
+    assert not decision["pending"] and not decision["changed"]
+    history.apply(db_session, snapshot, extracted, decision)
+    assert prov.read_field(paper, "authors") == ["G. Avolio"]
+    assert candidate.decided_by == prov.DECIDED_QUALITY_REJECTED
+    assert candidate.value == ["Giuseppe Avolio"] and candidate.decision_at is None
+    assert prov.conflict_page(db_session)[1] == 0
+    assert history.apply(db_session, snapshot, extracted, decision)["status"] == "already_applied"
+
+
+def test_history_archives_heading_even_when_byline_is_unverified(db_session):
+    paper, _, candidate, _, snapshot, extracted = fixture(db_session, kept=["Alice Smith"], rejected=["RANGE SENSORS"])
+    extracted["quality"]["byline_complete"] = False
+    decision = history.plan(snapshot, extracted)
+    assert not decision["pending"] and not decision["changed"]
+    history.apply(db_session, snapshot, extracted, decision)
+    assert prov.read_field(paper, "authors") == ["Alice Smith"]
+    assert candidate.value == ["RANGE SENSORS"] and candidate.decided_by == prov.DECIDED_QUALITY_REJECTED
+    audits = db_session.scalars(select(MetadataQualityDecision)).all()
+    assert audits and audits[0].payload["historical_decisions"][0]["reason"] == "author_title_or_prose"
 
 
 def test_author_edits_enqueue_transactional_metadata_sync(db_session):

@@ -11,7 +11,7 @@ from app.services import metadata_identifiers as identifiers
 from app.services import metadata_sources as sources
 from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
 
-QUALITY_VERSION = "pdf-fields-v2"
+QUALITY_VERSION = "pdf-fields-v3"
 PDF_SOURCES = (sources.SOURCE_TYPE_PDF_EMBEDDED, sources.SOURCE_TYPE_PDF_HEURISTIC)
 
 
@@ -37,6 +37,12 @@ def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None,
     if field == "authors":
         byline = evidence.get("byline") or []
         if evidence.get("byline_complete") and byline and not authors_problem(byline, title=title):
+            if byline_abbreviations(current, incoming):
+                covers = lambda names: (equivalent_values("authors", names, byline)
+                                        or byline_abbreviations(names, byline, expand_only=True))
+                if covers(current) and covers(incoming):
+                    return "current", "corroborated_author_abbreviation"
+                return "review", "unverified_author_expansion"
             matches = lambda names: equivalent_values("authors", names, byline)
             if matches(incoming) and not matches(current):
                 if (not problem(current) and len(current) > len(byline)
@@ -128,6 +134,41 @@ def byline_spelling_variants(left: list[str], right: list[str]) -> bool:
         value = unicodedata.normalize("NFD", html.unescape(name).casefold())
         return "".join(c for c in value if c.isalnum())
     return bool(left) and len(left) == len(right) and all(key(a) == key(b) for a, b in zip(left, right))
+
+
+def byline_abbreviations(left: list[str], right: list[str], *, expand_only: bool = False) -> bool:
+    """Match ordered PDF names to initials; not global equality or identity merging."""
+    if not left or len(left) != len(right):
+        return False
+    expansions: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+    expanded = False
+    for first, second in zip(left, right):
+        parsed = []
+        for name in (first, second):
+            normalized = _canonical("authors", name)
+            words = list(re.finditer(r"[^\W\d_]+(?:'[^\W\d_]+)*", normalized))
+            parsed.append((tuple(word[0] for word in words),
+                           tuple("-" in normalized[x.end():y.start()] for x, y in zip(words, words[1:]))))
+        (a, a_hyphens), (b, b_hyphens) = parsed
+        if a_hyphens != b_hyphens:
+            return False
+        if a == b:
+            if not equivalent_values("authors", [first], [second]):
+                return False
+            continue
+        if len(a) < 2 or len(a) != len(b) or a[-1] != b[-1] or len(a[-1]) < 2:
+            return False
+        for x, y in zip(a[:-1], b[:-1]):
+            if x != y and not (len(x) == 1 and y.startswith(x) or len(y) == 1 and x.startswith(y)):
+                return False
+            if expand_only and len(y) == 1 and len(x) > 1:
+                return False
+        # Repeated initials may stand for different people even in the same paper.
+        for short, full in ((a, b), (b, a)):
+            if any(len(x) == 1 and len(y) > 1 for x, y in zip(short[:-1], full[:-1])):
+                expansions.setdefault(short, set()).add(full)
+        expanded = True
+    return expanded and all(len(names) == 1 for names in expansions.values())
 
 
 def prefers_incoming(field: str, current: Any, incoming: Any) -> bool:

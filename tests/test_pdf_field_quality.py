@@ -32,6 +32,34 @@ def test_byline_accepts_mononyms_nonenglish_and_preserves_order():
     assert author_problem("alice@example.org")
 
 
+@pytest.mark.parametrize("candidate", ["RANGE SENSORS", "INTERNATIONAL TEST", "Politecnico di Milano",
+    "CNRS/Univ. Montpellier", "ST Microelectronics", "via Ferrata", "/glyph /glyph", "/g /g /g",
+    "Received August", "Emails: {alice", "Mehdi Bandali Ph.D", "A PicosecondResolutionTimeDigitizer"])
+def test_non_author_candidates_are_rejected_without_complete_byline(candidate):
+    from app.services import metadata_policy
+
+    title = "A Picosecond Resolution Time Digitizer"
+    assert author_problem(candidate, title=title)
+    assert not metadata_policy.needs_review("authors", ["Alice Smith"], [candidate],
+        "pdf_embedded", "pdf_heuristic", title=title, evidence={"byline_complete": False})
+
+
+@pytest.mark.parametrize("name", ["Alice Smith", "G. Avolio", "王小明", "Tasripan", "MAY LI", "Rosemary O'Keeffe", "Rue Smith"])
+def test_non_author_filters_preserve_person_names(name):
+    assert author_problem(name) is None
+
+
+def test_initials_do_not_invalidate_complete_native_byline(monkeypatch):
+    from app.parsing.pdf import EmbeddedMetadata
+    from app.services import metadata_reextract as reextract, metadata_service
+
+    monkeypatch.setattr(reextract, "extract_embedded_metadata", lambda _: EmbeddedMetadata(authors=["G. Avolio"], raw={}))
+    monkeypatch.setattr(metadata_service, "extract_metadata", lambda *a, **k: {"authors": ["Giuseppe Avolio"],
+        "quality": {"text_state": "ok", "byline": ["Giuseppe Avolio"], "byline_complete": True}})
+    _, _, evidence = reextract.pdf_candidates([], pdf_bytes=b"fixture")
+    assert evidence["byline_complete"] and not evidence.get("byline_conflict")
+
+
 def test_unsafe_document_text_does_not_receive_normal_quality():
     assert document_state("") == "missing_text"
     assert document_state("\ufffd" * 20) == "damaged_text"

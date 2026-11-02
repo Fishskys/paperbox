@@ -65,6 +65,57 @@ def test_full_name_word_periods_do_not_require_pdf_boundary_evidence_or_rewrite_
     assert rejected[0] == "Changqing Feng"
 
 
+@pytest.mark.parametrize("short,full", [
+    (["G. Avolio"], ["Giuseppe Avolio"]),
+    (["P.M. Levine", "G.W. Roberts"], ["Peter M. Levine", "Gordon W. Roberts"]),
+    (["J.-P. Jansson"], ["Jussi-Pekka Jansson"]),
+    (["J. L. Cura"], ["José L. Cura"]),
+])
+def test_pdf_initials_need_complete_same_position_byline(short, full):
+    assert policy.byline_abbreviations(short, full)
+    assert not policy.equivalent_values("authors", short, full)
+    for complete in (False, True):
+        evidence = {"text_state": "ok", "byline": full, "byline_complete": complete}
+        assert policy.needs_review("authors", short, full, "pdf_embedded", "pdf_heuristic",
+                                   evidence=evidence) is (not complete)
+    assert policy.needs_review("authors", short, full, "pdf_embedded", "pdf_heuristic")
+
+
+@pytest.mark.parametrize("left,right", [
+    (["Giovanni Avolio"], ["Giuseppe Avolio"]),
+    (["G. Avolio"], ["Peter Avolio"]),
+    (["G. Avolio"], ["Giuseppe Avorio"]),
+    (["G. Avolio"], ["Giuseppe A. Avolio"]),
+    (["G. Avolio", "P. Smith"], ["Peter Smith", "Giuseppe Avolio"]),
+    (["G. Avolio", "G. Avolio"], ["Giuseppe Avolio"]),
+    (["G. Avolio", "G. Avolio"], ["Giuseppe Avolio", "Giovanni Avolio"]),
+    (["G. Avolio", "Ann-Marie Smith"], ["Giuseppe Avolio", "Ann Marie Smith"]),
+    (["G. Avolio", "Peter Smith'"], ["Giuseppe Avolio", "Peter Smith"]),
+    (["A. Ann-Smith"], ["Alice Ann Smith"]),
+    (["J. Peter-Paul Smith"], ["John Peter Paul Smith"]),
+    (["P. Palojarvi"], ["Pasi Palojärvi"]),
+    (["A"], ["Alice"]),
+])
+def test_pdf_initial_matching_preserves_identity_differences(left, right):
+    assert not policy.byline_abbreviations(left, right)
+
+
+def test_initials_in_the_pdf_cannot_prove_a_proposed_full_name():
+    evidence = {"text_state": "ok", "byline": ["G. Avolio"], "byline_complete": True}
+    assert policy.needs_review("authors", ["G. Avolio"], ["Giuseppe Avolio"],
+        "pdf_embedded", "pdf_heuristic", evidence=evidence)
+    assert policy.needs_review("authors", ["Giovanni Avolio"], ["Giuseppe Avolio"],
+        "pdf_embedded", "pdf_heuristic", evidence=evidence)
+
+
+def test_replacing_invalid_authors_uses_the_actual_full_byline():
+    evidence = {"text_state": "ok", "byline": ["Giuseppe Avolio"], "byline_complete": True}
+    assert policy.pdf_choice("authors", ["RANGE SENSORS"], ["G. Avolio"], "pdf_embedded", "pdf_embedded",
+                             evidence=evidence)[0] == "review"
+    assert policy.pdf_choice("authors", ["RANGE SENSORS"], ["Giuseppe Avolio"], "pdf_embedded", "pdf_heuristic",
+                             evidence=evidence)[0] == "incoming"
+
+
 @pytest.mark.parametrize("complete,expected", [(True, "current"), (False, "review")])
 def test_only_a_bounded_body_abstract_resolves_an_old_prefix(complete, expected):
     full = "This paper presents a converter in 65 nm CMOS. It reduces power."

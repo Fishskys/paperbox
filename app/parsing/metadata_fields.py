@@ -8,7 +8,9 @@ import re
 import unicodedata
 
 _ROLE = re.compile(r"\b(?:(?:graduate\s+student|senior|life|student)\s+)?(?:member|fellow)(?:\s*,?\s*IEEE)?\b", re.I)
-_ORGANIZATION = re.compile(r"\b(?:universit\w*|institut\w*|department|school|college|laborator\w*|labs?|research|corp(?:oration)?|inc|llc|ltd|company|technologies|professor|scientist|IEEE)\b", re.I)
+_ORGANIZATION = re.compile(r"\b(?:universit\w*|institut\w*|univ|department|dept|school|college|laborator\w*|labs?|research|corp(?:oration)?|inc|llc|ltd|company|technologies|professor|scientist|IEEE|dipartimento|politecnico|fondazione|CNRS|KAIST|microelectronics)\b", re.I)
+_AUTHOR_HEADING = re.compile(r"\b(?:sensors?|imagers?|displays?|transmitters?|digitizers?|architecture|engineering|electronics)\b|^international\s+test\b", re.I)
+_AUTHOR_FRONT_MATTER = re.compile(r"\b(?:e-?mails?|copyright|received|revised|accepted|Ph\.?D)\b|(?-i:^(?:via|rue|paseo)\s)", re.I)
 _PUBLICATION = re.compile(r"^.+;\s*(?:19|20)\d{2}\s*;[^;]*;[^;]*(?:;.*)?$", re.S)
 _TEMPLATE = re.compile(r"^(?:instructions? for (?:paper|authors?)|paper preparation|session\b|PRIME \d{4} proceedings|(?:NSS-MIC|PPC) \d{4} (?:paper|manuscript)\b|https?://\S+$|www\.\S+$)", re.I)
 
@@ -70,9 +72,13 @@ def author_problem(name: str, *, title: str | None = None) -> str | None:
         return "author_contact"
     if _ROLE.search(name) or _ORGANIZATION.search(name):
         return "author_affiliation_or_role"
+    if _AUTHOR_FRONT_MATTER.search(name):
+        return "author_front_matter"
+    if _AUTHOR_HEADING.search(name):
+        return "author_title_or_prose"
     if re.search(r"\b(?:for|using|based|platform|converters?|circuits?|digital|analog|ADC|TDC)\b", name, re.I):
         return "author_title_or_prose"
-    if re.search(r"[<>#=\\]|\ufffd", name):
+    if re.search(r"[<>#=\\/{}\[\]!$%]|\ufffd", name):
         return "damaged_author"
     words = re.findall(r"[^\W\d_]+", text_key(name))
     if len(words) == 1 and (len(words[0]) < 2 or not any(c.isupper() or c.isalpha() and not c.isascii() for c in name)):
@@ -80,6 +86,10 @@ def author_problem(name: str, *, title: str | None = None) -> str | None:
     if title:
         title_words = set(re.findall(r"[^\W\d_]+", text_key(title)))
         if len(words) > 1 and set(words) <= title_words:
+            return "author_title_fragment"
+        compact = lambda value: "".join(character for character in text_key(value) if character.isalnum())
+        candidate = compact(name)
+        if len(candidate) >= 12 and candidate in compact(title):
             return "author_title_fragment"
     return None
 

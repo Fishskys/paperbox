@@ -215,7 +215,9 @@ def pdf_candidates(pages, *, pdf_bytes: bytes | None, title: str | None = None,
     context = {**((heuristics or {}).get("quality") or {}), "abstract": (heuristics or {}).get("abstract"),
                "field_origins": embedded.field_origins or {}, "rule_version": metadata_merge.policy.QUALITY_VERSION}
     if (embedded.authors and not authors_problem(embedded.authors, title=title)
-            and context.get("byline") and not metadata_merge.policy.byline_spelling_variants(embedded.authors, context["byline"])):
+            and context.get("byline")
+            and not (metadata_merge.policy.byline_spelling_variants(embedded.authors, context["byline"])
+                     or metadata_merge.policy.byline_abbreviations(embedded.authors, context["byline"]))):
         context["byline_complete"] = False
         context["byline_conflict"] = True
     if subject_reason:

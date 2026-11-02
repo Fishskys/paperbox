@@ -96,8 +96,10 @@ def _evidence(snapshot: dict, extracted: dict) -> dict:
             return set(re.findall(r"\b([^\W\d_]{2,})\.", name.casefold()))
         suspicious = len(before) == len(incoming) and any(
             (new.endswith(("'", "’", "‘", '"', "“", "”")) and not old.endswith(("'", "’", "‘", '"', "“", "”")))
-            or markers(new) - markers(old) for old, new in zip(before, incoming))
-        if not policy.byline_spelling_variants(before, incoming) or suspicious:
+            or markers(new) - markers(old)
+            or len(re.findall(r"[^\W\d_]+", new)) < len(re.findall(r"[^\W\d_]+", old))
+            for old, new in zip(before, incoming))
+        if not (policy.byline_spelling_variants(before, incoming) or policy.byline_abbreviations(before, incoming)) or suspicious:
             evidence["byline_complete"] = False
             evidence["materialized_byline_conflict"] = True
     return evidence
