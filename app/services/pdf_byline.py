@@ -3,6 +3,8 @@
 import re
 import unicodedata
 
+from app.parsing.metadata_fields import author_problem, parse_authors
+
 _ORGANIZATION = re.compile(
     r"\b(?:universit\w*|institut\w*|department|school|college|laborator\w*|labs?|"
     r"research|corp(?:oration)?|inc|llc|ltd|company|google|microsoft|deepmind)\b", re.I)
@@ -15,12 +17,12 @@ def names_from_byline(text: str) -> list[str]:
         return []
     text = re.sub(r"\b(?:(?:graduate student|senior|life|student)\s+)?(?:member|fellow)\s*,?\s*IEEE\b", "", text, flags=re.I)
     text = re.sub(r"[0-9*\u2020\u2021\u00a7\u00b6\u2217\u204e\u2709]+(?:\s+[0-9*\u2020\u2021\u00a7\u00b6\u2217\u204e\u2709]+)*", "|", text)
-    candidates = re.split(r"\s*(?:[|,;&]|\band\b)\s*", text, flags=re.I)
+    candidates = [name for part in text.split("|") for name in parse_authors(part)]
     names = []
     for candidate in candidates:
         candidate = candidate.strip(" .;:-")
         words = candidate.split()
-        if not 2 <= len(words) <= 6:
+        if not words or author_problem(candidate):
             continue
         if any(word.casefold().strip(".") in policy._NAME_STOPWORDS for word in words):
             continue
@@ -33,7 +35,7 @@ def names_from_byline(text: str) -> list[str]:
             if any(not (character.isalpha() or character in "-.'\u2019") for character in word):
                 valid = False
                 break
-        if valid:
+        if valid or len(words) == 1 and not author_problem(candidate):
             names.append(candidate)
     return names
 

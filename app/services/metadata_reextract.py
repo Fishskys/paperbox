@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import Paper
 from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata
+from app.parsing.metadata_fields import abstract_problem, corroborates
 from app.services import metadata_identifiers, metadata_merge, metadata_sources
 from app.services import metadata_service, paper_service, provenance_service
 
@@ -120,6 +121,13 @@ def reextract_paper_metadata(
     embedded = (
         extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={})
     )
+    heuristics = metadata_service.extract_metadata(pages, url=paper.url, pdf_bytes=pdf_bytes) if pages is not None else None
+    if (not embedded.abstract and embedded.subject and not abstract_problem(embedded.subject)
+            and heuristics and heuristics.get("quality", {}).get("text_state") == "ok"
+            and corroborates(embedded.subject, str(heuristics.get("abstract") or ""))):
+        embedded.abstract = embedded.subject
+        embedded.field_origins = {**(embedded.field_origins or {}), "abstract": "info:Subject+body:abstract"}
+        embedded.raw = {**(embedded.raw or {}), "field_origins": embedded.field_origins}
     _merge_layer(
         session,
         paper,
@@ -135,10 +143,7 @@ def reextract_paper_metadata(
         importer=importer,
     )
 
-    if pages is not None:
-        heuristics = metadata_service.extract_metadata(
-            pages, url=paper.url, pdf_bytes=pdf_bytes
-        )
+    if heuristics is not None:
         _merge_layer(
             session,
             paper,

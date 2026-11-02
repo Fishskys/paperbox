@@ -13,6 +13,7 @@ from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
 from app.parsing.pdf import EmbeddedMetadata, PageText, SizedLine
+from app.parsing.metadata_fields import author_problem, document_state, parse_authors
 from app.services.paper_service import normalize_arxiv_id, normalize_doi
 
 _ARXIV_IN_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/([A-Za-z0-9.\-/]+)", re.IGNORECASE)
@@ -311,10 +312,10 @@ def _is_title_fragment(line: str, title_words: frozenset[str]) -> bool:
 def _names_from_line(line: str) -> list[str]:
     """Extract plausible author names from one line."""
     if re.search(r",|\band\b|&|;", line):
-        parts = [part for part in _AUTHOR_SPLIT.split(line) if part.strip()]
+        parts = parse_authors(line)
     else:
         words = line.split()
-        if 2 <= len(words) <= 4:
+        if 1 <= len(words) <= 4:
             parts = [line]
         elif len(words) % 2 == 0 and 4 < len(words) <= 10:
             # "Kaiming He Xiangyu Zhang Shaoqing Ren Jian Sun" -> pairs.
@@ -344,12 +345,12 @@ def _plausible_author(name: str) -> bool:
     "for Social", "from Topology" and "we propose an automated" all parse as
     capitalised word pairs, which is why they ended up in ``paper_authors``.
     """
-    if not (3 <= len(name) <= 80):
+    if not (2 <= len(name) <= 100) or author_problem(name):
         return False
     if _AFFILIATION.search(name) or _EMAIL.search(name):
         return False
     words = name.split()
-    if not (1 < len(words) <= 5):
+    if not (0 < len(words) <= 8):
         return False
     if any(word.casefold().strip(".,;:") in _NAME_STOPWORDS for word in words):
         return False
@@ -452,6 +453,7 @@ def extract_metadata(
     """
 
     ordered = list(pages)
+    native_lines = []
     sized_lines = None
     byline = None
     if pdf_bytes:
@@ -460,17 +462,24 @@ def extract_metadata(
             from app.services.pdf_byline import extract_byline
 
             content = invoke("lines", pdf_bytes)
+            native_lines = content["lines"]
             sized_lines = [SizedLine(line["text"], line["size"]) for line in content["lines"]]
             byline = extract_byline(content) if content["lines"] else []
         except Exception:  # noqa: BLE001 - metadata extraction is best effort
             sized_lines = None
     title = detect_title(ordered, sized_lines=sized_lines)
     authors = detect_authors(ordered, title=title) if byline is None else byline
+    state = document_state(ordered[0].text if ordered else "", native_lines)
+    if state != "ok":
+        authors = []
     result: "OrderedDict[str, object]" = OrderedDict()
     result["title"] = title
     result["abstract"] = detect_abstract(ordered)
     result["year"] = detect_year(ordered, url=url)
     result["authors"] = authors
+    result["quality"] = {"text_state": state, "byline": authors,
+                         "byline_origin": "body:geometry" if byline is not None else "body:text",
+                         "needs_review": state != "ok"}
     arxiv_id = arxiv_id_from_url(url)
     if arxiv_id is None:
         first_page = "\n".join(page.text for page in ordered[:1])

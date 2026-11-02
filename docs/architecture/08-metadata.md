@@ -53,6 +53,12 @@ papers ──1:N──> paper_sources ──1:N──> paper_field_provenance
 
 ## 2. 设计思路
 
+### PDF 候选字段语义
+
+`EmbeddedMetadata` 区分 XMP `description` 摘要与 Info `Subject` 主题，`field_origins` 保留字段出处并随原始 Info/XMP 写入来源快照。Subject 不直接成为摘要，只有通过出版信息/模板检查且与正文摘要相符时，重新提取服务才提供该候选。DOI 的显式出版标记识别独立于摘要处理。
+
+作者解析先解码 HTML 实体，再区分多人字符串、数组及倒置姓名。正文作者提取使用首页标题与摘要之间的原生行位置，过滤单位、邮箱、会员身份及脚注，支持单词姓名与非英文姓名。文字层缺失、损坏或检测到不同文字占用同一行位置时，来源快照记录 `quality.text_state` 和 `needs_review`，不从该文字层自动提供作者。
+
 ### PDF 历史冲突质量处理
 
 `scripts/reconcile_pdf_metadata.py` 接受已经对照 PDF 检查过的 JSON 决策数组，默认只验证和预览，传入 `--apply` 才提交。它不是导入流水线的新优先级策略。

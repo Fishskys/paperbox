@@ -163,6 +163,8 @@ class EmbeddedMetadata:
     title: str | None = None
     authors: list[str] | None = None
     abstract: str | None = None
+    subject: str | None = None
+    field_origins: dict[str, str] | None = None
     doi: str | None = None
     arxiv_id: str | None = None
     #: IEEE stamp: ``/IEEE Article ID`` in the Info dictionary (e.g. ``11617481``).
@@ -332,17 +334,12 @@ def _simple_value(simple: dict[str, list[str]], local: str) -> str | None:
 def _split_authors(value: object) -> list[str]:
     """Author names from an XMP sequence or an Info ``/Author`` string.
 
-    A list keeps its items verbatim (``["Alice Smith", "Bob Jones"]``); a string is
-    split on ``;``, ``and``, ``&`` and newlines -- never on commas, because
-    ``Smith, John`` is one author.
+    Decode entities before separators; unpack multi-person array items while
+    preserving inverted names such as ``Smith, John``.
     """
-    if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item or "").strip()]
-    text = _text(value)
-    if not text:
-        return []
-    parts = re.split(r"\s*(?:;|\band\b|&|\n)\s*", text)
-    return [part.strip() for part in parts if part.strip()]
+    from app.parsing.metadata_fields import parse_authors
+
+    return parse_authors(value)
 
 
 def _split_keywords(value: object) -> list[str]:
@@ -554,7 +551,13 @@ def embedded_metadata_from_sources(raw_info: dict, packet: str) -> EmbeddedMetad
     authors = _split_authors(creators) or _split_authors(
         info.get("/Author") or info.get("Author")
     )
-    abstract = xmp_text("description") or _text(info.get("/Subject"))
+    abstract = xmp_text("description")
+    subject = _text(info.get("/Subject"))
+    origins = {
+        "authors": "xmp:creator" if creators else "info:Author",
+        "abstract": "xmp:description" if abstract else "absent",
+        "subject": "info:Subject",
+    }
     keywords = _split_keywords(
         xmp_text("Keywords")
         or xmp_text("subject")
@@ -576,6 +579,8 @@ def embedded_metadata_from_sources(raw_info: dict, packet: str) -> EmbeddedMetad
         title=title,
         authors=authors,
         abstract=abstract,
+        subject=subject,
+        field_origins=origins,
         ieee_article_number=ieee_article_number,
         # Identity fields are read from structured XMP fields plus *declared*
         # values only (review 2026-10-05, P1-10). The old fallback regex-
@@ -621,6 +626,7 @@ def embedded_metadata_from_sources(raw_info: dict, packet: str) -> EmbeddedMetad
         language=xmp_text("language"),
         keywords=keywords,
         raw={
+            "field_origins": origins,
             "info": {key: value for key, value in info.items() if value},
             "xmp": {key: value for key, value in xmp_fields.items() if value},
             "issns": issns or None,

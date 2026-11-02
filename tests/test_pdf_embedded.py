@@ -66,7 +66,9 @@ def test_info_dictionary_is_read() -> None:
 
     assert metadata.title == "Low Power SRAM Leakage Reduction"
     assert metadata.authors == ["Alice Smith", "Bob Jones"]
-    assert metadata.abstract.startswith("A study of leakage")
+    assert metadata.abstract is None
+    assert metadata.subject.startswith("A study of leakage")
+    assert metadata.field_origins["authors"] == "info:Author"
     # P1-10: a DOI *mentioned* in the abstract is a citation to another paper,
     # not this paper's identity -- free-text guessing is gone.
     assert metadata.doi is None
@@ -184,7 +186,8 @@ def test_embedded_text_drops_control_characters() -> None:
             for code in ("\x00", "\x01", "\x07"):
                 assert code not in field
     assert metadata.title == "Chopping Comparator Offsets"
-    assert metadata.abstract == "A study of chopping."
+    assert metadata.abstract is None
+    assert metadata.subject == "A study of chopping."
 
 
 def test_a_pdf_without_any_metadata_is_empty_not_an_error() -> None:
