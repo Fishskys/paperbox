@@ -442,6 +442,8 @@ def extract_metadata(
     pages: Sequence[PageText],
     url: str | None = None,
     pdf_bytes: bytes | None = None,
+    *,
+    native_content: dict | None = None,
 ) -> dict[str, object]:
     """Bundle every heuristic above into one metadata dict.
 
@@ -452,12 +454,12 @@ def extract_metadata(
     native_lines = []
     sized_lines = None
     byline = None
-    if pdf_bytes:
+    if pdf_bytes or native_content is not None:
         try:
             from app.parsing.mupdf import invoke
             from app.services.pdf_byline import extract_byline
 
-            content = invoke("lines", pdf_bytes)
+            content = native_content if native_content is not None else invoke("lines", pdf_bytes)
             native_lines = content["lines"]
             sized_lines = [SizedLine(line["text"], line["size"]) for line in content["lines"]]
             byline = extract_byline(content) if content["lines"] else []

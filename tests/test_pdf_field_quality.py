@@ -60,6 +60,17 @@ def test_conflicting_valid_embedded_and_body_lists_require_review(monkeypatch):
     assert evidence["byline_conflict"] is True and evidence["byline_complete"] is False
 
 
+def test_corroborated_pdf_spelling_variants_do_not_invalidate_a_complete_byline(monkeypatch):
+    from app.parsing.pdf import EmbeddedMetadata
+    from app.services import metadata_reextract as reextract, metadata_service
+
+    monkeypatch.setattr(reextract, "extract_embedded_metadata", lambda _: EmbeddedMetadata(authors=["Jose Chen"], raw={}))
+    monkeypatch.setattr(metadata_service, "extract_metadata", lambda *a, **k: {"authors": ["José Chen"],
+        "quality": {"text_state": "ok", "byline": ["José Chen"], "byline_complete": True}})
+    _, _, evidence = reextract.pdf_candidates([], pdf_bytes=b"fixture")
+    assert evidence["byline_complete"] is True and not evidence.get("byline_conflict")
+
+
 @pytest.mark.parametrize("subject,expected", [("A compact TDC.", "A compact TDC."), ("IEEE Journal;2024;1;2;10.1234/example", None), ("An unrelated abstract.", None)])
 def test_subject_requires_validity_and_body_corroboration(db_session, monkeypatch, subject, expected):
     from app.db.models import Paper, PaperSource, new_uuid

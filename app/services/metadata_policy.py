@@ -11,7 +11,7 @@ from app.services import metadata_identifiers as identifiers
 from app.services import metadata_sources as sources
 from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
 
-QUALITY_VERSION = "pdf-fields-v1"
+QUALITY_VERSION = "pdf-fields-v2"
 PDF_SOURCES = (sources.SOURCE_TYPE_PDF_EMBEDDED, sources.SOURCE_TYPE_PDF_HEURISTIC)
 
 
@@ -103,12 +103,22 @@ def _canonical(field: str, value: Any) -> Any:
                 return value
         value = _PRESENTATION_TAG.sub("", html.unescape(value))
         value = " ".join(unicodedata.normalize("NFKC", value).translate(_TYPOGRAPHY).split())
+        if field == "authors":
+            value = re.sub(r"(?<![^\W\d_])([^\W\d_]\.)\s+(?=[^\W\d_])", r"\1", value)
         return value.casefold() if field in ("title", "authors", "venue", "language") or field.startswith("tag:") else value
     return value
 
 
 def equivalent_values(field: str, left: Any, right: Any) -> bool:
     return _canonical(field, left) == _canonical(field, right)
+
+
+def byline_spelling_variants(left: list[str], right: list[str]) -> bool:
+    """Corroborate same-position PDF name variants; never hide their difference."""
+    def key(name: str) -> str:
+        value = unicodedata.normalize("NFD", html.unescape(name).casefold())
+        return "".join(c for c in value if c.isalnum())
+    return bool(left) and len(left) == len(right) and all(key(a) == key(b) for a, b in zip(left, right))
 
 
 def prefers_incoming(field: str, current: Any, incoming: Any) -> bool:

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.models import Paper
-from app.parsing.pdf import EmbeddedMetadata, extract_embedded_metadata
+from app.parsing.pdf import EmbeddedMetadata, embedded_metadata_from_sources, extract_embedded_metadata
 from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
 from app.services import metadata_identifiers, metadata_merge, metadata_sources
 from app.services import metadata_service, paper_service, provenance_service
@@ -198,11 +198,13 @@ def reextract_paper_metadata(
 
 
 def pdf_candidates(pages, *, pdf_bytes: bytes | None, title: str | None = None,
-                   url: str | None = None) -> tuple[EmbeddedMetadata, dict | None, dict]:
+                   url: str | None = None, bundle: dict | None = None) -> tuple[EmbeddedMetadata, dict | None, dict]:
     """Extract candidates and evidence without database or index writes."""
-    embedded = extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={})
+    embedded = (embedded_metadata_from_sources(bundle["metadata"]["info"], bundle["metadata"]["xmp"])
+                if bundle is not None else extract_embedded_metadata(pdf_bytes) if pdf_bytes else EmbeddedMetadata(raw={}))
     subject_reason = (abstract_problem(embedded.subject) or "uncorroborated_subject") if embedded.subject else None
-    heuristics = metadata_service.extract_metadata(pages, url=url, pdf_bytes=pdf_bytes) if pages is not None else None
+    native = {"native_content": bundle["lines"]} if bundle is not None else {}
+    heuristics = metadata_service.extract_metadata(pages, url=url, pdf_bytes=pdf_bytes, **native) if pages is not None else None
     if (not embedded.abstract and embedded.subject and not abstract_problem(embedded.subject)
             and heuristics and heuristics.get("quality", {}).get("text_state") == "ok"
             and corroborates(embedded.subject, str(heuristics.get("abstract") or ""))):
@@ -213,7 +215,7 @@ def pdf_candidates(pages, *, pdf_bytes: bytes | None, title: str | None = None,
     context = {**((heuristics or {}).get("quality") or {}), "abstract": (heuristics or {}).get("abstract"),
                "field_origins": embedded.field_origins or {}, "rule_version": metadata_merge.policy.QUALITY_VERSION}
     if (embedded.authors and not authors_problem(embedded.authors, title=title)
-            and context.get("byline") and not metadata_merge.policy.equivalent_values("authors", embedded.authors, context["byline"])):
+            and context.get("byline") and not metadata_merge.policy.byline_spelling_variants(embedded.authors, context["byline"])):
         context["byline_complete"] = False
         context["byline_conflict"] = True
     if subject_reason:

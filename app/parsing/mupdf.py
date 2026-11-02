@@ -115,6 +115,11 @@ def _dispatch(operation, data):
 
         return asdict(markdown.render_markdown(pdf.extract_pages(data), pdf_bytes=data, backend="pymupdf"))
     with _open(data) as document:
+        if operation == "metadata_bundle":
+            return {"metadata": _metadata(document),
+                    "pages": [{"page": index + 1, "text": document[index].get_text("text", sort=False)}
+                              for index in range(min(2, len(document)))],
+                    "lines": _lines(document[0]) if len(document) else {"lines": []}}
         if operation == "metadata":
             return _metadata(document)
         if operation == "pages":
