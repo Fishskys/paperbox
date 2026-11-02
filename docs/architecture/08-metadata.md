@@ -394,7 +394,7 @@ IEEE Xplore 的 `issue` 偶尔采用“期号: 专题名”（如 `1: Single-Pho
 | `scripts/backfill_metadata.py` | 给历史论文补来源行 / 声明 / 标识符 / 主版本标记，**幂等**，`--dry-run` / `--limit`；从不改 `papers.fingerprint` |
 | `scripts/reextract_metadata.py` | 对已存 PDF 重跑质量合并，`--dry-run`（默认）/`--apply`/`--paper-id`/`--limit`/`--no-index`；`--no-index` 省略立即刷新，后台仍重试 |
 | `scripts/audit_pdf_metadata_quality.py` | 只读回放已显式复核的历史摘要与指定数量的真实 PDF 作者样本；数据库事务只读，错误自动覆盖或提取失败退出非零；无复核基准也不算通过 |
-| `scripts/acceptance_pdf_metadata_quality.py` | 使用临时 PostgreSQL schema 和 OpenSearch 索引验证 PDF 候选、dry-run 回滚、重导入幂等、人工保护及快照同步；结束或异常均清理，不写既有论文数据 |
+| `scripts/acceptance_pdf_metadata_quality.py` | 使用临时 PostgreSQL schema 和 OpenSearch 索引验证 PDF 候选、dry-run 回滚、重导入幂等、人工保护及快照同步；结束或异常均清理，不写既有论文数据；可用 `--base-url` 只读验证已运行 API，报告复核计数与耗时 |
 | `scripts/import_metadata.py` | CLI 导入（`--apply` / `--limit` / `--source-type` / `--report`） |
 | `scripts/acceptance_metadata.py` | 真机验收 7 项：动态盘点当前库并验证回填不变量、IEEE 按 DOI 命中并 apply、无 DOI 记录进复核、手动改+回滚+指纹升级、venue 检索（需 reindex）、元数据先 PDF 后、索引一致性。**只在自己的壳论文上造数据**，`--cleanup` 删掉本次造的行 |
 | `scripts/audit_identifier_mirrors.py` | **只读**核对 `papers.doi`/`arxiv_id` 镜像列与 `paper_identifiers`（6 类漂移），`--json`/`--limit`/`--no-fail`；有漂移 exit 1，不修复 |

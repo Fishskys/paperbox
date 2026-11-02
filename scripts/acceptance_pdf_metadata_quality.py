@@ -14,6 +14,7 @@ from functools import partial
 import json
 from pathlib import Path
 import sys
+import time
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -22,12 +23,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pymupdf  # noqa: E402
+import httpx  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.schema import CreateSchema, DropSchema  # noqa: E402
 
 from app.db.models import Base, MetadataIndexUpdate, MetadataQualityDecision, Paper, PaperChunk, PaperSource, new_uuid  # noqa: E402
 from app.db.session import get_engine  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.parsing.pdf import extract_pages  # noqa: E402
 from app.search import opensearch  # noqa: E402
 from app.services import metadata_index_sync, metadata_manual, metadata_reextract, paper_service  # noqa: E402
@@ -88,6 +91,7 @@ def run(session: Session, client, index: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--base-url", help="also verify the running API using read-only requests")
     args = parser.parse_args()
     schema = f"pdf_quality_acceptance_{uuid4().hex}"
     index = schema.replace("_", "-")
@@ -113,6 +117,27 @@ def main() -> int:
                 with engine.begin() as connection:
                     connection.execute(DropSchema(schema, cascade=True))
     report["cleanup"] = not client.indices.exists(index=index)
+    if args.base_url:
+        with httpx.Client(base_url=args.base_url, headers={"X-API-Key": settings.paper_api_key}, timeout=30) as api:
+            response = api.get("/health")
+            response.raise_for_status()
+            assert not response.json().get("degraded", False)
+            response = api.get("/api/papers", params={"limit": 1})
+            response.raise_for_status()
+            papers = response.json()["papers"]
+            assert papers, "API metadata verification needs an existing paper"
+            response = api.get(f"/api/papers/{papers[0]['paper_id']}/metadata")
+            response.raise_for_status()
+            metadata = response.json()
+            assert isinstance(metadata["quality_decisions"], list)
+            assert set(metadata["index_sync"]) == {"pending", "attempts", "last_error"}
+            started = time.monotonic()
+            response = api.get("/api/metadata/review", params={"limit": 1})
+            response.raise_for_status()
+            assert isinstance(response.json()["conflicts"], list)
+            report["live_api"] = True
+            report["live_review"] = {"latency_ms": round((time.monotonic() - started) * 1000),
+                                     "conflicts_total": response.json()["conflicts_total"]}
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report))
