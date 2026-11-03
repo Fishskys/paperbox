@@ -446,8 +446,9 @@ def detect_year(pages: Sequence[PageText], url: str | None = None) -> int | None
 def detect_doi(pages: Sequence[PageText]) -> str | None:
     """Prefer declared DOI lines; exclude reference sections and ambiguity."""
     for page in list(pages)[:2]:
-        text = re.split(r"(?im)^\s*(?:(?:[IVX]+|\d+)[.)]?\s+)?(?:references|bibliography|参考文献)\s*[:.]?\s*$",
-                        page.text, maxsplit=1)[0]
+        sections = re.split(r"(?im)^\s*(?:(?:[IVX]+|\d+)[.)]?\s+)?(?:references|bibliography|参考文献)\s*[:.]?\s*$",
+                            page.text, maxsplit=1)
+        text = sections[0]
         candidates, declared = {}, {}
         for line in text.splitlines():
             # A numbered bibliography item can appear on a continuation page.
@@ -462,7 +463,7 @@ def detect_doi(pages: Sequence[PageText]) -> str | None:
         chosen = declared or candidates
         if len(chosen) == 1:
             return next(iter(chosen.values()))
-        if chosen:
+        if chosen or len(sections) > 1:
             return None
     return None
 

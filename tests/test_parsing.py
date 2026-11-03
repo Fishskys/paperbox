@@ -363,3 +363,10 @@ def test_declared_doi_wins_over_an_unlabelled_mention():
     from app.services.metadata_service import detect_doi
 
     assert detect_doi([page(1, "Related work 10.1234/cited", "DOI: 10.1234/paper")]) == "10.1234/paper"
+
+
+def test_reference_boundary_also_excludes_the_next_page():
+    from app.services.metadata_service import detect_doi
+
+    assert detect_doi([page(1, "A paper", "References"),
+                       page(2, "Continued citation", "doi: 10.1234/cited")]) is None
