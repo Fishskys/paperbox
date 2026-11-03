@@ -79,7 +79,6 @@ test("reject needs no reason, preserves failures, and can be restored", async ({
 });
 
 test("independent admission on mobile retains stale errors and accepts a fresh preview", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
   let first = true;
   let removed = false;
   const bodies: object[] = [];
@@ -94,7 +93,12 @@ test("independent admission on mobile retains stale errors and accepts a fresh p
   });
   await page.goto("/imports/metadata?tab=review");
   await page.getByRole("button", { name: "查看与处理" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByText("Conference publication", { exact: true })).toBeVisible();
+  await expect.poll(() => page.getByRole("dialog", { name: "来源详情" }).evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.left >= -1 && bounds.right <= innerWidth + 1;
+  })).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole("button", { name: "独立入库", exact: true }).click();
   const modal = page.getByRole("dialog", { name: "独立入库", exact: true });

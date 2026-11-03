@@ -158,6 +158,8 @@ API 域名在请求时解析，因此 API 尚未启动时页面仍可打开，�
 `uv run python scripts/check_webui_deployment.py` 使用临时管理员密钥，比较部署页面与本机 `frontend/dist/index.html` 的入口资源哈希，并验证真实 JSONL 预览、单篇索引与限量元数据维护预览、标识与三端检查、PDF 画布和阅读导航，以及桌面/移动布局；结束或失败时删除密钥，不执行维护写入。运行前先在本机构建前端。
 更新镜像时显式重建 WebUI 容器，避免仅更新同名镜像而继续提供旧资源。已有附图可用时，验收同时核对真实预览和单幅原始 PDF 下载。
 `WEBUI_URL=http://127.0.0.1:8089 uv run python scripts/check_webui_permissions.py` 使用临时 read/write/admin 密钥验证部署后的权限分区，结束后清理密钥。
+
+`WEBUI_SOURCE_ONLY=1 uv run python scripts/check_webui_deployment.py` 仅验收元数据导入与来源复核：核对构建哈希、桌面及移动抽屉边界、无原因确认框，以及最多 50 条来源的跨页选择与批量匹配预览。真实来源的写操作被拦截，结束后比较来源快照与审计数量，确认未处理队列；独立入库、拒绝、恢复与失败重试由浏览器模拟接口回归及临时数据库验收覆盖。
 `uv run python scripts/check_import_archive.py` 创建临时 PDF，验证 ZIP 条目处置、真实解析索引与原文下载，并清理本次生成的数据；未配置目录白名单时同时核对目录导入保持禁用。
 
 在仓库根执行 `node scripts/check_webui.mjs` 可对已运行服务执行只读浏览器验收，

@@ -43,6 +43,7 @@ try {
   await page.screenshot({ path: resolve(output, "webui-deployed-metadata.png") });
   await page.getByRole("tab", { name: "元数据复核", exact: true }).click();
   const beforeReview = await page.evaluate(async () => (await (await fetch("/api/metadata/review?limit=200")).json()));
+  let sourcePreview = null;
   if (beforeReview.items.length) {
     await page.getByRole("button", { name: "查看与处理", exact: true }).first().click();
     const sourceDrawer = page.getByRole("dialog", { name: "来源详情", exact: true });
@@ -50,6 +51,10 @@ try {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expect.poll(() => sourceDrawer.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.left >= -1 && bounds.right <= innerWidth + 1;
+      })).toBe(true);
       await page.screenshot({ path: resolve(output, `webui-deployed-source-${width}.png`) });
     }
     await sourceDrawer.getByRole("button", { name: "拒绝来源", exact: true }).click();
@@ -59,17 +64,31 @@ try {
     await sourceDrawer.locator(".ant-drawer-close").click();
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole("checkbox", { name: "Select all", exact: true }).check();
+    for (let offset = 20; beforeReview.total <= 50 && offset < beforeReview.total; offset += 20) {
+      const sourceJumper = page.locator(".ant-pagination-options-quick-jumper input").first();
+      await sourceJumper.fill(String(offset / 20 + 1)); await sourceJumper.press("Enter");
+      await expect(page.getByText(beforeReview.items[offset].source_ref, { exact: true })).toBeVisible();
+      await page.getByRole("checkbox", { name: "Select all", exact: true }).check();
+    }
     const rematch = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/metadata/sources/rematch", { timeout: 120000 });
     await page.getByRole("button", { name: "重新匹配所选", exact: true }).click();
     const rematchResponse = await rematch;
-    if (!rematchResponse.ok() || (await rematchResponse.json()).applied !== 0) throw new Error("Invalid source review preview");
+    const sourceReport = await rematchResponse.json();
+    if (!rematchResponse.ok() || sourceReport.applied !== 0) throw new Error("Invalid source review preview");
+    if (beforeReview.total <= 50 && sourceReport.items.length !== beforeReview.total) throw new Error("Cross-page selection lost source records");
+    sourcePreview = { checked: sourceReport.items.length,
+      matched: sourceReport.items.filter((item) => item.match?.match_status === "matched").length };
     const batch = page.getByRole("dialog", { name: "批量重新匹配", exact: true });
     await expect(batch.getByRole("button", { name: /应用唯一匹配/ })).toBeVisible();
     await page.screenshot({ path: resolve(output, "webui-deployed-source-batch.png") });
-    await batch.getByRole("button", { name: /^关\s*闭$/ }).click();
+    await batch.locator(".ant-modal-footer").getByRole("button", { name: /^关\s*闭$/ }).click();
     const afterReview = await page.evaluate(async () => (await (await fetch("/api/metadata/review?limit=200")).json()));
     if (JSON.stringify(beforeReview) !== JSON.stringify(afterReview)) throw new Error("Source preview changed the review queue");
   }
+  if (process.env.WEBUI_SOURCE_ONLY === "1") {
+    if (errors.length) throw new Error(errors.join("\n"));
+    process.stdout.write(JSON.stringify({ origin, bundle: servedBundle, status: "passed", sourcePreview, output }) + "\n");
+  } else {
   await page.getByRole("link", { name: "索引维护", exact: true }).click();
   const papers = await page.evaluate(async () => (await (await fetch("/api/papers?limit=1")).json()).papers);
   await page.getByLabel("维护论文 ID").fill(papers[0].paper_id);
@@ -147,6 +166,7 @@ try {
   if (errors.length) throw new Error(errors.join("\n"));
   process.stdout.write(JSON.stringify({ origin, bundle: servedBundle, status: "passed", papers: total, indexPreview: indexReport.selected, metadataPreview: metadataReport.papers,
     consistency: { consistent: consistencyReport.consistent, problems: consistencyReport.totals.problems, errors: consistencyReport.errors }, nativeFigures: !!figurePaper, output }) + "\n");
+  }
 } catch (error) {
   process.stderr.write(String(error).replaceAll(key, "[redacted]") + "\n");
   process.exitCode = 1;
