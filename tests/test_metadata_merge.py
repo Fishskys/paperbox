@@ -207,7 +207,7 @@ def test_a_heuristic_does_not_override_a_heuristic(db_session) -> None:
         db_session, paper, {"title": "Second heuristic"}, source_type="pdf_heuristic"
     )
 
-    assert [item.action for item in report.decisions] == [merge.ACTION_CONFLICT]
+    assert [item.action for item in report.decisions] == [merge.ACTION_ARCHIVED]
     assert paper.title == "First heuristic"
 
 
@@ -466,7 +466,7 @@ def test_two_weak_sources_keep_the_current_value(db_session) -> None:
         db_session, paper, {"authors": ["Alice"]}, source_type="pdf_heuristic"
     )
 
-    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert report.decisions[0].action == merge.ACTION_ARCHIVED
     assert report.decisions[0].reason == "unverified_author_difference"
     assert prov.read_field(paper, "authors") == ["Alice", "Bob"]
 
@@ -506,7 +506,7 @@ def test_pdf_embedded_title_cannot_overwrite_a_heuristic_title(db_session) -> No
     )
 
     decision = report.decisions[0]
-    assert decision.action == merge.ACTION_CONFLICT
+    assert decision.action == merge.ACTION_ARCHIVED
     assert prov.read_field(paper, "title") == header
 
 

@@ -8,10 +8,80 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app.db.models import Paper, PaperFile, PaperSource, new_uuid
 from app.services import metadata_identifiers as ids
 from app.services import metadata_matcher as matcher
 from app.services import paper_service
+
+
+@pytest.mark.parametrize("stored,incoming", [
+    ("G. Avolio", "Giuseppe Avolio"),
+    ("Giuseppe Avolio", "G. Avolio"),
+    ("P. Palojarvi", "Pasi Palojärvi"),
+    ("José Chen", "Jose Chen"),
+])
+def test_exact_title_and_year_allow_first_author_variants(db_session, stored, incoming):
+    paper = make_paper(db_session, authors=[stored], year=2020)
+    result = matcher.match_record(db_session, matcher.MatchInput(title=paper.title, authors=[incoming], year=2020))
+    assert result.matched and result.paper_id == paper.id
+    assert paper_service.paper_author_names(paper) == [stored]
+
+
+@pytest.mark.parametrize("incoming", ["Giovanni Avolio", "Giuseppe A. Avolio", "Giuseppe Avorio"])
+def test_full_name_or_surname_disagreements_remain_ambiguous(db_session, incoming):
+    paper = make_paper(db_session, authors=["Giuseppe Avolio"], year=2020)
+    result = matcher.match_record(db_session, matcher.MatchInput(title=paper.title, authors=[incoming], year=2020))
+    assert result.status == matcher.STATUS_AMBIGUOUS
+
+
+def test_multiple_initial_matches_do_not_select_one_paper(db_session):
+    first = make_paper(db_session, authors=["Giuseppe Avolio"], year=2020)
+    make_paper(db_session, title=first.title, authors=["Giovanni Avolio"], year=2020)
+    result = matcher.match_record(db_session, matcher.MatchInput(title=first.title, authors=["G. Avolio"], year=2020))
+    assert result.status == matcher.STATUS_AMBIGUOUS and len(result.candidates) == 2
+
+
+def test_embedded_doi_needs_support_and_cannot_veto_external_correction(db_session):
+    paper = make_paper(db_session, authors=["G. Avolio"], year=2020)
+    attach_identifier(db_session, paper, ids.SCHEME_DOI, "10.1234/incorrect", source_type="pdf_embedded")
+    unsupported = matcher.match_record(db_session, matcher.MatchInput(identifiers={ids.SCHEME_DOI: "10.1234/incorrect"}))
+    assert unsupported.status == matcher.STATUS_AMBIGUOUS
+    result = matcher.match_record(db_session, matcher.MatchInput(title=paper.title, authors=["Giuseppe Avolio"],
+        year=2020, identifiers={ids.SCHEME_DOI: "10.1234/correct"}))
+    assert result.matched and result.paper_id == paper.id
+
+
+def test_external_confirmation_of_equal_doi_remains_an_identity_guard(db_session):
+    from app.services import metadata_merge as merge, provenance_service as prov
+    from tests.test_metadata_merge import make_source
+
+    paper = make_paper(db_session, authors=["Alice Smith"], year=2020)
+    source = make_source(db_session, paper.id, "pdf_embedded")
+    merge.merge_values(db_session, paper, {"identifier:doi": "10.1234/confirmed"},
+                       source_type="pdf_embedded", source_id=source.id)
+    external = make_source(db_session, paper.id, "import_file")
+    merge.merge_values(db_session, paper, {"identifier:doi": "10.1234/confirmed"},
+                       source_type="import_file", source_id=external.id)
+    result = matcher.match_record(db_session, matcher.MatchInput(title=paper.title, authors=["Alice Smith"],
+        year=2020, identifiers={ids.SCHEME_DOI: "10.1234/other"}))
+    assert result.status == matcher.STATUS_AMBIGUOUS and result.conflicts
+    assert prov.current_claim(db_session, paper.id, "identifier:doi").source_id == external.id
+
+
+def test_pdf_restatement_cannot_downgrade_an_external_identifier(db_session):
+    from app.services import provenance_service as prov
+    from tests.test_metadata_merge import make_source
+
+    paper = make_paper(db_session, authors=["Alice Smith"], year=2020)
+    attach_identifier(db_session, paper, ids.SCHEME_DOI, "10.1234/confirmed")
+    pdf = make_source(db_session, paper.id, "pdf_embedded")
+    prov.record_claim(db_session, paper_id=paper.id, field="identifier:doi", value="10.1234/confirmed",
+                      source_id=pdf.id, make_current=True)
+    result = matcher.match_record(db_session, matcher.MatchInput(title=paper.title, authors=["Alice Smith"],
+        year=2020, identifiers={ids.SCHEME_DOI: "10.1234/other"}))
+    assert result.status == matcher.STATUS_AMBIGUOUS and result.conflicts
 
 
 def make_paper(session, *, authors=(), **overrides) -> Paper:

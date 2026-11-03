@@ -130,7 +130,8 @@ def plan(snapshot: dict, extracted: dict) -> dict:
         else:
             choice = policy.pdf_choice(field, value, candidate["value"], source_type, candidate["source_type"],
                                        title=snapshot["title"], evidence=evidence)
-            action = "archive" if choice and choice[0] in ("reject", "current") else "review"
+            action = "review" if policy.needs_review(field, value, candidate["value"], source_type,
+                candidate["source_type"], title=snapshot["title"], evidence=evidence) else "archive"
             reason = choice[1] if choice else "unverified_source"
         decisions.append({"id": candidate["id"], "action": action, "reason": reason})
     return {"selected": value, "selected_source_type": source_type, "replacement_reason": replacement_reason,

@@ -71,14 +71,14 @@ def test_full_name_word_periods_do_not_require_pdf_boundary_evidence_or_rewrite_
     (["J.-P. Jansson"], ["Jussi-Pekka Jansson"]),
     (["J. L. Cura"], ["José L. Cura"]),
 ])
-def test_pdf_initials_need_complete_same_position_byline(short, full):
+def test_pdf_initials_are_evidence_without_creating_user_tasks(short, full):
     assert policy.byline_abbreviations(short, full)
     assert not policy.equivalent_values("authors", short, full)
     for complete in (False, True):
         evidence = {"text_state": "ok", "byline": full, "byline_complete": complete}
         assert policy.needs_review("authors", short, full, "pdf_embedded", "pdf_heuristic",
-                                   evidence=evidence) is (not complete)
-    assert policy.needs_review("authors", short, full, "pdf_embedded", "pdf_heuristic")
+                                   evidence=evidence) is False
+    assert not policy.needs_review("authors", short, full, "pdf_embedded", "pdf_heuristic")
 
 
 @pytest.mark.parametrize("left,right", [
@@ -102,23 +102,28 @@ def test_pdf_initial_matching_preserves_identity_differences(left, right):
 
 def test_initials_in_the_pdf_cannot_prove_a_proposed_full_name():
     evidence = {"text_state": "ok", "byline": ["G. Avolio"], "byline_complete": True}
-    assert policy.needs_review("authors", ["G. Avolio"], ["Giuseppe Avolio"],
+    assert not policy.needs_review("authors", ["G. Avolio"], ["Giuseppe Avolio"],
         "pdf_embedded", "pdf_heuristic", evidence=evidence)
-    assert policy.needs_review("authors", ["Giovanni Avolio"], ["Giuseppe Avolio"],
+    assert not policy.needs_review("authors", ["Giovanni Avolio"], ["Giuseppe Avolio"],
         "pdf_embedded", "pdf_heuristic", evidence=evidence)
+    assert policy.pdf_choice("authors", ["G. Avolio"], ["Giuseppe Avolio"],
+        "pdf_embedded", "pdf_heuristic", evidence=evidence) == ("current", "unverified_author_expansion")
 
 
 def test_replacing_invalid_authors_uses_the_actual_full_byline():
     evidence = {"text_state": "ok", "byline": ["Giuseppe Avolio"], "byline_complete": True}
     assert policy.pdf_choice("authors", ["RANGE SENSORS"], ["G. Avolio"], "pdf_embedded", "pdf_embedded",
-                             evidence=evidence)[0] == "review"
+                             evidence=evidence)[0] == "current"
     assert policy.pdf_choice("authors", ["RANGE SENSORS"], ["Giuseppe Avolio"], "pdf_embedded", "pdf_heuristic",
                              evidence=evidence)[0] == "incoming"
 
 
-@pytest.mark.parametrize("complete,expected", [(True, "current"), (False, "review")])
+@pytest.mark.parametrize("complete,expected", [(True, "current"), (False, "current")])
 def test_only_a_bounded_body_abstract_resolves_an_old_prefix(complete, expected):
     full = "This paper presents a converter in 65 nm CMOS. It reduces power."
     evidence = {"text_state": "ok", "abstract": full, "abstract_complete": complete}
     assert policy.pdf_choice("abstract", full, "This paper presents a converter in",
                              "pdf_heuristic", "pdf_heuristic", evidence=evidence)[0] == expected
+    assert policy.pdf_choice("abstract", full, "This paper presents a converter in",
+        "pdf_heuristic", "pdf_heuristic", evidence=evidence)[1] == (
+            "preserve_complete_body_abstract" if complete else "different_valid_abstracts")

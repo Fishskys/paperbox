@@ -274,10 +274,10 @@ def _merge_layer(
             result.changes.append(FieldChange(decision.field, decision.rejected, decision.kept, decision.action))
     if source_type == metadata_sources.SOURCE_TYPE_PDF_HEURISTIC and raw.get("quality", {}).get("needs_review"):
         from app.services import metadata_quality
-        metadata_quality.record(session, paper.id, "document", {"action": "conflict",
+        metadata_quality.record(session, paper.id, "document", {"action": "archived",
             "reason": raw["quality"]["text_state"], "before": None, "candidate": None,
             "selected": None, "source_id": source.id, "evidence": raw["quality"]})
-        key = f"conflict:{raw['quality']['text_state']}"
+        key = f"archived:{raw['quality']['text_state']}"
         result.quality_counts[key] = result.quality_counts.get(key, 0) + 1
 
 

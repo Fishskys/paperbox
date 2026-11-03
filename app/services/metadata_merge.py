@@ -3,13 +3,14 @@
 The rules, in order:
 
 1. **Validate PDF fields.** Invalid author/abstract candidates are archived.
-   Uncertain body bylines stay reviewable, even when the current field is blank.
+   Uncertain body bylines stay in history, even when the current field is blank.
 2. **Authority tiers.** Manual edits are unrestricted. A matched external
    bibliographic record (IEEE/arXiv/Crossref/import file) may correct PDF embedded
    metadata; PDF embedded metadata may correct page heuristics and file names.
    PDF author/abstract corroboration may override the relative PDF tiers.
-3. **Equal-tier disagreements stay visible.** IEEE vs. arXiv, for example, keeps
-   the current value and records the other claim for review.
+3. **Bibliographic disagreements stay visible.** IEEE vs. arXiv keeps the current
+   value for review. Unresolved local extraction differences retain the current
+   value automatically and remain audit history.
 4. **Field specifics.** Use corroborated PDF evidence, explicit abstract
    truncation, and stable author order, never author counts or raw text length.
 5. Nothing is ever deleted: the loser is a row in ``paper_field_provenance`` with
@@ -26,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.db.models import Paper, PaperSource
+from app.db.models import Paper, PaperSource, new_uuid
 from app.services import metadata_sources as sources
 from app.services import provenance_service as prov
 from app.services import metadata_policy as policy
@@ -305,6 +306,12 @@ def decide(
             reason="manual override",
             source_type=incoming_type,
         )
+    if (incoming_type in policy.LOCAL_SOURCES and existing_type in policy.LOCAL_SOURCES
+            and policy.field_authority(field_name, incoming_type) <= policy.field_authority(field_name, existing_type)):
+        # Quality corroboration above may replace a PDF field. With no stronger
+        # evidence, a new extraction cannot turn a local guess into a user task.
+        return MergeDecision(field_name, ACTION_ARCHIVED, current_value, value,
+                             "preserve selected local metadata without stronger evidence", incoming_type)
     if field_name == prov.FIELD_TITLE:
         # Title gets its own trust ladder: ``pdf_embedded`` (XMP/Info dc:title) is
         # routinely a running header or a Word file name for PDFs, so it must not
@@ -493,7 +500,25 @@ def merge_values(
         context = evidence or {}
         decision = decide(session, paper, field_name, value, source_type=source_type, evidence=context)
         report.decisions.append(decision)
-        if dry_run or decision.action == ACTION_UNCHANGED:
+        if dry_run:
+            continue
+        if decision.action == ACTION_UNCHANGED:
+            # A bibliographic confirmation must protect an equal PDF value too.
+            # Append provenance without rewriting the field or its search index.
+            current = prov.current_claim(session, paper.id, field_name)
+            rank = policy.field_authority(field_name, source_type)
+            old_rank = policy.field_authority(field_name, current_source_type(session, paper, field_name))
+            if (source_id and (current is None or current.decision_at is None
+                    and current.decided_by != prov.DECIDED_MANUAL) and rank is not None
+                    and old_rank is not None and rank >= 2 and rank > old_rank
+                    and not _is_blank(value)):
+                claim = prov.PaperFieldProvenance(id=new_uuid(), paper_id=paper.id, field=field_name,
+                    value=prov._jsonable(current.value if current else prov.read_field(paper, field_name)),
+                    source_id=source_id, confidence=confidence,
+                    decided_by=prov.DECIDED_STRUCTURED_OVERRIDE, is_current=False)
+                session.add(claim)
+                session.flush()
+                prov.promote(session, claim)
             continue
         previous = prov.current_claim(session, paper.id, field_name)
         before = prov.read_field(paper, field_name)

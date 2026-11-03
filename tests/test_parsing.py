@@ -345,3 +345,21 @@ def test_detect_doi_stops_after_two_pages() -> None:
     pages = [page(1, "nothing"), page(2, "still nothing"), page(3, "10.1109/LATE.2026.9")]
 
     assert detect_doi(pages) is None
+
+
+@pytest.mark.parametrize("text", [
+    "A paper\nReferences\n[1] DOI: 10.1234/cited",
+    "A paper\nIV. REFERENCES\nA citation doi: 10.1234/cited",
+    "[12] A citation DOI: 10.1234/cited",
+    "First 10.1234/one and another 10.1234/two",
+])
+def test_detect_doi_does_not_choose_citations_or_multiple_candidates(text):
+    from app.services.metadata_service import detect_doi
+
+    assert detect_doi([page(1, text)]) is None
+
+
+def test_declared_doi_wins_over_an_unlabelled_mention():
+    from app.services.metadata_service import detect_doi
+
+    assert detect_doi([page(1, "Related work 10.1234/cited", "DOI: 10.1234/paper")]) == "10.1234/paper"

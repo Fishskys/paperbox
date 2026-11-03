@@ -903,16 +903,6 @@ def _match_existing_paper(
     """Match the arriving PDF against the library, or ``None`` when nothing fits."""
     filename = record.filename if record is not None else None
     embedded = extract_embedded_metadata(data)
-    if not embedded.is_empty:
-        match_input = metadata_matcher.match_input_from_values(
-            metadata_service.embedded_claim_values(embedded), filename=filename
-        )
-        result = metadata_matcher.match_record(
-            session, match_input, exclude_paper_id=paper.id
-        )
-        if result.matched:
-            return result
-
     heuristics = {}
     try:
         heuristics = metadata_service.extract_metadata(
@@ -923,8 +913,19 @@ def _match_existing_paper(
         # compute them must never fail the ingest itself (the parse stage later
         # runs the real extraction and reports its own errors).
         logger.debug("cannot run heuristics for matching: %s", exc)
+    heuristic_values = metadata_service.heuristic_claim_values(heuristics)
+    if not embedded.is_empty:
+        # An extracted identifier needs document support even when Info/XMP
+        # omits the title. Read the body once and reuse it in both probes.
+        values = {**heuristic_values, **metadata_service.embedded_claim_values(embedded)}
+        match_input = metadata_matcher.match_input_from_values(values, filename=filename)
+        result = metadata_matcher.match_record(session, match_input, exclude_paper_id=paper.id)
+        if result.matched:
+            return result
+        if result.conflicts:
+            return None
     match_input = metadata_matcher.match_input_from_values(
-        metadata_service.heuristic_claim_values(heuristics), filename=filename
+        heuristic_values, filename=filename
     )
     if not match_input.identifiers and not match_input.title:
         return None

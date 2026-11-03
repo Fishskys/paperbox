@@ -204,7 +204,7 @@ def test_a_structured_source_overrides_a_file_name_claim(db_session: Session) ->
 
 
 def test_a_file_name_claim_does_not_replace_an_existing_heuristic_value(db_session: Session) -> None:
-    """Two weak sources disagreeing is a conflict to log, not a silent overwrite."""
+    """Two local extraction guesses retain the current value and their history."""
     paper = _paper(db_session)
     heuristic = _source(db_session, paper, metadata_sources.SOURCE_TYPE_PDF_HEURISTIC)
     weak = _source(db_session, paper, metadata_sources.SOURCE_TYPE_FILENAME)
@@ -224,7 +224,7 @@ def test_a_file_name_claim_does_not_replace_an_existing_heuristic_value(db_sessi
         source_id=weak.id,
         confidence=0.4,
     )
-    assert [d.action for d in report.decisions] == [metadata_merge.ACTION_CONFLICT]
+    assert [d.action for d in report.decisions] == [metadata_merge.ACTION_ARCHIVED]
     assert paper.arxiv_id == "2105.11453"
 
 

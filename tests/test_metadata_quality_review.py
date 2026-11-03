@@ -44,7 +44,7 @@ def test_preview_does_not_mutate_claims_or_create_audit(db_session):
 @pytest.mark.parametrize("field", ["authors", "abstract"])
 def test_apply_keeps_history_and_records_machine_audit(db_session, field):
     paper, current, losing, decision = seed(db_session, field=field)
-    assert prov.conflict_page(db_session)[1] == int(field == "authors")
+    assert prov.conflict_page(db_session)[1] == 0
     result = quality.apply_review(db_session, [decision], apply=True)
     db_session.commit()
     assert result["changed"] == int(field == "authors")

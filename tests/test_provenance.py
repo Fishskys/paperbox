@@ -231,7 +231,7 @@ def test_format_only_disagreements_are_history(db_session, field, current, other
 def test_higher_priority_historical_value_stays_reviewable(db_session):
     paper = make_paper(db_session)
     weak = make_source(db_session, paper.id, "pdf_heuristic")
-    embedded = make_source(db_session, paper.id, "pdf_embedded")
+    embedded = make_source(db_session, paper.id, "import_file")
     prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Alice", "Student Member"], source_id=weak.id, make_current=True)
     prov.record_claim(db_session, paper_id=paper.id, field="authors", value=["Alice"], source_id=embedded.id)
     conflicts, total = prov.conflict_page(db_session)
@@ -562,7 +562,7 @@ def test_a_field_a_human_edited_drops_off_the_list(db_session) -> None:
     所以那条走 ``decided_by='dismissed'`` 的显式裁决，见 test_manual_metadata.py。
     """
     paper = make_paper(db_session)
-    structured = make_source(db_session, paper.id, "pdf_embedded")
+    structured = make_source(db_session, paper.id, "import_file")
     human = make_source(db_session, paper.id, "manual")
     prov.record_claim(
         db_session,

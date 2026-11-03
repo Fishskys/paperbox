@@ -11,8 +11,9 @@ from app.services import metadata_identifiers as identifiers
 from app.services import metadata_sources as sources
 from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
 
-QUALITY_VERSION = "pdf-fields-v3"
+QUALITY_VERSION = "pdf-fields-v4"
 PDF_SOURCES = (sources.SOURCE_TYPE_PDF_EMBEDDED, sources.SOURCE_TYPE_PDF_HEURISTIC)
+LOCAL_SOURCES = (*PDF_SOURCES, sources.SOURCE_TYPE_FILENAME)
 
 
 def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None, incoming_source: str | None,
@@ -29,11 +30,11 @@ def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None,
         return None  # Bibliographic sources and manual edits retain their authority.
     if (field == "authors" and incoming_source == sources.SOURCE_TYPE_PDF_HEURISTIC
             and evidence and not evidence.get("byline_complete")):
-        return "review", "unverified_byline_boundary"
+        return "current", "unverified_byline_boundary"
     if current in (None, "", [], {}):
         return "incoming", "valid_blank_fill"
     if evidence.get("text_state", "ok") != "ok":
-        return "review", "unreliable_text_layer"
+        return "current", "unreliable_text_layer"
     if field == "authors":
         byline = evidence.get("byline") or []
         if evidence.get("byline_complete") and byline and not authors_problem(byline, title=title):
@@ -42,16 +43,16 @@ def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None,
                                         or byline_abbreviations(names, byline, expand_only=True))
                 if covers(current) and covers(incoming):
                     return "current", "corroborated_author_abbreviation"
-                return "review", "unverified_author_expansion"
+                return "current", "unverified_author_expansion"
             matches = lambda names: equivalent_values("authors", names, byline)
             if matches(incoming) and not matches(current):
                 if (not problem(current) and len(current) > len(byline)
                         and all(any(equivalent_values("authors", [name], [other]) for other in current) for name in byline)):
-                    return "review", "possibly_incomplete_byline"
+                    return "current", "possibly_incomplete_byline"
                 return "incoming", "corroborated_complete_byline"
             if matches(current):
                 return "current", "preserve_corroborated_byline"
-        return "review", "unverified_author_difference"
+        return "current", "unverified_author_difference"
     body = evidence.get("abstract")
     if body and not abstract_problem(body):
         current_matches = corroborates(str(current), str(body))
@@ -69,7 +70,7 @@ def pdf_choice(field: str, current: Any, incoming: Any, kept_source: str | None,
             return "current", "preserve_body_abstract"
     if problem(current):
         return "incoming", "valid_abstract_replaces_invalid"
-    return "review", "different_valid_abstracts"
+    return "current", "different_valid_abstracts"
 
 SOURCE_AUTHORITY = {
     sources.SOURCE_TYPE_MANUAL: 3,
@@ -182,6 +183,10 @@ def prefers_incoming(field: str, current: Any, incoming: Any) -> bool:
 
 def needs_review(field: str, kept: Any, rejected: Any, kept_source: str | None, rejected_source: str | None, *, resolved_by_rule: bool = False, evidence: dict | None = None, title: str | None = None) -> bool:
     if equivalent_values(field, kept, rejected):
+        return False
+    # Extraction candidates are audit evidence, not bibliographic adjudications.
+    # This also applies to historical claims written before the current policy.
+    if rejected_source in LOCAL_SOURCES and (kept_source in LOCAL_SOURCES or kept in (None, "", [], {})):
         return False
     choice = pdf_choice(field, kept, rejected, kept_source, rejected_source, title=title, evidence=evidence)
     if choice is not None:

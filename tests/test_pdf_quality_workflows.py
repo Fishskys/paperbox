@@ -76,14 +76,15 @@ def test_incomplete_embedded_author_list_cannot_replace_a_verified_byline(db_ses
 
 
 @pytest.mark.parametrize("state", ["ok", "missing_text", "damaged_text", "overlapping_text"])
-def test_valid_but_unverified_author_differences_remain_reviewable(db_session, state):
+def test_valid_but_unverified_author_differences_are_history_only(db_session, state):
     paper = make_paper(db_session)
     seed(db_session, paper, "authors", ["Alice Smith"], "pdf_embedded")
     source = make_source(db_session, paper.id, "pdf_heuristic")
     source.raw = {"quality": {"text_state": state}}
     result = merge.merge_values(db_session, paper, {"authors": ["Bob Jones"]}, source_type="pdf_heuristic", source_id=source.id)
-    assert result.decisions[0].action == merge.ACTION_CONFLICT
-    assert prov.conflict_page(db_session)[1] == 1
+    assert result.decisions[0].action == merge.ACTION_ARCHIVED
+    assert prov.read_field(paper, "authors") == ["Alice Smith"]
+    assert prov.conflict_page(db_session)[1] == 0
 
 
 def test_manual_decision_and_dismissed_candidate_survive_rule_upgrades(db_session, monkeypatch):
@@ -105,17 +106,17 @@ def test_manual_decision_and_dismissed_candidate_survive_rule_upgrades(db_sessio
     assert rejected.decided_by == prov.DECIDED_DISMISSED
 
 
-def test_unverified_body_authors_remain_reviewable_with_no_current_authors(db_session):
+def test_unverified_body_authors_stay_in_history_with_no_current_authors(db_session):
     paper = make_paper(db_session)
     source = make_source(db_session, paper.id, "pdf_heuristic")
     source.raw = {"quality": {"text_state": "ok", "byline_complete": False}}
     result = merge.merge_values(db_session, paper, {"authors": ["Alice Smith"]}, source_type="pdf_heuristic", source_id=source.id)
-    assert result.decisions[0].action == merge.ACTION_CONFLICT
+    assert result.decisions[0].action == merge.ACTION_ARCHIVED
     assert not prov.read_field(paper, "authors")
-    assert prov.conflict_page(db_session)[1] == 1
+    assert prov.conflict_page(db_session)[1] == 0
 
 
-def test_changed_rules_can_reopen_machine_rejections_without_overriding_humans(db_session, monkeypatch):
+def test_changed_rules_do_not_reopen_uncertain_pdf_candidates(db_session, monkeypatch):
     paper = make_paper(db_session)
     seed(db_session, paper, "authors", ["Alice Smith"], "pdf_heuristic")
     source = make_source(db_session, paper.id, "pdf_embedded")
@@ -125,8 +126,8 @@ def test_changed_rules_can_reopen_machine_rejections_without_overriding_humans(d
     monkeypatch.setattr(policy, "QUALITY_VERSION", "pdf-fields-next")
     source.raw = {"quality": {}}
     result = merge.merge_values(db_session, paper, {"authors": ["Bob Jones"]}, source_type="pdf_embedded", source_id=source.id)
-    assert result.decisions[0].action == merge.ACTION_CONFLICT
-    assert prov.conflict_page(db_session)[1] == 1
+    assert result.decisions[0].action == merge.ACTION_ARCHIVED
+    assert prov.conflict_page(db_session)[1] == 0
 
 
 def test_review_keeps_quality_decisions_and_counts_across_candidate_batches(db_session):
@@ -137,13 +138,69 @@ def test_review_keeps_quality_decisions_and_counts_across_candidate_batches(db_s
     db_session.add_all([PaperFieldProvenance(id=new_uuid(), paper_id=paper.id, field="authors",
         source_id=verified.id, value=["Bob Jones"], is_current=False, decided_by="initial",
         decided_at=datetime(2027, 1, 1, tzinfo=timezone.utc)) for _ in range(251)])
-    unverified = make_source(db_session, paper.id, "pdf_embedded")
+    unverified = make_source(db_session, paper.id, "import_file")
     candidate = prov.record_claim(db_session, paper_id=paper.id, field="authors",
                                   value=["Carol White"], source_id=unverified.id)
     db_session.flush()
     rows, total = prov.conflict_page(db_session, limit=1)
     assert total == 1 and rows[0]["provenance_id"] == candidate.id
     assert "current_source_id" not in rows[0] and "quality" not in rows[0]
+
+
+@pytest.mark.parametrize("field,current,candidate", [
+    ("title", "A converter", "Another converter"),
+    ("authors", ["Alice Smith"], ["Bob Jones"]),
+    ("abstract", "This paper presents a converter.", "This work evaluates a sensor."),
+    ("year", 2023, 2024),
+    ("identifier:doi", "10.1234/one", "10.1234/two"),
+])
+def test_historical_local_candidates_do_not_create_user_tasks(db_session, field, current, candidate):
+    paper = make_paper(db_session)
+    seed(db_session, paper, field, current, "pdf_embedded")
+    source = make_source(db_session, paper.id, "pdf_embedded")
+    row = prov.record_claim(db_session, paper_id=paper.id, field=field, value=candidate, source_id=source.id)
+    assert prov.conflict_page(db_session)[1] == 0
+    assert not row.is_current and row.value == candidate and row.decision_at is None
+    assert prov.read_field(paper, field) == current
+
+
+def test_external_disagreement_still_requires_review_and_overrides_pdf(db_session):
+    paper = make_paper(db_session)
+    seed(db_session, paper, "authors", ["A. Smith"], "pdf_embedded")
+    external = make_source(db_session, paper.id, "import_file")
+    report = merge.merge_values(db_session, paper, {"authors": ["Alice Smith"]},
+                               source_type="import_file", source_id=external.id)
+    assert report.decisions[0].action == merge.ACTION_OVERRIDDEN
+    other = make_source(db_session, paper.id, "crossref")
+    report = merge.merge_values(db_session, paper, {"authors": ["Bob Jones"]},
+                               source_type="crossref", source_id=other.id)
+    assert report.decisions[0].action == merge.ACTION_CONFLICT
+    assert prov.conflict_page(db_session)[1] == 1
+
+
+def test_equal_external_confirmation_protects_pdf_value_without_rewriting_it(db_session):
+    paper = make_paper(db_session)
+    old = seed(db_session, paper, "authors", ["Alice Smith"], "pdf_embedded")
+    source = make_source(db_session, paper.id, "import_file")
+    for _ in range(2):
+        report = merge.merge_values(db_session, paper, {"authors": ["Alice Smith"]},
+                                   source_type="import_file", source_id=source.id)
+        assert report.decisions[0].action == merge.ACTION_UNCHANGED
+    current = prov.current_claim(db_session, paper.id, "authors")
+    assert current.source_id == source.id and current.decision_at is None and not old.is_current
+    assert len(prov.field_history(db_session, paper.id, "authors")) == 2
+    report = merge.merge_values(db_session, paper, {"authors": ["Bob Jones"]},
+        source_type="pdf_heuristic", evidence=context(["Bob Jones"]))
+    assert report.decisions[0].action == merge.ACTION_ARCHIVED
+    assert prov.read_field(paper, "authors") == ["Alice Smith"]
+
+
+def test_external_confirmation_also_protects_unclaimed_legacy_fields(db_session):
+    paper = make_paper(db_session, title="A converter")
+    source = make_source(db_session, paper.id, "import_file")
+    merge.merge_values(db_session, paper, {"title": paper.title}, source_type="import_file", source_id=source.id)
+    current = prov.current_claim(db_session, paper.id, "title")
+    assert current.source_id == source.id and current.value == "A converter"
 
 
 def indexed(session):

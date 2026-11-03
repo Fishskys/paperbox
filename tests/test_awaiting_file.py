@@ -367,6 +367,16 @@ def test_an_unrelated_pdf_keeps_its_own_paper(db_session, monkeypatch) -> None:
     assert db_session.get(Paper, temp.id) is not None
 
 
+def test_body_fallback_does_not_bypass_an_embedded_identity_conflict(db_session):
+    make_shell(db_session, {"title": "Unrelated detector calibration", "identifier:doi": DOI})
+    make_shell(db_session, {"title": SHELL_TITLE, "authors": ["Alice Smith"], "year": 2015},
+               source_ref=f"acceptance:{new_uuid()}")
+    temp = make_temp_paper(db_session)
+    result = tasks._match_existing_paper(db_session, temp, None, make_pdf({"/Subject": f"doi:{DOI}"}),
+                                         [PageText(page=1, text=FIRST_PAGE)])
+    assert result is None
+
+
 def test_a_second_version_joins_the_indexed_paper(db_session, monkeypatch) -> None:
     """A preprint arriving after the published PDF is stored, not indexed."""
     existing = make_temp_paper(db_session, title="Low Power SRAM Leakage Reduction")

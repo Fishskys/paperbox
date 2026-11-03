@@ -24,6 +24,7 @@ it as unmatched.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import PurePath
@@ -35,7 +36,8 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import Paper, PaperFile, PaperIdentifier, PaperSource, new_uuid
 from app.services import metadata_identifiers as ids
-from app.services import metadata_merge
+from app.services import metadata_policy as policy
+from app.services import provenance_service as prov
 from app.services import metadata_service
 from app.services import paper_service
 
@@ -164,7 +166,24 @@ class IdentifierHit:
 
     @property
     def structured(self) -> bool:
-        return metadata_merge.is_structured(self.source_type)
+        return _bibliographic(self.source_type)
+
+
+def _bibliographic(source_type: str | None) -> bool:
+    return (policy.source_authority(source_type) or 0) >= 2
+
+
+def _identifier_source_type(session: Session, row: PaperIdentifier) -> str | None:
+    first = session.get(PaperSource, row.first_source_id) if row.first_source_id else None
+    source_type = first.source_type if first is not None else None
+    claim = prov.current_claim(session, row.paper_id, f"identifier:{row.scheme}")
+    if claim and policy.equivalent_values(f"identifier:{row.scheme}", claim.value, row.normalized_value):
+        source = session.get(PaperSource, claim.source_id) if claim.source_id else None
+        if claim.decision_at is not None or claim.decided_by == prov.DECIDED_MANUAL:
+            return "manual"
+        if source is not None and (policy.source_authority(source.source_type) or 0) >= (policy.source_authority(source_type) or 0):
+            source_type = source.source_type
+    return source_type
 
 
 def _year(value: int | str | None) -> int | None:
@@ -198,18 +217,13 @@ def find_identifier_hits(
             # The identifier points at a soft-deleted paper: treat it as a miss
             # so the record can attach to a live one instead of a tombstone.
             continue
-        source = (
-            session.get(PaperSource, row.first_source_id)
-            if row.first_source_id
-            else None
-        )
         hits.append(
             IdentifierHit(
                 paper=paper,
                 row=row,
                 method=method,
                 value=value,
-                source_type=source.source_type if source is not None else None,
+                source_type=_identifier_source_type(session, row),
             )
         )
     return hits
@@ -403,15 +417,13 @@ def find_by_title(
     if not candidates:
         return None, None, "no title match", []
 
-    wanted_author = paper_service.normalize_text(
-        authors[0] if authors else None
-    )
+    wanted_author = str(authors[0] or "").strip() if authors else ""
     wanted_year = _year(year)
     scored: list[dict[str, Any]] = []
     best: list[Paper] = []
     for paper in candidates:
-        author = paper_service.normalize_text(_first_author_of(paper))
-        author_hit = bool(wanted_author) and author == wanted_author
+        author = _first_author_of(paper)
+        author_hit = _author_compatible(author, wanted_author)
         year_hit = wanted_year is not None and paper.year == wanted_year
         score = 1.0 if (author_hit and year_hit) else 0.5
         scored.append(
@@ -437,6 +449,18 @@ def find_by_title(
             scored,
         )
     return None, CONFIDENCE_TITLE_ONLY, "title only", scored
+
+
+def _author_compatible(left: str | None, right: str | None) -> bool:
+    """Only a supporting signal after exact title matching; never merge authors."""
+    if not left or not right:
+        return False
+    if paper_service.normalize_text(left) == paper_service.normalize_text(right):
+        return True
+    def folded(name):
+        return "".join(c for c in unicodedata.normalize("NFD", name) if not unicodedata.combining(c))
+    a, b = [folded(left)], [folded(right)]
+    return policy.equivalent_values("authors", a, b) or policy.byline_abbreviations(a, b)
 
 
 def find_by_filename(session: Session, filename: str | None) -> list[Paper]:
@@ -563,12 +587,7 @@ def _strong_conflicts(
         incoming = normalized.get(row.scheme)
         if not incoming or row.normalized_value == incoming:
             continue
-        source = (
-            session.get(PaperSource, row.first_source_id)
-            if row.first_source_id
-            else None
-        )
-        if source is not None and metadata_merge.is_structured(source.source_type):
+        if _bibliographic(_identifier_source_type(session, row)):
             conflicts.append(
                 f"structured {row.scheme} is {row.normalized_value}"
             )

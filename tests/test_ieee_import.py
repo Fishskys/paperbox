@@ -597,7 +597,7 @@ def test_apply_stores_the_raw_record(db_session) -> None:
     assert source.raw["article_number"] == "7065247"
     assert source.content_type == "Journals"
     assert source.match_method == "doi"
-    assert source.match_confidence == 1.0
+    assert source.match_confidence == 0.95
     assert source.paper_id == paper.id
     assert source.importer == "metadata_import"
 

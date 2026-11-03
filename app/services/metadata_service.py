@@ -444,17 +444,26 @@ def detect_year(pages: Sequence[PageText], url: str | None = None) -> int | None
 
 
 def detect_doi(pages: Sequence[PageText]) -> str | None:
-    """First DOI-looking token, scanning the first two pages (page 1 first).
-
-    The DOI is usually on the first page, but a few templates (journal footers,
-    IEEE two-column first pages whose DOI is set in a margin) only show it on
-    page 2. Page 1 still wins whenever it carries a token, so a DOI printed next
-    to the title is preferred over one that merely appears at the top of page 2.
-    """
+    """Prefer declared DOI lines; exclude reference sections and ambiguity."""
     for page in list(pages)[:2]:
-        match = _DOI.search(page.text)
-        if match is not None:
-            return match.group(0).rstrip(".,;")
+        text = re.split(r"(?im)^\s*(?:(?:[IVX]+|\d+)[.)]?\s+)?(?:references|bibliography|参考文献)\s*[:.]?\s*$",
+                        page.text, maxsplit=1)[0]
+        candidates, declared = {}, {}
+        for line in text.splitlines():
+            # A numbered bibliography item can appear on a continuation page.
+            if re.match(r"\s*\[\d+\]", line):
+                continue
+            for match in _DOI.finditer(line):
+                value = match.group(0).rstrip(".,;")
+                candidates.setdefault(value.casefold(), value)
+                prefix = line[:match.start()]
+                if re.search(r"(?:\bdoi\s*:?\s*|\bdoi\.org/|\bdigital object identifier\s*:?\s*)$", prefix, re.I):
+                    declared.setdefault(value.casefold(), value)
+        chosen = declared or candidates
+        if len(chosen) == 1:
+            return next(iter(chosen.values()))
+        if chosen:
+            return None
     return None
 
 

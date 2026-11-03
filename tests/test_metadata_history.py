@@ -75,14 +75,14 @@ def test_stale_or_human_protected_previews_cannot_apply(db_session, change):
     assert prov.read_field(paper, "authors") == ["Tomislav Matic"]
 
 
-def test_unsafe_body_retains_ambiguous_claims_with_evidence(db_session):
+def test_unsafe_body_archives_candidates_and_retains_evidence(db_session):
     paper, _, candidate, _, snapshot, extracted = fixture(db_session)
     extracted["quality"]["byline_complete"] = False
     decision = history.plan(snapshot, extracted)
-    assert not decision["changed"] and decision["pending"]
+    assert not decision["changed"] and not decision["pending"]
     history.apply(db_session, snapshot, extracted, decision)
-    assert candidate.decided_by == "initial"
-    assert prov.conflict_page(db_session)[1] == 1
+    assert candidate.decided_by == prov.DECIDED_QUALITY_REJECTED
+    assert prov.conflict_page(db_session)[1] == 0
     current = prov.current_claim(db_session, paper.id, "authors")
     assert db_session.get(PaperSource, current.source_id).raw["quality"] == extracted["quality"]
 
@@ -96,7 +96,7 @@ def test_unverified_evidence_does_not_overwrite_materialized_spelling_drift(db_s
     extracted["quality"]["byline_complete"] = False
     decision = history.plan(snapshot, extracted)
     assert decision["selected"] == ["Tomislav Matić"] and not decision["changed"]
-    assert decision["pending"]
+    assert not decision["pending"]
     history.apply(db_session, snapshot, extracted, decision)
     assert prov.read_field(paper, "authors") == ["Tomislav Matić"]
 
@@ -106,7 +106,7 @@ def test_unverified_evidence_does_not_overwrite_materialized_spelling_drift(db_s
 def test_history_does_not_introduce_changed_letters_or_suspect_markers(db_session, before, after):
     paper, _, _, _, snapshot, extracted = fixture(db_session, kept=before, rejected=after)
     decision = history.plan(snapshot, extracted)
-    assert decision["selected"] == before and not decision["changed"] and decision["pending"]
+    assert decision["selected"] == before and not decision["changed"] and not decision["pending"]
     history.apply(db_session, snapshot, extracted, decision)
     assert prov.read_field(paper, "authors") == before
 
