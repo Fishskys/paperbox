@@ -19,12 +19,13 @@ test("conventional search uses metadata scopes, server pagination and restorable
   await page.getByRole("combobox", { name: "检索字段" }).click();
   await page.locator(".ant-select-item-option-content").getByText("作者", { exact: true }).click();
   await expect(page).toHaveURL(/scope=authors/);
+  await expect.poll(() => requests.at(-1)?.searchParams.get("scope")).toBe("authors");
   const jumps = page.locator(".ant-pagination-options-quick-jumper input");
   await jumps.first().fill("2"); await jumps.first().press("Enter");
   await expect.poll(() => requests.at(-1)?.searchParams.get("offset")).toBe("20");
   await page.reload();
   await expect(page).toHaveURL(/page=2/);
-  expect(requests.at(-1)?.searchParams.get("scope")).toBe("authors");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("scope")).toBe("authors");
   await page.getByRole("combobox", { name: "结果排序" }).click();
   await page.locator(".ant-select-item-option-content").getByText("年份从新到旧", { exact: true }).click();
   await expect.poll(() => requests.at(-1)?.searchParams.get("sort")).toBe("year_desc");

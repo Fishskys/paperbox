@@ -166,6 +166,28 @@ export type ReviewSource = {
   source_ref: string;
   match_status: string;
   match_method?: string | null;
+  paper_id?: string | null;
+};
+export type SourceCandidate = {
+  paper_id: string;
+  title?: string;
+  authors?: string[];
+  year?: number | null;
+  doi?: string | null;
+  filename?: string | null;
+  identifier_conflicts?: string[];
+};
+export type SourceReviewDetail = {
+  source: ReviewSource;
+  revision: string;
+  values: Record<string, unknown>;
+  parse_error?: string | null;
+  match: { paper_id: string | null; match_status: string; match_method?: string | null;
+    reason: string; conflicts: string[]; candidates: SourceCandidate[] } | null;
+  history: { id: string; action: string; actor: string; reason: string; created_at: string }[];
+  applied?: boolean;
+  created_paper_id?: string | null;
+  conflicts?: Record<string, unknown>[];
 };
 export type MetadataConflict = {
   paper_id: string;

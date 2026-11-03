@@ -617,6 +617,10 @@ h1 {
   width: 100%;
   margin: 16px 0;
 }
+.source-review-command { margin: 12px 0; }
+.source-review-commands { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0; }
+.source-candidates { margin: 12px 0 20px; }
+.source-candidates .metadata-detail { display: block; white-space: normal; }
 .metadata-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

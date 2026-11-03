@@ -2,14 +2,12 @@ import {
   App,
   Button,
   Descriptions,
-  Drawer,
-  Input,
   Modal,
   Select,
   Table,
   Tag,
 } from "antd";
-import { Check, Link as LinkIcon, RefreshCw } from "lucide-react";
+import { FileSearch, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, errorMessage, post } from "./api";
@@ -17,10 +15,11 @@ import { Failure } from "./components";
 import type {
   MetadataConflict,
   MetadataReviewReport,
-  PaperList,
   ReviewSource,
 } from "./contracts";
 import { useResource } from "./hooks";
+import SourceReviewDrawer from "./SourceReviewDrawer";
+import SourceRematchBatch from "./SourceRematchBatch";
 
 export default function MetadataReview({ active }: { active: boolean }) {
   const [refresh, setRefresh] = useState(0);
@@ -34,11 +33,7 @@ export default function MetadataReview({ active }: { active: boolean }) {
     refresh,
   );
   const [source, setSource] = useState<ReviewSource | null>(null);
-  const [query, setQuery] = useState("");
-  const papers = useResource<PaperList>(
-    source ? `/api/papers?limit=20&q=${encodeURIComponent(query)}` : null,
-  );
-  const [paperId, setPaperId] = useState<string>();
+  const [selected, setSelected] = useState<React.Key[]>([]);
   const [decision, setDecision] = useState<{
     conflict: MetadataConflict;
     adopt: boolean;
@@ -59,7 +54,7 @@ export default function MetadataReview({ active }: { active: boolean }) {
     }
   }, [active]);
   async function submit() {
-    if (guard.current || (!decision && (!source || !paperId))) return;
+    if (guard.current || !decision) return;
     guard.current = true;
     setBusy(true);
     setError("");
@@ -71,15 +66,9 @@ export default function MetadataReview({ active }: { active: boolean }) {
           `/api/papers/${encodeURIComponent(conflict.paper_id)}/metadata/${adopt ? "rollback" : "conflicts/dismiss"}`,
           { field: conflict.field, provenance_id: conflict.provenance_id },
         );
-      } else if (source && paperId) {
-        await post(
-          `/api/metadata/sources/${encodeURIComponent(source.source_id)}/attach`,
-          { paper_id: paperId },
-        );
       }
       setDecision(null);
       setSource(null);
-      setPaperId(undefined);
       setRefresh((value) => value + 1);
       void message.success("复核已保存");
     } catch (error) {
@@ -99,11 +88,12 @@ export default function MetadataReview({ active }: { active: boolean }) {
         <Select
           aria-label="来源匹配状态"
           value={status}
-          onChange={(value) => { setStatus(value); setSourcePage(1); }}
+          onChange={(value) => { setStatus(value); setSourcePage(1); setSelected([]); }}
           options={[
             { value: "", label: "全部待复核来源" },
             { value: "ambiguous", label: "匹配有歧义" },
             { value: "pending", label: "待匹配" },
+            { value: "rejected", label: "已拒绝" },
           ]}
         />
         <Button
@@ -117,6 +107,8 @@ export default function MetadataReview({ active }: { active: boolean }) {
         >
           刷新复核列表
         </Button>
+        <SourceRematchBatch sourceIds={selected.map(String)} onDone={() => { setSelected([]); setRefresh((n) => n + 1); }} />
+        {!!selected.length && <span className="muted">已选择 {selected.length} 条</span>}
       </div>
       {review.error && (
         <Failure
@@ -131,12 +123,13 @@ export default function MetadataReview({ active }: { active: boolean }) {
           {review.data.conflicts_total ?? review.data.conflicts.length} 项字段冲突。
         </p>
       )}
-      <h2>待复核来源</h2>
+      <h2>{status === "rejected" ? "已拒绝来源" : "待复核来源"}</h2>
       <Table<ReviewSource>
         className="data-table"
         rowKey="source_id"
         loading={review.loading}
         dataSource={review.data?.items || []}
+        rowSelection={status === "rejected" ? undefined : { selectedRowKeys: selected, onChange: setSelected, preserveSelectedRowKeys: true }}
         scroll={{ x: 650 }}
         pagination={{ current: sourcePage, pageSize: 20, total: review.data?.total, showSizeChanger: false, showQuickJumper: true, onChange: setSourcePage }}
         locale={{ emptyText: review.error ? "来源加载失败" : "暂无待复核来源" }}
@@ -159,6 +152,8 @@ export default function MetadataReview({ active }: { active: boolean }) {
                   ? "匹配有歧义"
                   : value === "pending"
                     ? "待匹配"
+                    : value === "rejected"
+                    ? "已拒绝"
                     : value}
               </Tag>
             ),
@@ -169,16 +164,14 @@ export default function MetadataReview({ active }: { active: boolean }) {
             width: 120,
             render: (_, item) => (
               <Button
-                icon={<LinkIcon size={14} />}
+                icon={<FileSearch size={14} />}
                 disabled={busy}
                 onClick={() => {
                   setSource(item);
-                  setQuery("");
-                  setPaperId(undefined);
                   setError("");
                 }}
               >
-                关联论文
+                查看与处理
               </Button>
             ),
           },
@@ -250,77 +243,8 @@ export default function MetadataReview({ active }: { active: boolean }) {
           },
         ]}
       />
-      <Drawer
-        title="关联论文"
-        styles={{ wrapper: { maxWidth: "100vw" } }}
-        open={!!source}
-        onClose={() => {
-          if (!busy) setSource(null);
-        }}
-        destroyOnHidden
-      >
-        {source && (
-          <>
-            <Descriptions
-              column={1}
-              items={[
-                {
-                  key: "ref",
-                  label: "来源记录",
-                  children: (
-                    <span className="metadata-reference">
-                      {source.source_ref}
-                    </span>
-                  ),
-                },
-                {
-                  key: "type",
-                  label: "来源类型",
-                  children: source.source_type,
-                },
-                {
-                  key: "method",
-                  label: "匹配方式",
-                  children: source.match_method || "—",
-                },
-              ]}
-            />
-            {error && <Failure message={error} />}
-            {papers.error && <Failure message={papers.error} />}
-            <Input.Search
-              disabled={busy}
-              aria-label="搜索目标论文"
-              placeholder="搜索论文标题"
-              onSearch={(value) => {
-                setQuery(value);
-                setPaperId(undefined);
-              }}
-            />
-            <Select
-              aria-label="目标论文"
-              disabled={busy}
-              placeholder="选择目标论文"
-              className="metadata-paper-picker"
-              value={paperId}
-              onChange={setPaperId}
-              loading={papers.loading}
-              options={(papers.data?.papers || []).map((paper) => ({
-                value: paper.paper_id,
-                label: `${paper.title || "未命名论文"}${paper.year ? ` · ${paper.year}` : ""}`,
-              }))}
-            />
-            <Button
-              type="primary"
-              icon={<Check size={16} />}
-              disabled={!paperId || busy}
-              loading={busy}
-              onClick={() => void submit()}
-            >
-              确认关联
-            </Button>
-          </>
-        )}
-      </Drawer>
+      {source && <SourceReviewDrawer key={source.source_id} sourceId={source.source_id}
+        onClose={() => setSource(null)} onDone={() => { setSelected([]); setRefresh((n) => n + 1); }} />}
       <Modal
         title={decision?.adopt ? "采纳被拒值" : "保留现值"}
         open={!!decision}

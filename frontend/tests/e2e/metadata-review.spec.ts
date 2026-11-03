@@ -68,6 +68,11 @@ test("metadata review is inside import and associates sources before resolving c
       },
     }),
   );
+  await page.route("**/api/metadata/sources/source-1", (route) => route.fulfill({ json: {
+    source: items[0], revision: "a".repeat(64), values: { title: "Imported paper" }, history: [],
+    match: { match_status: "ambiguous", paper_id: null, reason: "title only", conflicts: [], candidates: [] },
+  } }));
+  await page.route("**/api/papers/paper-1/metadata", (route) => route.fulfill({ json: { values: { title: "Target paper", year: 2024 } } }));
   await page.route("**/api/metadata/sources/source-1/attach", (route) => {
     writes.push({ path: "attach", body: route.request().postDataJSON() });
     items = [];
@@ -100,13 +105,14 @@ test("metadata review is inside import and associates sources before resolving c
       .locator(".sidebar")
       .getByRole("link", { name: "元数据复核", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "关联论文", exact: true }).click();
-  const drawer = page.getByRole("dialog", { name: "关联论文", exact: true });
+  await page.getByRole("button", { name: "查看与处理", exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: "来源详情", exact: true });
   await drawer.getByRole("combobox", { name: "目标论文", exact: true }).click();
   await page.getByText("Target paper · 2024", { exact: true }).click();
   await drawer.getByRole("button", { name: "确认关联", exact: true }).click();
+  await page.getByRole("dialog", { name: "关联论文", exact: true }).getByRole("button", { name: "确认处理", exact: true }).click();
   await expect(page.getByText("ieee:one", { exact: true })).toHaveCount(0);
-  expect(writes[0]).toEqual({ path: "attach", body: { paper_id: "paper-1" } });
+  expect(writes[0]).toMatchObject({ path: "attach", body: { paper_id: "paper-1", revision: "a".repeat(64) } });
   const year = page
     .getByRole("row")
     .filter({ has: page.getByRole("cell", { name: "year", exact: true }) });
