@@ -93,6 +93,18 @@ class MetadataIndexUpdate(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class MetadataSourceReviewEvent(Base):
+    __tablename__ = "metadata_source_review_events"
+    __table_args__ = (Index("ix_source_review_history", "source_id", "created_at"),)
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    source_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("paper_sources.id", ondelete="CASCADE"), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 # --------------------------------------------------------------------------- #
 # papers
 # --------------------------------------------------------------------------- #

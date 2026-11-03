@@ -481,8 +481,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077 --workers 1
 | 档位 | 端点 |
 |---|---|
 | **public** | `GET /health`、`GET /`、`GET /docs`、`/redoc`、`/openapi.json`（框架/运维端点，任何策略下都不校验凭证） |
-| **read**（13 个业务读） | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review`。读门 `public`（默认）时**不读凭证**：缺 key、key 写错都照常 200（调用者记匿名 read 身份）；读门 `key` 时缺凭证 401、key 写错 403、`read` 档 key 通过 |
-| **write** | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/{id}/attach`、`/apply`；**`DELETE /api/papers/{paper_id}`** |
+| **read** | `POST /api/search`；`GET /api/papers`（列表/详情/file/chunks/degradations/metadata）；`GET /api/consistency`；`GET /api/search-logs`；`GET /api/jobs*`；`GET /api/metadata/review`、`/api/metadata/sources/{source_id}`。读门 `public`（默认）时**不读凭证**：缺 key、key 写错都照常 200（调用者记匿名 read 身份）；读门 `key` 时缺凭证 401、key 写错 403、`read` 档 key 通过 |
+| **write** | 五个 `ingest*`；`POST /api/jobs/{id}/retry`；`POST /api/papers/{id}/reindex`（单篇）；`PATCH /api/papers/{id}/metadata`、rollback、`conflicts/dismiss`；`POST /api/metadata/import`、`/sources/**`（含匹配预览与确认）、`/apply`；**`DELETE /api/papers/{paper_id}`** |
 | **admin** | **只有** `POST /api/papers/reindex`（批量/整库重建：小时级、打满 embedding） |
 
 ### 2.2 服务与自检
@@ -628,7 +628,13 @@ curl -X POST http://127.0.0.1:8077/api/search \
 | GET | `/api/metadata/review` | 待复核清单（冲突 / 歧义） | `status`（可重复）、`limit`（默认 50） |
 | POST | `/api/metadata/import` | 导入外部题录（IEEE raw / CSL / 通用结构，支持 JSON 和 JSONL） | `source_type`（默认 `import_file`）、`dry_run`（默认 `true`，只看不写）、`apply`、`limit` |
 | POST | `/api/metadata/apply` | 提交复核决定 | body `entries`（复核条目）、`mode`（`fill` 默认 / `overwrite`）、`fields`（限定字段） |
-| POST | `/api/metadata/sources/{source_id}/attach` | 把某条来源记录挂到指定论文 | `source_id`（路径，**必填**）；body `paper_id`（**必填**） |
+| POST | `/api/metadata/sources/{source_id}/attach` | 把待复核来源挂到指定论文，检查强身份冲突 | `source_id`（路径，**必填**）；body `paper_id`（**必填**）、`revision`（建议填写） |
+| GET | `/api/metadata/sources/{source_id}` | 来源导入值、候选、匹配原因、版本及处理历史 | `source_id`（路径，**必填**） |
+| POST | `/api/metadata/sources/{source_id}/rematch` | 重新匹配，默认只预览 | body `apply`（默认 false）；写入需 `revision`、`expected_paper_id`（无匹配时 null） |
+| POST | `/api/metadata/sources/rematch` | 批量重新匹配，最多 50 条，逐条报告失败 | body `items: [{source_id, revision?, expected_paper_id?}]`、`apply`（默认 false） |
+| POST | `/api/metadata/sources/{source_id}/create-paper` | 独立创建等待文件的论文，保留原始来源 | body `revision`（必填）；已有标识符不能重复入库，无需填写原因 |
+| POST | `/api/metadata/sources/{source_id}/reject` | 拒绝未归属来源；重导入不会自动恢复 | body `revision`（必填），无需填写原因 |
+| POST | `/api/metadata/sources/{source_id}/restore` | 将已拒绝来源恢复为待匹配 | body `revision`（必填） |
 
 导入支持直接发送 JSON，或通过 multipart 的 `file` 字段上传 `.json` / `.jsonl` / `.ndjson` 文件。
 直接发送 JSONL 使用 `Content-Type: application/x-ndjson`、`application/ndjson` 或 `application/jsonl`。

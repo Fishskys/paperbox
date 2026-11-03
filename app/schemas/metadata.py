@@ -212,6 +212,7 @@ class AttachIn(BaseModel):
     """Body of ``POST /api/metadata/sources/{source_id}/attach``."""
 
     paper_id: str
+    revision: str | None = None
 
 
 class AttachOut(BaseModel):
@@ -225,6 +226,50 @@ class AttachOut(BaseModel):
     match_status: str
     match_method: str | None = None
     merged_fields: list[str] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SourceReviewOut(BaseModel):
+    source: SourceOut
+    revision: str
+    values: dict[str, Any] = Field(default_factory=dict)
+    match: dict[str, Any] | None = None
+    parse_error: str | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    applied: bool = False
+    created_paper_id: str | None = None
+    merged_fields: list[str] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SourceActionIn(BaseModel):
+    revision: str = Field(min_length=64, max_length=64)
+
+
+class SourceRestoreIn(BaseModel):
+    revision: str = Field(min_length=64, max_length=64)
+
+
+class SourceRematchIn(BaseModel):
+    apply: bool = False
+    revision: str | None = None
+    expected_paper_id: str | None = None
+
+
+class SourceRematchEntry(BaseModel):
+    source_id: str
+    revision: str | None = None
+    expected_paper_id: str | None = None
+
+
+class SourceRematchBatchIn(BaseModel):
+    items: list[SourceRematchEntry] = Field(min_length=1, max_length=50)
+    apply: bool = False
+
+
+class SourceRematchBatchOut(BaseModel):
+    items: list[dict[str, Any]]
+    applied: int
 
 
 class ApplyEntryIn(BaseModel):

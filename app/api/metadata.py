@@ -31,6 +31,12 @@ from app.schemas.metadata import (
     ReextractIn,
     ReextractOut,
     ReviewOut,
+    SourceReviewOut,
+    SourceActionIn,
+    SourceRestoreIn,
+    SourceRematchIn,
+    SourceRematchBatchIn,
+    SourceRematchBatchOut,
 )
 from app.services import metadata_import as importer
 from app.services import metadata_matcher as matcher
@@ -38,6 +44,8 @@ from app.services import metadata_merge as merge
 from app.services import metadata_reextract
 from app.services import metadata_sources as sources
 from app.services import paper_service, provenance_service
+from app.services import metadata_source_review as source_review
+from app.services.api_key_service import AuthIdentity
 
 logger = get_logger(__name__)
 
@@ -181,6 +189,7 @@ def attach_source(
     source_id: str,
     body: AttachIn,
     session: Session = Depends(get_db),
+    identity: AuthIdentity = Depends(require_write),
 ) -> AttachOut:
     """Attach an unmatched source record to a paper and merge its values in.
 
@@ -188,22 +197,74 @@ def attach_source(
     record are replayed through the merge engine (the ``raw`` snapshot is what makes
     that possible without asking the platform again).
     """
-    source = _load_source(session, source_id)
-    paper = paper_service.get_paper(session, body.paper_id)
-    if paper is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=PAPER_NOT_FOUND)
-
-    sources.attach_source(session, source, paper, method=matcher.METHOD_MANUAL)
-    merged = _replay_source(session, source, paper)
+    result = _review_call(source_review.attach, session, source_id, body.paper_id,
+                          actor=_review_actor(identity), revision=body.revision)
     session.commit()
-    return AttachOut(
-        source_id=source.id,
-        paper_id=paper.id,
-        source_type=source.source_type,
-        match_status=source.match_status,
-        match_method=source.match_method,
-        merged_fields=merged,
-    )
+    return AttachOut.model_validate(result)
+
+
+def _review_actor(identity) -> str:
+    return identity.prefix if isinstance(identity, AuthIdentity) else "anonymous"
+
+
+def _review_call(function, *args, **kwargs):
+    from sqlalchemy.exc import IntegrityError
+    try:
+        return function(*args, **kwargs)
+    except source_review.ReviewError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="论文或标识符已变化，请刷新后重试") from exc
+
+
+@router.get("/sources/{source_id}", response_model=SourceReviewOut)
+def source_detail(source_id: str, session: Session = Depends(get_db)):
+    return _review_call(source_review.detail, session, source_id)
+
+
+@router.post("/sources/{source_id}/rematch", response_model=SourceReviewOut)
+def rematch_source(source_id: str, body: SourceRematchIn, session: Session = Depends(get_db),
+                   identity: AuthIdentity = Depends(require_write)):
+    result = _review_call(source_review.rematch, session, source_id, actor=_review_actor(identity),
+                          apply=body.apply, revision=body.revision, expected_paper_id=body.expected_paper_id)
+    session.commit()
+    return result
+
+
+@router.post("/sources/rematch", response_model=SourceRematchBatchOut)
+def rematch_sources(body: SourceRematchBatchIn, session: Session = Depends(get_db),
+                    identity: AuthIdentity = Depends(require_write)):
+    result = _review_call(source_review.rematch_batch, session,
+                          [row.model_dump() for row in body.items], actor=_review_actor(identity), apply=body.apply)
+    session.commit()
+    return result
+
+
+@router.post("/sources/{source_id}/create-paper", response_model=SourceReviewOut)
+def create_source_paper(source_id: str, body: SourceActionIn, session: Session = Depends(get_db),
+                        identity: AuthIdentity = Depends(require_write)):
+    result = _review_call(source_review.create_paper, session, source_id,
+                          actor=_review_actor(identity), revision=body.revision)
+    session.commit()
+    return result
+
+
+@router.post("/sources/{source_id}/reject", response_model=SourceReviewOut)
+def reject_source(source_id: str, body: SourceActionIn, session: Session = Depends(get_db),
+                   identity: AuthIdentity = Depends(require_write)):
+    result = _review_call(source_review.reject, session, source_id,
+                          actor=_review_actor(identity), revision=body.revision)
+    session.commit()
+    return result
+
+
+@router.post("/sources/{source_id}/restore", response_model=SourceReviewOut)
+def restore_source(source_id: str, body: SourceRestoreIn, session: Session = Depends(get_db),
+                    identity: AuthIdentity = Depends(require_write)):
+    result = _review_call(source_review.restore, session, source_id,
+                          actor=_review_actor(identity), revision=body.revision)
+    session.commit()
+    return result
 
 
 def _replay_source(session: Session, source, paper) -> list[str]:

@@ -35,7 +35,52 @@ from app.core.config import settings  # noqa: E402
 from app.parsing.pdf import extract_pages  # noqa: E402
 from app.search import opensearch  # noqa: E402
 from app.services import metadata_index_sync, metadata_manual, metadata_reextract, paper_service  # noqa: E402
-from app.services import metadata_history, metadata_import, metadata_merge, metadata_sources, provenance_service  # noqa: E402
+from app.services import metadata_history, metadata_import, metadata_merge, metadata_source_review, metadata_sources, provenance_service  # noqa: E402
+
+
+def check_source_review(session: Session) -> dict:
+    paper = Paper(id=new_uuid(), title="Synthetic Source Review", fingerprint=new_uuid(), status="PENDING", year=2020)
+    session.add(paper)
+    session.flush()
+    paper_service.set_paper_authors(session, paper, ["Alex Reviewer"])
+
+    def source(raw, source_type="import_file"):
+        parsed = metadata_import.parse_records([raw])[0]
+        return metadata_sources.upsert_source(session, source_type=source_type, source_ref=parsed.source_ref,
+            raw=raw, match_status="ambiguous")
+
+    raw = {"title": paper.title, "authors": ["A. Reviewer"], "year": 2020, "doi": "10.5555/source-review"}
+    row = source(raw)
+    preview = metadata_source_review.rematch(session, row.id, actor="acceptance")
+    assert not preview["applied"] and row.paper_id is None
+    metadata_source_review.rematch(session, row.id, actor="acceptance", apply=True,
+        revision=preview["revision"], expected_paper_id=paper.id)
+    session.commit()
+    assert row.paper_id == paper.id and row.raw == raw
+    rejected = source({"title": "Synthetic Unrelated Source", "doi": "10.5555/source-rejected"})
+    before = metadata_source_review.detail(session, rejected.id)
+    after = metadata_source_review.reject(session, rejected.id, actor="acceptance", revision=before["revision"])
+    assert metadata_import.import_payload(session, [rejected.raw], apply=True).unchanged == 1
+    metadata_source_review.restore(session, rejected.id, actor="acceptance", revision=after["revision"])
+    assert rejected.match_status == "pending"
+    confirmed = source(raw, "crossref")
+    snapshot = metadata_source_review.detail(session, confirmed.id)
+    batch = metadata_source_review.rematch_batch(session, [
+        {"source_id": confirmed.id, "revision": snapshot["revision"], "expected_paper_id": paper.id},
+        {"source_id": rejected.id, "revision": before["revision"]},
+    ], actor="acceptance", apply=True)
+    assert batch["applied"] == 1 and batch["items"][1]["status"] == 409
+    independent = source({**raw, "doi": "10.5555/source-independent"})
+    snapshot = metadata_source_review.detail(session, independent.id)
+    result = metadata_source_review.create_paper(session, independent.id, actor="acceptance", revision=snapshot["revision"])
+    session.commit()
+    shell = session.get(Paper, result["created_paper_id"])
+    assert shell.status == "AWAITING_FILE" and shell.files == []
+    assert independent.raw["doi"] == "10.5555/source-independent" and paper.doi == "10.5555/source-review"
+    assert metadata_source_review.detail(session, row.id)["history"][0]["actor"] == "acceptance"
+    return {"source_rematch_preview_and_apply": True, "source_rejection_restore": True,
+            "source_batch_partial_failure": True, "source_independent_admission": True,
+            "source_raw_and_audit_preserved": True}
 
 
 def check_external_import(session: Session) -> dict:
@@ -166,7 +211,7 @@ def run(session: Session, client, index: str) -> dict:
     assert actual["authors"] == ["Manual Author", "Manual Author"]
     assert actual["text"] == original["text"] and actual["embedding"] == original["embedding"]
     assert metadata_manual.metadata_view(session, paper)["index_sync"]["pending"] is False
-    return {**check_external_import(session), "dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
+    return {**check_source_review(session), **check_external_import(session), "dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
             "manual_protected": True, "repeated_authors": True, "metadata_only_index_sync": True,
             "historical_evidence": True, "corroborated_initials": True, "invalid_author_history_retained": True}
 

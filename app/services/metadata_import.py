@@ -797,7 +797,7 @@ class _ExistingSourceSnapshot:
 
     @property
     def is_unchanged(self) -> bool:
-        return bool(self.paper_id and self.paper_deleted_at is None)
+        return self.match_status == sources.MATCH_STATUS_REJECTED or bool(self.paper_id and self.paper_deleted_at is None)
 
 
 def import_records(
@@ -995,8 +995,8 @@ def _import_one(
     existing = sources.find_source(session, source_type, parsed.source_ref)
     if (
         existing is not None
-        and existing.paper_id
-        and (existing.paper is None or existing.paper.deleted_at is None)
+        and (existing.match_status == sources.MATCH_STATUS_REJECTED or existing.paper_id
+             and (existing.paper is None or existing.paper.deleted_at is None))
     ):
         # "already imported" only counts when the record still points at a live
         # paper: a soft-deleted one released its identifiers (deletion frees

@@ -603,6 +603,12 @@ def _strong_conflicts(
     return list(dict.fromkeys(conflicts))
 
 
+def association_conflicts(session: Session, paper: Paper, match_input: MatchInput, *, manual: bool = False) -> list[str]:
+    """Shared strong-identity vetoes for automatic and reviewed attribution."""
+    conflicts = _strong_conflicts(session, paper, match_input, match_input.normalized_identifiers())
+    return [reason for reason in conflicts if not manual or reason != "incoming title is unrelated to the candidate title"]
+
+
 def _candidate_detail(
     paper: Paper,
     *,

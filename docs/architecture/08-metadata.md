@@ -365,6 +365,16 @@ uv run python scripts/reconcile_pdf_metadata.py \
 
 摄取与重新提取会把严格文件名中的 DOI/arXiv 登记为 `source_type='filename'` 的弱声明：只在论文尚无该 scheme 且值未被其他论文占用时填空，不能覆盖文档内嵌、结构化导入或人工值；IEEE article number 不从 DOI 尾部推导。
 
+#### 来源归属复核
+
+`metadata_source_review` 编排来源详情、重新匹配、人工关联、独立入库、拒绝及恢复。详情只返回解析后的导入值、当前匹配解释与候选论文摘要，不返回完整 `raw`。预览不写入；单条或最多 50 条的批量重新匹配必须显式 `apply` 才写入，批量条目使用独立保存点，单条失败不撤销其他已成功条目。无唯一匹配时不创建论文。
+
+详情提供 `revision`，所有新写操作必须携带该值，状态或处理历史变化后返回 409，要求刷新；应用唯一匹配还校验 `expected_paper_id`，不会把旧预览应用到新候选。旧版人工关联接口仍接受无 `revision` 的请求，但同样锁定来源、检查状态和身份归属。人工可确认标题差异，不能越过已占用标识符或主文件名、外部标识符的强冲突。
+
+独立入库要求标题，创建 `AWAITING_FILE` 论文，不复制候选论文的 PDF；标识符占用、强身份命中和指纹重复会阻止重复创建。拒绝只将未归属来源置为 `rejected`，原始输入不变；重导入不会自动恢复。显式恢复将其置回 `pending`。独立入库和拒绝均不要求填写原因。已关联来源不能通过这些操作被重新指派。
+
+`metadata_source_review_events` 记录来源、动作、操作者凭证前缀、时间、自动生成的动作说明、处理前后归属及匹配证据。它与 `paper_sources.raw` 分离，保留原始快照；不保存凭证本身。字段合并继续沿用人工保护、外部优先级、字段冲突清单和事务索引同步。部署需执行迁移 `bc71d92a0f64` 或 `uv run alembic upgrade head`。
+
 ### 4.5 摄取链：PDF → 归属哪篇论文 → 主版本 → 元数据回填
 
 1. `_run_pipeline`（`tasks.py`）：进 `PROCESSING` → `STORED` 注册文件后，调 `_resolve_target_paper`。
@@ -397,6 +407,12 @@ uv run python scripts/reconcile_pdf_metadata.py \
 | `POST /api/metadata/import` | 导入外部记录，**默认 dry_run**；试运行先批量预取已导入来源并直接报告 `unchanged`，其余记录在 SAVEPOINT 内按实际顺序执行后回滚，因此批内匹配统计与 apply 一致 | `api/metadata.py` |
 | `GET /api/metadata/review` | 复核清单（`pending` / `ambiguous` 来源 + 真冲突） | |
 | `POST /api/metadata/sources/{source_id}/attach` | 人工把来源挂到某篇论文并重放合并 | |
+| `GET /api/metadata/sources/{source_id}` | 来源详情、`revision`、导入值、当前匹配及操作历史 | read |
+| `POST /api/metadata/sources/{source_id}/rematch` | 默认只预览；`apply`、`revision`、`expected_paper_id` 确认应用 | write |
+| `POST /api/metadata/sources/rematch` | `items` 最多 50 条；默认预览，应用时逐条带版本及目标 ID | write |
+| `POST /api/metadata/sources/{source_id}/create-paper` | `revision`，确认为独立论文入库 | write |
+| `POST /api/metadata/sources/{source_id}/reject` | `revision`，拒绝并保留来源 | write |
+| `POST /api/metadata/sources/{source_id}/restore` | `revision`，恢复待复核 | write |
 | `POST /api/metadata/apply` | 批量应用人工决定（`mode=overwrite` 走 PATCH 语义） | |
 
 导入报告的每个 `sources[]` 条目除 `match_method` / `match_confidence` 外，还返回 `reason`、`evidence[]`、`match_conflicts[]` 和 `candidates[]`；dry-run 与 apply 使用同一解释结构，便于批量复核自动匹配与否决原因。
