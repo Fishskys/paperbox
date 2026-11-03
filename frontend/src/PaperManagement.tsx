@@ -324,6 +324,16 @@ export default function PaperManagement({
                 onFinish={(values) => void save(values)}
                 disabled={busy || !!watchedJob}
               >
+                <div className="management-save-actions">
+                  <Button
+                    htmlType="submit"
+                    type="primary"
+                    icon={<Save size={16} />}
+                    loading={busy}
+                  >
+                    保存元数据
+                  </Button>
+                </div>
                 <Form.Item
                   name="title"
                   label="标题"
@@ -375,14 +385,6 @@ export default function PaperManagement({
                 <Form.Item name="abstract" label="摘要">
                   <Input.TextArea rows={5} />
                 </Form.Item>
-                <Button
-                  htmlType="submit"
-                  type="primary"
-                  icon={<Save size={16} />}
-                  loading={busy}
-                >
-                  保存元数据
-                </Button>
               </Form>
             ),
           },

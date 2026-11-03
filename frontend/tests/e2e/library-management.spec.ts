@@ -1,5 +1,39 @@
 import { expect, test } from "./fixtures";
 
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`metadata save remains visible and retries failed writes at ${viewport.width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    let paper = { paper_id: "save-test", title: "A converter", authors: ["Alice Smith"], year: 2020, status: "INDEXED", files: [{ mime_type: "application/pdf" }] };
+    let attempts = 0;
+    await page.route("**/api/papers?*", (route) => route.fulfill({ json: { total: 1, papers: [paper] } }));
+    await page.route("**/api/papers/save-test", (route) => route.fulfill({ json: paper }));
+    await page.route("**/api/papers/save-test/metadata", (route) => {
+      if (route.request().method() !== "PATCH") return route.fulfill({ json: { sources: [], provenance: {} } });
+      attempts++;
+      if (attempts === 1) return route.fulfill({ status: 500, json: { detail: "保存失败，请重试" } });
+      expect(route.request().postDataJSON()).toEqual({ title: "Corrected converter" });
+      paper = { ...paper, title: "Corrected converter" };
+      return route.fulfill({ json: { rejected: [] } });
+    });
+    await page.goto("/manage/library?paper=save-test");
+    const drawer = page.getByRole("dialog", { name: "管理论文", exact: true });
+    const save = drawer.getByRole("button", { name: "保存元数据", exact: true });
+    await expect(save).toBeInViewport();
+    await drawer.getByLabel("标题", { exact: true }).fill("Corrected converter");
+    await drawer.getByLabel("摘要", { exact: true }).scrollIntoViewIfNeeded();
+    await expect(save).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("metadata-save-scrolled.png"), fullPage: true });
+    await save.click();
+    await expect(drawer.getByText("保存失败，请重试", { exact: true })).toBeVisible();
+    await expect(drawer.getByLabel("标题", { exact: true })).toHaveValue("Corrected converter");
+    await save.click();
+    await expect(drawer.getByText(/元数据已保存/)).toBeVisible();
+    await page.reload();
+    await expect(drawer.getByLabel("标题", { exact: true })).toHaveValue("Corrected converter");
+    expect(attempts).toBe(2);
+  });
+}
+
 test("shell original upload confirms the chosen paper and exposes its job", async ({ page }) => {
   const shell = { paper_id: "shell-upload", title: "Imported shell", authors: [], status: "AWAITING_FILE", files: [] };
   let uploads = 0;
@@ -170,6 +204,7 @@ test("library management edits only changed fields and previews destructive acti
     .getByRole("button", { name: "管理论文 Original title", exact: true })
     .click();
   const drawer = page.getByRole("dialog", { name: "管理论文", exact: true });
+  await expect(drawer.getByRole("button", { name: "保存元数据", exact: true })).toBeInViewport();
   await drawer.getByLabel("标题", { exact: true }).fill("Updated title");
   await drawer.getByRole("button", { name: "保存元数据", exact: true }).click();
   await expect(drawer.getByText(/元数据已保存/)).toBeVisible();
