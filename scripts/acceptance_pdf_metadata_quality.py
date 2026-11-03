@@ -35,7 +35,42 @@ from app.core.config import settings  # noqa: E402
 from app.parsing.pdf import extract_pages  # noqa: E402
 from app.search import opensearch  # noqa: E402
 from app.services import metadata_index_sync, metadata_manual, metadata_reextract, paper_service  # noqa: E402
-from app.services import metadata_history, provenance_service  # noqa: E402
+from app.services import metadata_history, metadata_import, metadata_merge, metadata_sources, provenance_service  # noqa: E402
+
+
+def check_external_import(session: Session) -> dict:
+    paper = Paper(id=new_uuid(), title="Synthetic External Metadata Matching", fingerprint=new_uuid(), status="PENDING")
+    session.add(paper)
+    session.flush()
+    source = metadata_sources.upsert_source(session, paper_id=paper.id, source_type="pdf_embedded",
+        source_ref=f"acceptance:{paper.id}", raw={}, match_status="matched")
+    metadata_merge.merge_values(session, paper, {"title": paper.title, "authors": ["G. Avolio"], "year": 2020,
+        "identifier:doi": "10.1234/acceptance-incorrect"}, source_type="pdf_embedded", source_id=source.id)
+    metadata_merge.merge_values(session, paper, {"authors": ["Someone Else"]}, source_type="pdf_heuristic",
+        evidence={"text_state": "ok", "byline_complete": False})
+    session.commit()
+    assert paper_service.paper_author_names(paper) == ["G. Avolio"]
+    assert provenance_service.conflict_page(session)[1] == 0
+    record = {"title": paper.title, "authors": ["Giuseppe Avolio"], "year": 2020,
+              "doi": "10.1234/acceptance-correct"}
+    preview = metadata_import.import_payload(session, [record])
+    assert preview.matched == 1 and not preview.conflicts
+    assert paper.doi == "10.1234/acceptance-incorrect"
+    result = metadata_import.import_payload(session, [record], apply=True)
+    session.commit()
+    assert result.matched == 1 and result.created_shell == 0 and not result.conflicts
+    assert paper.doi == "10.1234/acceptance-correct"
+    assert paper_service.paper_author_names(paper) == ["Giuseppe Avolio"]
+    assert metadata_import.import_payload(session, [record], apply=True).unchanged == 1
+    assert metadata_merge.current_source_type(session, paper, "year") == "import_file"
+    conflict = metadata_import.import_payload(session, [{**record, "doi": "10.1234/acceptance-other"}], apply=True)
+    session.commit()
+    assert conflict.ambiguous == 1 and not conflict.matched and not conflict.created_shell
+    assert paper.doi == "10.1234/acceptance-correct"
+    assert any(row.value == "10.1234/acceptance-incorrect" for row in
+               provenance_service.field_history(session, paper.id, "identifier:doi"))
+    return {"pdf_difference_history_only": True, "external_doi_correction": True,
+            "external_equal_value_protected": True, "identity_conflict_preserved": True}
 
 
 def run(session: Session, client, index: str) -> dict:
@@ -131,7 +166,7 @@ def run(session: Session, client, index: str) -> dict:
     assert actual["authors"] == ["Manual Author", "Manual Author"]
     assert actual["text"] == original["text"] and actual["embedding"] == original["embedding"]
     assert metadata_manual.metadata_view(session, paper)["index_sync"]["pending"] is False
-    return {"dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
+    return {**check_external_import(session), "dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
             "manual_protected": True, "repeated_authors": True, "metadata_only_index_sync": True,
             "historical_evidence": True, "corroborated_initials": True, "invalid_author_history_retained": True}
 
