@@ -211,9 +211,32 @@ def run(session: Session, client, index: str) -> dict:
     assert actual["authors"] == ["Manual Author", "Manual Author"]
     assert actual["text"] == original["text"] and actual["embedding"] == original["embedding"]
     assert metadata_manual.metadata_view(session, paper)["index_sync"]["pending"] is False
+    clean_title = "Synthetic PLL & converter"
+    encoded_title = "Synthetic PLL &amp; converter"
+    title_source = metadata_sources.upsert_source(session, paper_id=paper.id, source_type="import_file",
+        source_ref=f"acceptance-title:{paper.id}", raw={"title": clean_title}, match_status="matched")
+    provenance_service.set_field(session, paper, "title", encoded_title, source_id=title_source.id,
+                                 decided_by=provenance_service.DECIDED_STRUCTURED_OVERRIDE, override=True)
+    session.commit()
+    preview = metadata_merge.merge_values(session, paper, {"title": clean_title}, source_type="import_file",
+                                          source_id=title_source.id, dry_run=True)
+    assert preview.applied and paper.title == encoded_title
+    result = metadata_merge.merge_values(session, paper, {"title": clean_title}, source_type="import_file",
+                                         source_id=title_source.id)
+    session.commit()
+    assert result.applied and paper.title == clean_title and title_source.raw == {"title": clean_title}
+    assert any(row.value == encoded_title for row in provenance_service.field_history(session, paper.id, "title"))
+    with patch.object(opensearch, "bulk_update_documents", write):
+        assert metadata_index_sync.flush_pending(session, paper_id=paper.id)["pending"] == 0
+    actual = client.get(index=index, id=chunk.id)["_source"]
+    assert actual["title"] == clean_title and actual["text"] == original["text"] and actual["embedding"] == original["embedding"]
+    assert not metadata_merge.merge_values(session, paper, {"title": clean_title}, source_type="import_file",
+                                           source_id=title_source.id).applied
+    assert session.get(MetadataIndexUpdate, paper.id) is None
     return {**check_source_review(session), **check_external_import(session), "dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
             "manual_protected": True, "repeated_authors": True, "metadata_only_index_sync": True,
-            "historical_evidence": True, "corroborated_initials": True, "invalid_author_history_retained": True}
+            "historical_evidence": True, "corroborated_initials": True, "invalid_author_history_retained": True,
+            "equivalent_title_cleanup": True}
 
 
 def main() -> int:

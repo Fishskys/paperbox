@@ -129,6 +129,12 @@ def equivalent_values(field: str, left: Any, right: Any) -> bool:
     return _canonical(field, left) == _canonical(field, right)
 
 
+def title_has_markup(value: Any) -> bool:
+    return isinstance(value, str) and (
+        html.unescape(value) != value or bool(_PRESENTATION_TAG.search(value))
+    )
+
+
 def byline_spelling_variants(left: list[str], right: list[str]) -> bool:
     """Corroborate same-position PDF name variants; never hide their difference."""
     def key(name: str) -> str:

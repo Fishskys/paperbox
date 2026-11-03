@@ -203,6 +203,67 @@ def test_external_confirmation_also_protects_unclaimed_legacy_fields(db_session)
     assert current.source_id == source.id and current.value == "A converter"
 
 
+@pytest.mark.parametrize("existing_type", ["pdf_embedded", "import_file"])
+@pytest.mark.parametrize("encoded,clean", [
+    ("A 22.5&#x2013;27.7-GHz PLL", "A 22.5–27.7-GHz PLL"),
+    ("A <i>PLL</i>", "A PLL"),
+])
+def test_clean_external_title_replaces_equivalent_encoded_text(db_session, existing_type, encoded, clean):
+    paper = make_paper(db_session, title=encoded)
+    old = seed(db_session, paper, "title", encoded, existing_type)
+    source = make_source(db_session, paper.id, "import_file")
+    report = merge.merge_values(db_session, paper, {"title": clean},
+                               source_type="import_file", source_id=source.id, dry_run=True)
+    assert report.decisions[0].action == merge.ACTION_OVERRIDDEN
+    assert paper.title == encoded and old.is_current
+    merge.merge_values(db_session, paper, {"title": clean}, source_type="import_file", source_id=source.id)
+    assert paper.title == clean
+    current = prov.current_claim(db_session, paper.id, "title")
+    assert current.value == clean and current.source_id == source.id
+    assert not old.is_current and old.value == encoded
+    assert prov.conflict_page(db_session)[1] == 0
+    count = len(prov.field_history(db_session, paper.id, "title"))
+    again = merge.merge_values(db_session, paper, {"title": clean}, source_type="import_file", source_id=source.id)
+    assert again.decisions[0].action == merge.ACTION_UNCHANGED
+    assert len(prov.field_history(db_session, paper.id, "title")) == count
+
+
+@pytest.mark.parametrize("incoming_type", ["pdf_embedded", "pdf_heuristic", "import_file"])
+def test_title_presentation_cleanup_preserves_manual_decisions(db_session, incoming_type):
+    encoded = "A 22.5&#x2013;27.7-GHz PLL"
+    paper = make_paper(db_session, title=encoded)
+    claim = seed(db_session, paper, "title", encoded, "manual")
+    claim.decision_at = datetime.now(timezone.utc)
+    merge.merge_values(db_session, paper, {"title": "A 22.5–27.7-GHz PLL"}, source_type=incoming_type)
+    assert paper.title == encoded and claim.is_current
+
+
+def test_encoded_external_title_does_not_replace_clean_title(db_session):
+    paper = make_paper(db_session, title="A 22.5–27.7-GHz PLL")
+    seed(db_session, paper, "title", paper.title, "pdf_embedded")
+    merge.merge_values(db_session, paper, {"title": "A 22.5&#x2013;27.7-GHz PLL"}, source_type="import_file")
+    assert paper.title == "A 22.5–27.7-GHz PLL"
+
+
+def test_title_cleanup_preserves_a_previously_dismissed_candidate(db_session):
+    paper = make_paper(db_session, title="A PLL")
+    rejected = seed(db_session, paper, "title", "A PLL", "import_file")
+    seed(db_session, paper, "title", "A <i>PLL</i>", "pdf_embedded")
+    rejected.decided_by = prov.DECIDED_DISMISSED
+    rejected.decision_at = datetime.now(timezone.utc)
+    merge.merge_values(db_session, paper, {"title": "A PLL"}, source_type="import_file")
+    assert paper.title == "A <i>PLL</i>"
+
+
+def test_presentation_cleanup_enqueues_title_snapshot_update(db_session):
+    paper = indexed(db_session)
+    seed(db_session, paper, "title", "A <i>PLL</i>", "import_file")
+    source = make_source(db_session, paper.id, "import_file")
+    result = merge.merge_values(db_session, paper, {"title": "A PLL"}, source_type="import_file", source_id=source.id)
+    assert [row.field for row in result.applied] == ["title"]
+    assert db_session.get(MetadataIndexUpdate, paper.id) is not None
+
+
 def indexed(session):
     paper = make_paper(session)
     session.add(PaperChunk(id=new_uuid(), paper_id=paper.id, chunk_index=0, text="Original evidence", page_start=1, page_end=1))

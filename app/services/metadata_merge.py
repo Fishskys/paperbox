@@ -244,13 +244,26 @@ def decide(
         # None even though the claim exists. Fall back to the claim's own value so
         # an existing identifier is not re-claimed as "blank" on every import.
         current_value = current_claim.value
-    if not _is_blank(current_value) and policy.equivalent_values(field_name, current_value, value):
-        return MergeDecision(field_name, ACTION_UNCHANGED, current_value, reason="same value", source_type=incoming_type)
     existing_type = current_source_type(session, paper, field_name)
     adjudicated = next((row for row in session.scalars(select(prov.PaperFieldProvenance).where(
         prov.PaperFieldProvenance.paper_id == paper.id, prov.PaperFieldProvenance.field == field_name,
         prov.PaperFieldProvenance.is_current.is_(False))) if prov._same_value(row.value, value)
         and (row.decision_at is not None or row.decided_by == prov.DECIDED_DISMISSED)), None)
+    if not _is_blank(current_value) and policy.equivalent_values(field_name, current_value, value):
+        incoming_rank = policy.field_authority(field_name, incoming_type)
+        existing_rank = policy.field_authority(field_name, existing_type)
+        human_decision = current_claim is not None and (
+            current_claim.decision_at is not None or current_claim.decided_by == prov.DECIDED_MANUAL
+        )
+        # Equivalent text can still improve presentation, including values whose
+        # authority was already upgraded by an earlier external confirmation.
+        if (field_name == prov.FIELD_TITLE and incoming_rank is not None and incoming_rank >= 2
+                and existing_rank is not None and incoming_rank >= existing_rank
+                and (not human_decision and adjudicated is None or incoming_type in UNRESTRICTED_SOURCE_TYPES)
+                and policy.title_has_markup(current_value) and not policy.title_has_markup(value)):
+            return MergeDecision(field_name, ACTION_OVERRIDDEN, value, current_value,
+                                 "clean presentation of equivalent title", incoming_type)
+        return MergeDecision(field_name, ACTION_UNCHANGED, current_value, reason="same value", source_type=incoming_type)
     if incoming_type not in UNRESTRICTED_SOURCE_TYPES and adjudicated is not None:
         return MergeDecision(field_name, ACTION_ARCHIVED, current_value, value, "preserve prior human adjudication", incoming_type)
     if incoming_type not in UNRESTRICTED_SOURCE_TYPES and current_claim is not None and (
