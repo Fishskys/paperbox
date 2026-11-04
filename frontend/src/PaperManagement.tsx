@@ -14,7 +14,7 @@ import {
   Tag,
   Upload,
 } from "antd";
-import { Eraser, RefreshCw, Save, ScanLine, Trash2, Upload as UploadIcon } from "lucide-react";
+import { Eraser, RefreshCw, Save, ScanLine, Trash2, Undo2, Upload as UploadIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { errorMessage, post, request } from "./api";
@@ -62,10 +62,12 @@ export default function PaperManagement({
   paperId,
   onChanged,
   onDeleted,
+  onDirtyChange,
 }: {
   paperId: string;
   onChanged: () => void;
   onDeleted: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [revision, setRevision] = useState(0);
   const base = `/api/papers/${encodeURIComponent(paperId)}`;
@@ -74,6 +76,15 @@ export default function PaperManagement({
   const [form] = Form.useForm();
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
+  const dirtyChanged = useRef(onDirtyChange);
+  useEffect(() => { dirtyChanged.current = onDirtyChange; }, [onDirtyChange]);
+  function updateDirty(value: boolean) {
+    dirtyRef.current = value;
+    setDirty(value);
+    dirtyChanged.current?.(value);
+  }
   const guard = useRef(false);
   const [error, setError] = useState("");
   const [action, setAction] = useState<Action | null>(null);
@@ -114,8 +125,16 @@ export default function PaperManagement({
     return () => { controller.abort(); clearTimeout(timer); };
   }, [watchedJob, visible, taskRetry]);
   useEffect(() => {
-    if (paper.data) form.setFieldsValue(metadataValues(paper.data));
+    if (!paper.data) return;
+    if (!dirtyRef.current) form.setFieldsValue(metadataValues(paper.data));
+    else {
+      const value = !!Object.keys(metadataChanges(paper.data, form.getFieldsValue())).length;
+      dirtyRef.current = value;
+      setDirty(value);
+      dirtyChanged.current?.(value);
+    }
   }, [paper.data, form]);
+  useEffect(() => () => dirtyChanged.current?.(false), []);
   async function attachOriginal() {
     if (!original || guard.current) return;
     guard.current = true;
@@ -162,6 +181,7 @@ export default function PaperManagement({
           : "元数据已保存；检索中的信息需在重建索引后更新。",
         warning: !!result.rejected.length,
       });
+      if (!result.rejected.length) updateDirty(false);
       setRevision((value) => value + 1);
       onChanged();
     } catch (error) {
@@ -322,6 +342,7 @@ export default function PaperManagement({
                 form={form}
                 layout="vertical"
                 onFinish={(values) => void save(values)}
+                onValuesChange={(_, values) => updateDirty(!!paper.data && !!Object.keys(metadataChanges(paper.data, values)).length)}
                 disabled={busy || !!watchedJob}
               >
                 <div className="management-save-actions">
@@ -333,6 +354,10 @@ export default function PaperManagement({
                   >
                     保存元数据
                   </Button>
+                  <Button icon={<Undo2 size={16} />} disabled={!dirty || busy} onClick={() => {
+                    if (paper.data) form.setFieldsValue(metadataValues(paper.data));
+                    updateDirty(false);
+                  }}>撤销编辑</Button>
                 </div>
                 <Form.Item
                   name="title"

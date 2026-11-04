@@ -26,7 +26,8 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
-  BrowserRouter,
+  createBrowserRouter,
+  RouterProvider,
   Link,
   Navigate,
   NavLink,
@@ -414,12 +415,10 @@ function Workspace() {
   );
 }
 
+const router = createBrowserRouter([{ path: "*", element: <AccessProvider><Workspace /></AccessProvider> }]);
+
 export default function App() {
   return (
-    <BrowserRouter>
-      <AccessProvider>
-        <Workspace />
-      </AccessProvider>
-    </BrowserRouter>
+    <RouterProvider router={router} />
   );
 }
