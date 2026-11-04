@@ -3,6 +3,27 @@ import { Copy, Download } from "lucide-react";
 import { useRef, useState } from "react";
 import { authHeaders, checkResponse, errorMessage } from "./api";
 
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const previous = document.activeElement;
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.readOnly = true;
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  try {
+    input.select();
+    if (!document.execCommand("copy")) throw new Error("浏览器未允许复制，请使用引用导出");
+  } finally {
+    input.remove();
+    if (previous instanceof HTMLElement) previous.focus({ preventScroll: true });
+  }
+}
+
 export default function CitationActions({ paperId }: { paperId: string }) {
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
@@ -14,7 +35,7 @@ export default function CitationActions({ paperId }: { paperId: string }) {
       const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/citation?format=${format}`, { headers: authHeaders(), signal: AbortSignal.timeout(30000) });
       checkResponse(response.status, response.ok ? {} : await response.json().catch(() => null));
       if (format === "text") {
-        await navigator.clipboard.writeText(await response.text());
+        await copyText(await response.text());
         void message.success("引用已复制");
       } else {
         const url = URL.createObjectURL(await response.blob());

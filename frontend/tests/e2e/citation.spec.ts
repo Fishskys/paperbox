@@ -4,6 +4,11 @@ for (const width of [1440, 390]) {
   test(`read-only citation copy and exports work at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    if (width === 390) await page.addInitScript(() => {
+      const clipboard = navigator.clipboard;
+      Object.defineProperty(window, "readTestClipboard", { value: () => clipboard.readText() });
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    });
     await page.route("**/api/auth/context", route => route.fulfill({ json: identity("read") }));
     await page.route("**/api/papers/citation-paper", route => route.fulfill({ json: { paper_id: "citation-paper", title: "A Converter", authors: ["Alice Smith"], status: "AWAITING_FILE", files: [] } }));
     const formats: string[] = [];
@@ -16,7 +21,10 @@ for (const width of [1440, 390]) {
     await page.goto("/reading/papers/citation-paper");
     await page.getByRole("button", { name: "复制引用", exact: true }).click();
     await expect(page.getByText("引用已复制", { exact: true })).toBeVisible();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Alice Smith. A Converter. 2020.");
+    const copied = width === 390
+      ? await page.evaluate(() => (window as unknown as { readTestClipboard: () => Promise<string> }).readTestClipboard())
+      : await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toBe("Alice Smith. A Converter. 2020.");
     for (const [label, extension] of [["BibTeX (.bib)", "bib"], ["RIS (.ris)", "ris"]]) {
       const downloading = page.waitForEvent("download");
       await page.getByRole("button", { name: "导出引用", exact: true }).click();
