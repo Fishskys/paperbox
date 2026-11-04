@@ -1,10 +1,23 @@
-# 升级指引（0.5.x → 0.7.1）
+# 升级指引
 
-## 图片功能（Unreleased）
+## 0.8.x → 0.9.0
+
+备份数据库与对象存储后停止应用，执行以下命令，再冷启动 API：
+
+```bash
+uv sync --locked
+uv run alembic upgrade head
+```
+
+本版有 6 个迁移：图片账本、存活论文状态索引、元数据查询索引、模型普查索引、元数据质量与索引同步队列、来源复核审计。迁移不自动修改存量 PDF 元数据，不自动提取图片，也不要求全库重建。
+
+WebUI 与 API 独立启停。使用前端时在 `frontend/` 执行 `npm ci && npm run build`，或运行 `docker compose --profile webui up -d --build webui`；设置 `WEBUI_API_UPSTREAM` 指向实际 API。开发环境使用 Vite 代理，密钥不写入浏览器构建产物。
+
+### 图片功能
 
 停应用并备份后执行 `uv sync --locked`、`uv run alembic upgrade head`。迁移 `f2a8c7d9e401` 新增图片批次、图片、资产表和论文 revision，不改已有 PDF/正文。安装 Java 21 后运行 `uv run python scripts/build_pdffigures2.py`；Docker 镜像随附 JRE/JAR。默认只显式提取，不自动回填。降级前先删除图片对象，避免删除账本后留下孤儿对象。配置与 API 见[图片架构](docs/architecture/12-paper-figures.md)。
 
-## 本地 PDF 后端更新（Unreleased）
+### 本地 PDF 后端更新
 
 执行 `uv sync --locked` 安装 PyMuPDF；Docling 继续作为默认解析后端，本地降级改为 PyMuPDF。
 建议将显式 `PARSER_BACKEND=pypdf` 改为 `pymupdf`；旧值仍兼容，新产物记录真实的 `pymupdf` 版本。
@@ -12,9 +25,10 @@
 无需为该后端切换迁移数据库。需要更新既有正文时显式运行重索引，旧 `pypdf` 来源过滤仍保留。
 PyMuPDF 的发布许可为 AGPL 或商业许可，部署分发应采用适用的授权。
 
-本文件面向**已有部署的升级**。全新部署见 [`README.md`](README.md) 与
-[`UserManual.md` §1](UserManual.md#1-详细部署教程)；本文只讲“从旧版本换到 0.7.1
-需要多做/改写什么”。
+## 0.5.x → 0.7.1 历史迁移
+
+以下面向尚未完成历史迁移的已有部署；升级到 0.9.0 时也须检查。全新部署见 [`README.md`](README.md) 与
+[`UserManual.md` §1](UserManual.md#1-详细部署教程)。
 
 > **为什么单独写这份**：0.5.2 → 0.7.1 之间有几处**会让人踩坑的破坏性变更**（API key
 > 标识改 `prefix`、吊销即删除的迁移、论文级 ISSN 数据清理、`.env` 索引名仍钉在旧代），以及一个**只在旧索引上

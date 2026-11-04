@@ -1,6 +1,6 @@
 # paperbox 用户手册
 
-本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.7.1**。
+本手册覆盖**部署、配置、接口与排障**四件事，对应版本 **0.9.0**。
 只想先跑起来看效果，读 [README](README.md) 的「快速开始」即可；本文是它的展开版。
 
 论文图片功能需先迁移数据库并准备 Java 21/JAR，部署、配置及预览消费契约见[论文图片](docs/architecture/12-paper-figures.md)。默认显式提取，自动候选标为需要复核；区域 PDF 保留原生质量但不是脱敏文件。图片修改接口需要 write 权限。
@@ -61,7 +61,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8077
 |---|---|
 | 3) 容器 | `docker compose ps` 四个服务都 `healthy`；`curl http://127.0.0.1:9200`、`curl http://127.0.0.1:8090/health` 有响应 |
 | 5) 建表/索引 | `uv run python scripts/create_index.py` 回显索引名、字段与分词器；重复执行不报错 |
-| 6) 启动 | 日志出现 `paperbox 0.7.1 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
+| 6) 启动 | 日志出现 `paperbox 0.9.0 starting`；`curl http://127.0.0.1:8077/health` 六个依赖（PG / OpenSearch / MinIO / embedding / rerank / docling）都是 `ok` 且 `degraded` 为 `false`（`docling` 报 `disabled` 只说明 `DOCLING_URL` 为空，不算降级） |
 
 一键自检（推荐）：
 
@@ -392,7 +392,7 @@ cd infra && docker compose --profile local-docling up -d docling
 
 **升级已有部署到新版本**（顺序别换）：
 
-> 从 **0.5.x 升到 0.7.1** 请先读专门的 [升级指引](UPGRADING.md#升级指引05x--071)——
+> 升级到 **0.9.0** 请先读专门的 [升级指引](UPGRADING.md)；从 0.5.x 等旧部署升级还需核对历史迁移——
 > 里面有 API key 标识改 `prefix`、吊销即删除的迁移、以及“检索索引停在旧一代映射”的可操作性
 > 步骤。下面是通用顺序：
 
