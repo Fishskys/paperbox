@@ -1,7 +1,7 @@
 {
   "name": "paperbox-webui",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.9.1",
   "type": "module",
   "engines": {
     "node": ">=20.19.0 <21 || >=22.13.0 <23 || >=24"

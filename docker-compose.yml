@@ -15,7 +15,7 @@ services:
   webui:
     profiles: [webui]
     build: ./frontend
-    image: paperbox/webui:0.9.0
+    image: paperbox/webui:0.9.1
     restart: unless-stopped
     ports:
       - "${WEBUI_PORT:-8089}:80"
@@ -27,7 +27,7 @@ services:
     # No depends_on: the static UI must start without starting the API.
   api:
     build: .
-    image: paperbox/api:0.9.0
+    image: paperbox/api:0.9.1
     container_name: paperbox-api
     restart: unless-stopped
     env_file:
