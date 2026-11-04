@@ -2,6 +2,8 @@
 
 ## 运行边界
 
+自动检查见 [测试行为边界](./testing-policy.md#自动合并检查)。前后端契约检查命令为在 `frontend/` 执行 `npm run check:contracts`，后端须先 `uv sync --locked`。
+
 `frontend/` 是与 API 独立运行的 React + TypeScript + Vite 应用，采用 Ant Design 组件与 Lucide 图标。
 开发时 Vite 提供页面及 `/api/*`、`/health` 同源代理，不新增 Python BFF，不调用 Python service 模块。
 API 单独启动，前端进程不初始化数据库、后台队列或 MCP；停止前端不影响已提交的后端任务。

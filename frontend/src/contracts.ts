@@ -1,5 +1,13 @@
 // The fields consumed by the WebUI; the source contract is app/schemas/.
 export type Capability = "read" | "write" | "admin";
+export type MaintenanceJob = {
+  job_id: string; operation: string; dry_run: boolean; stage: string; progress: number;
+  report_available: boolean; error_code?: string | null; error_message?: string | null;
+};
+export type MaintenanceRequest = {
+  operation: "metadata" | "consistency"; dry_run?: boolean; paper_id?: string;
+  limit?: number; refresh_index?: boolean; parser_papers?: boolean; preview_job_id?: string;
+};
 export type AuthContext = {
   prefix: string;
   role: Capability;
@@ -56,7 +64,7 @@ export type ReextractReport = {
   skipped_no_file: number;
   failed: number;
   changes: { paper_id: string; field: string; old: unknown; new: unknown; action: string }[];
-  errors: { paper_id: string; error: string; message?: string }[];
+  errors: Record<string, string>[];
   note: string;
   index_documents: number;
   index_pending?: number;

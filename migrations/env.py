@@ -51,6 +51,7 @@ def run_migrations_offline() -> None:
         url=get_url(),
         target_metadata=target_metadata,
         literal_binds=True,
+        version_table_schema=config.get_main_option("version_table_schema") or None,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
@@ -70,6 +71,7 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
+            version_table_schema=config.get_main_option("version_table_schema") or None,
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,

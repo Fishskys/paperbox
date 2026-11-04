@@ -6,11 +6,8 @@ import { useAccess } from "./access";
 import { errorMessage, post, request } from "./api";
 import { downloadJson } from "./files";
 import { useVisible } from "./hooks";
+import type { MaintenanceJob, MaintenanceRequest } from "./contracts";
 
-export type MaintenanceJob = {
-  job_id: string; operation: string; dry_run: boolean; stage: string; progress: number;
-  report_available: boolean; error_code?: string; error_message?: string;
-};
 type Stored = { jobId?: string; pending?: { request_id: string; [key: string]: unknown } };
 const terminal = (job?: MaintenanceJob) => !!job && ["COMPLETED", "FAILED"].includes(job.stage);
 function readStored(key: string): Stored {
@@ -58,7 +55,7 @@ export function useMaintenanceTask<T>(channel: string) {
     return () => { controller.abort(); clearTimeout(timer); };
   }, [jobId, visible, retry, storageKey]);
 
-  async function submit(body: Record<string, unknown>) {
+  async function submit(body: MaintenanceRequest) {
     if (guard.current) return;
     guard.current = true; setSubmitting(true); setError(""); setReport(undefined);
     const old = readStored(storageKey).pending;
