@@ -99,7 +99,7 @@ try {
   await expect(page.getByRole("button", { name: "执行维护" })).toBeEnabled();
   await page.getByRole("link", { name: "元数据维护", exact: true }).click();
   await page.getByLabel("元数据处理上限").fill("1");
-  const metadataPreview = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/metadata/reextract", { timeout: 180000 });
+  const metadataPreview = page.waitForResponse((response) => /\/api\/maintenance\/jobs\/[^/]+\/report$/.test(new URL(response.url()).pathname), { timeout: 180000 });
   await page.getByRole("button", { name: "预览维护" }).click();
   const metadataReport = await (await metadataPreview).json();
   if (!metadataReport.dry_run || metadataReport.papers !== 1) throw new Error("Invalid metadata preview");
@@ -107,7 +107,7 @@ try {
   const audit = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/consistency/doi");
   await page.getByRole("button", { name: "检查标识" }).click();
   if (!(await audit).ok()) throw new Error("Identifier audit failed");
-  const consistency = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/consistency", { timeout: 180000 });
+  const consistency = page.waitForResponse((response) => /\/api\/maintenance\/jobs\/[^/]+\/report$/.test(new URL(response.url()).pathname), { timeout: 180000 });
   await page.getByRole("button", { name: "开始检查" }).click();
   const consistencyResponse = await consistency;
   if (!consistencyResponse.ok()) throw new Error(`Consistency check failed: ${consistencyResponse.status()}`);

@@ -58,6 +58,11 @@ def _run_figures(job_id):
     from app.workers.figure_tasks import run
     run(job_id)
 
+
+def _run_maintenance(job_id):
+    from app.workers.maintenance_tasks import run
+    run(job_id)
+
 #: Priority classes. A single-file upload is a human waiting on the answer; a
 #: multi-file upload is a folder dump that can afford to wait. Lower wins.
 PRIORITY_INTERACTIVE = 0
@@ -67,6 +72,7 @@ DEFAULT_PRIORITY = PRIORITY_INTERACTIVE
 Runner = Callable[[str], None]
 
 DEFAULT_RUNNERS: dict[str, Runner] = {
+    "maintenance": _run_maintenance,
     KIND_FIGURES: _run_figures,
     KIND_INGEST: tasks.run_ingestion_job,
     KIND_REINDEX: tasks.run_reindex_job,
@@ -89,6 +95,8 @@ class _Item:
 def kind_for_payload(payload: Mapping[str, object] | None) -> str:
     """Pick the runner for a recovered job from its stored payload."""
     source_type = str((payload or {}).get("source_type") or "").lower()
+    if source_type == "maintenance":
+        return "maintenance"
     if source_type == KIND_FIGURES:
         return KIND_FIGURES
     return KIND_REINDEX if source_type == SOURCE_TYPE_REINDEX else KIND_INGEST

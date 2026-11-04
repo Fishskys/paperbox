@@ -6,6 +6,7 @@ import { errorMessage, post } from "../api";
 import { Failure, PageHeader } from "../components";
 import type { ReextractReport, ReindexReport } from "../contracts";
 import { downloadJson } from "../files";
+import { MaintenanceTaskStatus, useMaintenanceTask } from "../maintenance-tasks";
 
 const reasons = [
   { value: "embedding_model_changed", label: "向量模型变化" }, { value: "parser_backend_changed", label: "解析器变化" },
@@ -18,12 +19,15 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
   const [selectedReasons, setReasons] = useState<string[]>([]);
   const [limit, setLimit] = useState(20);
   const [refreshIndex, setRefreshIndex] = useState(true);
-  const [report, setReport] = useState<ReindexReport | ReextractReport | null>(null);
+  const [indexReport, setReport] = useState<ReindexReport | null>(null);
+  const task = useMaintenanceTask<ReextractReport>("metadata");
+  const report = index ? indexReport : task.report;
+  const [previewValid, setPreviewValid] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
   const guard = useRef(false);
-  const invalidate = () => { setReport(null); setError(""); };
+  const invalidate = () => { setReport(null); setError(""); setPreviewValid(false); };
   const count = report ? "selected" in report ? report.selected : report.papers : 0;
   async function submit(dry: boolean) {
     if (guard.current) return;
@@ -31,15 +35,19 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
     guard.current = true; setBusy(true); setError(""); setConfirm(false); setReport(null);
     const paperIds = ids.split(/[\s,]+/).filter(Boolean);
     try {
-      setReport(await post<ReindexReport | ReextractReport>(index ? "/api/papers/reindex" : "/api/metadata/reextract", index
-        ? { dry_run: dry, include_all: all, ...(paperIds.length ? { paper_ids: paperIds } : {}), ...(selectedReasons.length ? { reasons: selectedReasons } : {}) }
-        : { dry_run: dry, limit, refresh_index: refreshIndex, detail: true, ...(paperIds[0] ? { paper_id: paperIds[0] } : {}) }, undefined, 180000));
+      if (index) setReport(await post<ReindexReport>("/api/papers/reindex",
+        { dry_run: dry, include_all: all, ...(paperIds.length ? { paper_ids: paperIds } : {}), ...(selectedReasons.length ? { reasons: selectedReasons } : {}) }));
+      else {
+        await task.submit({ operation: "metadata", dry_run: dry, limit, refresh_index: refreshIndex,
+          ...(paperIds[0] ? { paper_id: paperIds[0] } : {}), ...(!dry ? { preview_job_id: task.job?.job_id } : {}) });
+        setPreviewValid(dry);
+      }
     } catch (error) { setError(`${errorMessage(error)}${dry ? "" : "；结果不明确时先检查任务或论文状态，避免重复提交。"}`); }
     finally { guard.current = false; setBusy(false); }
   }
   return <>
     <PageHeader title={index ? "索引维护" : "元数据维护"} description={index ? "批量重建检索索引" : "从已存原文重新提取元数据"} />
-    <Form layout="vertical" disabled={busy} className="import-workspace">
+    <Form layout="vertical" disabled={busy || (!index && task.active)} className="import-workspace">
       <Form.Item label={index ? "论文 ID（留空按范围选择）" : "论文 ID（留空按处理上限选择）"}>
         <Input.TextArea aria-label="维护论文 ID" value={ids} autoSize={{ minRows: 2, maxRows: 5 }} onChange={(event) => { setIds(event.target.value); invalidate(); }} />
       </Form.Item>
@@ -52,10 +60,11 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
       </>}
     </Form>
     <div className="metadata-actions">
-      <Button icon={<ScanLine size={16} />} loading={busy} onClick={() => void submit(true)}>预览维护</Button>
-      <Button type="primary" icon={<Play size={16} />} disabled={busy || !report?.dry_run || !count || (!index && ids.trim().split(/[\s,]+/).filter(Boolean).length > 1)} onClick={() => setConfirm(true)}>执行维护</Button>
+      <Button icon={<ScanLine size={16} />} loading={busy || (!index && task.active)} onClick={() => void submit(true)}>预览维护</Button>
+      <Button type="primary" icon={<Play size={16} />} disabled={busy || (!index && (task.active || !previewValid)) || !report?.dry_run || !count || (!index && ids.trim().split(/[\s,]+/).filter(Boolean).length > 1)} onClick={() => setConfirm(true)}>执行维护</Button>
       <Button icon={<Download size={16} />} disabled={!report || busy} onClick={() => report && downloadJson(report, `paperbox-${kind}-maintenance-${Date.now()}.json`)}>下载报告</Button>
     </div>
+    {!index && <MaintenanceTaskStatus task={task} />}
     {error && <Failure message={error} />}
     {report && <>
       <Alert showIcon type={"failed" in report && report.failed ? "warning" : "info"} title={"selected" in report
@@ -75,7 +84,7 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
       </>}
     </>}
     <Modal title={index ? "确认重建索引" : "确认重新提取元数据"} open={confirm} onCancel={() => setConfirm(false)} okText="确认执行" cancelText="取消" onOk={() => void submit(false)}>
-      <p>将处理 {count} 篇论文。{index ? "后台任务可在处理任务中查看。" : "此操作同步处理，完成后返回报告。"}</p>
+      <p>将处理 {count} 篇论文。后台执行，刷新页面后仍可查看进度和报告。</p>
     </Modal>
   </>;
 }

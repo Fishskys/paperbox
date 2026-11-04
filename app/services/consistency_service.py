@@ -667,6 +667,7 @@ def check_consistency(
     alias: str = opensearch.ALIAS,
     limit: int = DEFAULT_PROBLEM_LIMIT,
     with_parser_papers: bool = False,
+    on_progress: Callable[[float], None] | None = None,
 ) -> ConsistencyReport:
     """Run the three-way check and return the report (read-only, never raises).
 
@@ -691,6 +692,8 @@ def check_consistency(
         logger.warning("consistency: could not read PostgreSQL: %s", exc)
         errors.append(f"postgres: {type(exc).__name__}: {exc}")
 
+    if on_progress:
+        on_progress(30)
     objects_per_paper: dict[str, list[str]] = {}
     staging = 0
     try:
@@ -699,6 +702,8 @@ def check_consistency(
         logger.warning("consistency: could not list MinIO objects: %s", exc)
         errors.append(f"minio: {type(exc).__name__}: {exc}")
 
+    if on_progress:
+        on_progress(55)
     documents: dict[str, int] = {}
     document_backends: dict[str, dict[str, int]] = {}
     document_models: dict[str, dict[str, int]] = {}
@@ -718,6 +723,8 @@ def check_consistency(
         logger.warning("consistency: could not read OpenSearch: %s", exc)
         errors.append(f"opensearch: {type(exc).__name__}: {exc}")
 
+    if on_progress:
+        on_progress(80)
     if truncated:
         errors.append(
             f"opensearch: paper_id aggregation hit its size limit ({AGG_SIZE}); "

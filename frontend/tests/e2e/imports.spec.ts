@@ -1,4 +1,5 @@
 import { expect, test } from "./fixtures";
+import { maintenanceFixture } from "./maintenance-fixture";
 
 test("uploads PDFs, follows the accepted job and opens the completed paper", async ({
   page,
@@ -59,10 +60,9 @@ test("data checks are explicit and incomplete results are never shown as healthy
   page,
 }) => {
   let calls = 0;
-  await page.route("**/api/consistency?*", (route) => {
+  await maintenanceFixture(page, () => {
     calls++;
-    return route.fulfill({
-      json: {
+    return {
         consistent: false,
         checked_at: "2026-10-29T08:00:00Z",
         totals: {
@@ -74,8 +74,7 @@ test("data checks are explicit and incomplete results are never shown as healthy
         problems: [],
         errors: ["OpenSearch unreachable"],
         truncated: false,
-      },
-    });
+      };
   });
   await page.goto("/system/data");
   await expect(page.getByText("尚未执行检查")).toBeVisible();

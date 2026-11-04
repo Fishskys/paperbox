@@ -261,7 +261,7 @@ export default function Jobs() {
             width: 95,
             render: (_, job) => (
               <div className="inline">
-                {job.stage === "FAILED" && (
+                {job.stage === "FAILED" && job.kind !== "maintenance" && (
                   <Tooltip title="重试任务">
                     <Button
                       type="text"

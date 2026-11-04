@@ -4,6 +4,7 @@ const kinds: Record<string, string> = {
   ingest: "论文导入",
   reindex: "重建索引",
   figures: "图片提取",
+  maintenance: "系统维护",
 };
 
 export function jobKind(kind?: string) {

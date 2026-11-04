@@ -68,6 +68,8 @@ def retry_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="job not found"
         )
+    if existing.kind == "maintenance":
+        raise HTTPException(status_code=409, detail="maintenance tasks require inspection and a new preview; automatic retry is not supported")
     if existing.kind == "figures":
         from app.services.figure_service import request_extraction, FigureError
         try:

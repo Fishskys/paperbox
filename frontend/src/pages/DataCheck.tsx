@@ -6,16 +6,14 @@ import { Blank, Failure, formatTime, PageHeader } from "../components";
 import type { Consistency, IdentifierCheck } from "../contracts";
 import { useResource } from "../hooks";
 import { downloadJson } from "../files";
+import { MaintenanceTaskStatus, useMaintenanceTask } from "../maintenance-tasks";
 
 export default function DataCheck() {
-  const [run, setRun] = useState(0);
   const [identifierRun, setIdentifierRun] = useState(0);
   const identifiers = useResource<IdentifierCheck>(identifierRun ? "/api/consistency/doi?limit=100" : null, identifierRun, 180000);
-  const { data, error, loading } = useResource<Consistency>(
-    run ? "/api/consistency?limit=100" : null,
-    run,
-    180000,
-  );
+  const task = useMaintenanceTask<Consistency>("consistency");
+  const data = task.report;
+  const loading = task.active;
   const incomplete = !!data?.errors.length;
   return (
     <>
@@ -27,15 +25,15 @@ export default function DataCheck() {
             type="primary"
             icon={<ScanLine size={16} />}
             loading={loading}
-            onClick={() => setRun((v) => v + 1)}
+            onClick={() => void task.submit({ operation: "consistency", limit: 100 })}
           >
             开始检查
           </Button>
         }
       />
-      {error && <Failure message={error} retry={() => setRun((v) => v + 1)} />}
+      <MaintenanceTaskStatus task={task} />
       {loading && <Skeleton active />}
-      {!run && <Blank text="尚未执行检查" />}
+      {!task.job && !task.error && <Blank text="尚未执行检查" />}
       {data && (
         <>
           <div className="section-heading">
