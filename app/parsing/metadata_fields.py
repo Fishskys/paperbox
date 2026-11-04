@@ -14,6 +14,27 @@ _AUTHOR_FRONT_MATTER = re.compile(r"\b(?:e-?mails?|copyright|received|revised|ac
 _PUBLICATION = re.compile(r"^.+;\s*(?:19|20)\d{2}\s*;[^;]*;[^;]*(?:;.*)?$", re.S)
 _TEMPLATE = re.compile(r"^(?:instructions? for (?:paper|authors?)|paper preparation|session\b|PRIME \d{4} proceedings|(?:NSS-MIC|PPC) \d{4} (?:paper|manuscript)\b|https?://\S+$|www\.\S+$)", re.I)
 
+_TITLE_TAG = re.compile(r"</?(?:inline-formula|tex-math|sup|sub|i|b|em|strong)(?:\s[^>]*)?>", re.I)
+_MATH_SYMBOLS = {"mu": "μ", "times": "×", "Delta": "Δ", "sigma": "σ", "Omega": "Ω"}
+
+
+def clean_title(value: str) -> str:
+    """Remove publisher presentation markup; keep unsupported math verbatim."""
+    def math_text(match: re.Match) -> str:
+        expression = match[1].strip()
+        expression = re.sub(r"\\([A-Za-z]+)(?:\{\})?", lambda m: _MATH_SYMBOLS.get(m[1], m[0]), expression)
+        if "\\" in expression:
+            return match[0]
+        return expression
+
+    value = html.unescape(value)
+    # Spaces inside formula containers are layout, not part of adjacent units.
+    value = re.sub(r"(<(?:inline-formula|tex-math)\b[^>]*>)\s*", r"\1", value, flags=re.I)
+    value = re.sub(r"\s*(</(?:inline-formula|tex-math)>)", r"\1", value, flags=re.I)
+    value = _TITLE_TAG.sub("", value)
+    value = re.sub(r"\$([^$]+)\$", math_text, value)
+    return " ".join(value.split())
+
 
 def text_key(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", html.unescape(value)).casefold().split())

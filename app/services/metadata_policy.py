@@ -9,7 +9,7 @@ import unicodedata
 
 from app.services import metadata_identifiers as identifiers
 from app.services import metadata_sources as sources
-from app.parsing.metadata_fields import abstract_problem, authors_problem, corroborates
+from app.parsing.metadata_fields import abstract_problem, authors_problem, clean_title, corroborates
 
 QUALITY_VERSION = "pdf-fields-v4"
 PDF_SOURCES = (sources.SOURCE_TYPE_PDF_EMBEDDED, sources.SOURCE_TYPE_PDF_HEURISTIC)
@@ -115,7 +115,7 @@ def _canonical(field: str, value: Any) -> Any:
                 return identifiers.normalize_identifier(field.split(":", 1)[1], value) or value
             except ValueError:
                 return value
-        value = _PRESENTATION_TAG.sub("", html.unescape(value))
+        value = clean_title(value) if field == "title" else _PRESENTATION_TAG.sub("", html.unescape(value))
         value = " ".join(unicodedata.normalize("NFKC", value).translate(_TYPOGRAPHY).split())
         if field == "authors":
             # Ignore a word-final period, preserving dotted initials and word boundaries.
@@ -130,9 +130,7 @@ def equivalent_values(field: str, left: Any, right: Any) -> bool:
 
 
 def title_has_markup(value: Any) -> bool:
-    return isinstance(value, str) and (
-        html.unescape(value) != value or bool(_PRESENTATION_TAG.search(value))
-    )
+    return isinstance(value, str) and clean_title(value) != value
 
 
 def byline_spelling_variants(left: list[str], right: list[str]) -> bool:

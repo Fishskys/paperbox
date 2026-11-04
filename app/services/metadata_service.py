@@ -8,12 +8,12 @@ found with confidence it stays ``None`` instead of guessing.
 from __future__ import annotations
 
 import re
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
 from app.parsing.pdf import EmbeddedMetadata, PageText, SizedLine
-from app.parsing.metadata_fields import author_problem, document_state, parse_authors
+from app.parsing.metadata_fields import author_problem, clean_title, document_state, parse_authors
 from app.services.paper_service import normalize_arxiv_id, normalize_doi
 
 _ARXIV_IN_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/([A-Za-z0-9.\-/]+)", re.IGNORECASE)
@@ -47,6 +47,9 @@ _TITLE_BOILERPLATE = re.compile(
     re.IGNORECASE,
 )
 _FOOTER = re.compile(r"^(?:\d{1,3}|page \d+|\d+\s*of\s*\d+)$", re.IGNORECASE)
+_RUNNING_HEADER = re.compile(r"\b(?:VOL(?:UME)?\.?\s*\d+|NO\.?\s*\d+).*(?:19|20)\d{2}\b", re.I)
+_DELIVERY_STAMP = re.compile(r"downloaded\s+(?:on|from)|authorized licensed use|restrictions apply|accessed\s*(?:on|:)", re.I)
+_PUBLICATION_STAMP = re.compile(r"©|copyright|\(c\)|\bpublished\b|\b(?:conference|symposium|workshop|proceedings)\b", re.I)
 _CAPITALISED_WORD = re.compile(r"^[A-Z\u00c0-\u00de][\w'’\-\.]*$")
 _NAME_NOISE = re.compile(r"[*†‡§¶◦●✳∗°\d]+")
 #: Lowercase name particles that legitimately appear inside a real name
@@ -149,7 +152,7 @@ def _looks_like_title(line: str) -> bool:
 
 
 def _is_boilerplate(line: str) -> bool:
-    if _TITLE_BOILERPLATE.search(line):
+    if _TITLE_BOILERPLATE.search(line) or _RUNNING_HEADER.search(line) or _DELIVERY_STAMP.search(line):
         return True
     if _EMAIL.search(line) or _AFFILIATION.search(line):
         return True
@@ -424,23 +427,25 @@ def _year_from_arxiv_id(arxiv_id: str | None) -> int | None:
 
 
 def detect_year(pages: Sequence[PageText], url: str | None = None) -> int | None:
-    """Publication year.
-
-    The arXiv id is authoritative when the paper came from arXiv; otherwise the
-    most frequent plausible year on the first page wins (later pages are full of
-    citation years).
-    """
+    """Prefer declared publication evidence; ambiguity is not a publication year."""
     from_id = _year_from_arxiv_id(arxiv_id_from_url(url))
     if from_id is not None:
         return from_id
 
-    counts: Counter[int] = Counter()
+    declared: set[int] = set()
+    first_page: set[int] = set()
     for page in list(pages)[:2]:
-        for match in _YEAR.finditer(page.text):
-            counts[int(match.group(1))] += 1
-    if counts:
-        return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
-    return None
+        text = re.split(r"(?im)^\s*(?:(?:[IVX]+|\d+)[.)]?\s+)?(?:references|bibliography|参考文献)\s*[:.]?\s*$", page.text, maxsplit=1)[0]
+        for line in text.splitlines():
+            if _DELIVERY_STAMP.search(line) or re.match(r"\s*\[\d+\]", line):
+                continue
+            years = {int(match[1]) for match in _YEAR.finditer(line)}
+            if _PUBLICATION_STAMP.search(line) or _RUNNING_HEADER.search(line):
+                declared.update(years)
+            if page is pages[0]:
+                first_page.update(years)
+    candidates = declared or first_page
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def detect_doi(pages: Sequence[PageText]) -> str | None:
@@ -531,7 +536,7 @@ def heuristic_claim_values(metadata: Mapping[str, object]) -> dict[str, object]:
     values: dict[str, object] = {}
     title = metadata.get("title")
     if isinstance(title, str) and title.strip():
-        values["title"] = title.strip()
+        values["title"] = clean_title(title)
     abstract = metadata.get("abstract")
     if isinstance(abstract, str) and abstract.strip():
         values["abstract"] = abstract.strip()
@@ -641,7 +646,7 @@ def embedded_claim_values(embedded: "EmbeddedMetadata") -> dict[str, object]:
     if embedded is None:
         return values
     if embedded.title:
-        values["title"] = embedded.title
+        values["title"] = clean_title(embedded.title)
     if embedded.abstract:
         values["abstract"] = embedded.abstract
     if embedded.authors:
