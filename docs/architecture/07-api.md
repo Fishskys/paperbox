@@ -1,5 +1,7 @@
 # HTTP API 层
 
+`JobOut.deduplication_audit` 是追加事件数组，包含 `event_id`、`created_at`、`actor`、`request_id`、`kind`、`rule`、`target_paper_id`、`evidence` 和 `file_action`。`GET /api/jobs/{job_id}` 及任务列表返回该字段；旧任务为空数组。目录和 ZIP 实际导入命中重复时返回已完成的 `job_id`，目录预览仍不写任务。
+
 ## 后台维护任务
 
 `POST /api/maintenance/jobs`（admin，202）接收 `request_id` UUID、`operation=metadata|consistency`、`dry_run`、`paper_id`、`limit`（1–2000）、`refresh_index`、`parser_papers`。元数据应用须携带已完成且参数相符的 `preview_job_id`；预览冻结论文 ID 与字段/来源版本，变更论文逐项报错，不扩大处理范围。同一身份和请求编号重复提交返回同一任务，参数不同返回 409。

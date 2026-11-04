@@ -182,7 +182,12 @@ def test_content_already_in_the_library_is_a_duplicate(client, factory, tmp_arch
     assert (body["accepted"], body["duplicate"]) == (0, 1)
     item = body["results"][0]
     assert item["paper_id"] == existing_id
-    assert item["job_id"] is None
+    assert item["job_id"]
+    with factory() as session:
+        from app.db.models import IngestionJob
+        audit = session.get(IngestionJob, item["job_id"]).payload["deduplication_audit"]
+        assert audit[0]["kind"] == "byte_duplicate"
+        assert audit[-1]["file_action"]["extracted_file"] == "deleted"
     # The extracted copy is deleted immediately, and so is the emptied directory.
     assert extraction_dirs(tmp_archive_dir) == []
 

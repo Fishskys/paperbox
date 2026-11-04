@@ -439,6 +439,10 @@ def test_a_second_version_joins_the_indexed_paper(db_session, monkeypatch) -> No
     files = paper_service.list_paper_files(db_session, existing.id)
     assert {item.kind for item in files} == {"published_pdf", "arxiv_pdf"}
     assert paper_service.primary_file(existing).kind == "published_pdf"
+    audit = job.payload["deduplication_audit"]
+    assert [event["kind"] for event in audit] == ["identity_match", "version_selection"]
+    assert audit[0]["target_paper_id"] == existing.id
+    assert audit[1]["file_action"] == {"incoming": "retained", "is_primary": False}
 
 
 def test_non_primary_completion_records_why_nothing_was_indexed(db_session) -> None:

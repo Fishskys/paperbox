@@ -26,9 +26,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.services import net_guard
-from app.core.logging import get_logger
+from app.core.logging import get_key_prefix, get_logger, get_request_id
 from app.db.models import IngestionJob, Paper, new_uuid
-from app.services import paper_service
+from app.services import ingestion_audit, paper_service
 
 logger = get_logger(__name__)
 
@@ -250,6 +250,8 @@ def create_job(
     The merged payload is validated before the row is created.
     """
     fields: dict = {"source_type": source_type}
+    fields["ingest_actor"] = get_key_prefix() or "worker"
+    fields["ingest_request_id"] = get_request_id()
     for key, value in dict(payload or {}).items():
         if key == "source_type":
             continue
@@ -346,6 +348,7 @@ def serialize_job(job: IngestionJob) -> dict:
         "stage": job.stage,
         "progress": float(job.progress or 0.0),
         "duplicate": job_duplicate(job),
+        "deduplication_audit": (job.payload or {}).get("deduplication_audit") or [],
         "error_code": job.error_code,
         "error_message": job.error_message,
         "created_at": job.created_at,
@@ -377,11 +380,20 @@ def resolve_duplicate(
     paper: Paper,
     job: IngestionJob,
     message: str = "duplicate content: an identical paper already exists",
+    *,
+    rule: str = "sha256",
+    incoming_sha256: str | None = None,
+    evidence: dict | None = None,
+    file_action: dict | None = None,
 ) -> IngestionJob:
     """Mark a job as a completed no-op pointing at the existing paper."""
     payload = dict(job.payload or {})
     payload["duplicate"] = True
     job.payload = payload
+    ingestion_audit.record(job, kind="fingerprint_conflict" if rule == "fingerprint_collision" else "byte_duplicate",
+        rule=rule, target_paper_id=paper.id,
+        evidence={"incoming_sha256": incoming_sha256 or payload.get("sha256"), "target": ingestion_audit.identity(paper), **(evidence or {})},
+        file_action=file_action or {"incoming": "not_stored", "target": "retained"})
     job.paper_id = paper.id
     job.stage = STAGE_COMPLETED
     job.progress = PROGRESS_COMPLETED

@@ -34,7 +34,7 @@ from app.db.session import SessionLocal
 from app.parsing.chunking import CHUNK_MODE_SEMANTIC, chunk_markdown
 from app.parsing.pdf import extract_embedded_metadata, extract_pages
 from app.search import mappings, opensearch, snapshot
-from app.services import degradation_service, embedding_service
+from app.services import degradation_service, embedding_service, ingestion_audit
 from app.services import ingestion_service as ingest
 from app.services import metadata_matcher
 from app.services import metadata_reextract, metadata_service, metadata_shell, metadata_sources
@@ -242,13 +242,15 @@ def _process_job(session: Session, job) -> PayloadOutcome:
         fingerprint = paper_service.build_fingerprint(sha256=digest)
         existing = paper_service.find_by_fingerprint(session, fingerprint)
     if existing is not None:
-        ingest.resolve_duplicate(session, existing, job)
+        ingest.resolve_duplicate(session, existing, job, incoming_sha256=digest)
         session.commit()
         # Both temporary copies have served their purpose even when the content
         # turned out to be a duplicate: the staged upload and the extracted
         # archive file. Leaving them behind would fill the disk with files no
         # job will ever read.
-        _cleanup_source(source, payload, payload.get("object_key"))
+        cleanup = _cleanup_source(source, payload, payload.get("object_key"))
+        ingestion_audit.record(job, kind="temporary_cleanup", rule="source_cleanup", target_paper_id=existing.id, evidence={}, file_action=cleanup)
+        session.commit()
         return PayloadOutcome(paper_id=existing.id, duplicate=True)
 
     paper_id = new_uuid()
@@ -276,9 +278,11 @@ def _process_job(session: Session, job) -> PayloadOutcome:
         ) or paper_service.find_by_fingerprint(session, fingerprint)
         if existing is None:
             raise
-        ingest.resolve_duplicate(session, existing, job)
+        ingest.resolve_duplicate(session, existing, job, rule="sha256_insert_race", incoming_sha256=digest)
         session.commit()
-        _cleanup_source(source, payload, payload.get("object_key"))
+        cleanup = _cleanup_source(source, payload, payload.get("object_key"))
+        ingestion_audit.record(job, kind="temporary_cleanup", rule="source_cleanup", target_paper_id=existing.id, evidence={}, file_action=cleanup)
+        session.commit()
         return PayloadOutcome(paper_id=existing.id, duplicate=True)
 
     stored = _store_source(paper_id, source)
@@ -451,7 +455,7 @@ def _store_source(paper_id: str, source: _Source):
 
 def _cleanup_source(
     source: _Source, payload, staging_key: object | None = None
-) -> None:
+) -> dict[str, str]:
     """Remove the temporary copies of a payload that has been stored for good.
 
     Two things may be left over after the STORED checkpoint: the staging object
@@ -460,14 +464,18 @@ def _cleanup_source(
     files extracted from an archive). Both deletions are best effort: the paper
     is already stored and must not fail because a leftover could not be removed.
     """
+    outcome = {"staged_object": "not_applicable", "local_file": "retained" if source.local_path else "not_applicable"}
     if staging_key:
         try:
             object_storage.delete_object(str(staging_key))
+            outcome["staged_object"] = "deleted"
         except Exception:  # noqa: BLE001 - the GC retries, the paper is safe
+            outcome["staged_object"] = "cleanup_failed"
             logger.warning("could not delete staging object %s", staging_key)
     if source.local_path is None or not payload.get("cleanup_after"):
-        return
-    remove_local_file(source.local_path)
+        return outcome
+    outcome["local_file"] = "deleted" if remove_local_file(source.local_path) else "cleanup_failed"
+    return outcome
 
 
 def remove_local_file(path) -> bool:
@@ -810,20 +818,28 @@ def _discard_duplicate_paper(
     no-op pointing at the surviving paper -- the same shape
     ``ingest.resolve_duplicate`` produces for the pre-parse dedupe path.
     """
+    incoming = ingestion_audit.identity(paper)
+    cleanup = {"incoming": "soft_deleted", "target": "retained", "index": "deleted", "objects": "deleted"}
     session.query(PaperChunk).filter(PaperChunk.paper_id == paper.id).delete(
         synchronize_session=False
     )
     try:
         opensearch.delete_by_paper_id(paper.id)
     except Exception:  # noqa: BLE001 - cleanup is best effort, the row wins
+        cleanup["index"] = "cleanup_failed"
         logger.warning("could not remove index documents for %s", paper.id)
     try:
         object_storage.delete_prefix(paper.id)
     except Exception:  # noqa: BLE001 - cleanup is best effort, the row wins
+        cleanup["objects"] = "cleanup_failed"
         logger.warning("could not remove stored objects for %s", paper.id)
 
     paper_service.soft_delete_paper(session, paper)
-    ingest.resolve_duplicate(session, existing, job)
+    ingest.resolve_duplicate(session, existing, job, rule="fingerprint_collision",
+        evidence={"incoming": incoming, "matched_fingerprint": existing.fingerprint,
+                  "computed_fingerprint": paper_service.build_fingerprint(doi=paper.doi, arxiv_id=paper.arxiv_id,
+                      title=paper.title, first_author=_first_author_name(paper), year=paper.year, sha256=_original_sha256(paper))},
+        file_action=cleanup)
     session.commit()
     logger.info(
         "ingest duplicate detected after metadata upgrade",
@@ -873,7 +889,10 @@ def _resolve_target_paper(
     """
     previous_status = paper.status
     match = _match_existing_paper(session, paper, record, data, pages)
+    matched = None
     if match is not None and match.matched and match.paper is not None:
+        matched = {"incoming": ingestion_audit.identity(paper), "target": ingestion_audit.identity(match.paper),
+                   "confidence": match.confidence, "matching_evidence": match.evidence}
         # Remember the status of the paper we are joining *before* adoption (a
         # shell turns PENDING there); a non-primary arrival has to leave it alone.
         previous_status = match.paper.status
@@ -888,6 +907,12 @@ def _resolve_target_paper(
         session.flush()
 
     outcome = paper_service.apply_primary_selection(session, paper, incoming=record)
+    if matched is not None:
+        ingestion_audit.record(job, kind="identity_match", rule=match.method or "unknown", target_paper_id=paper.id,
+            evidence=matched, file_action={"incoming": "retained", "file_id": record.id})
+        ingestion_audit.record(job, kind="version_selection", rule="primary_version_priority", target_paper_id=paper.id,
+            evidence={"file_id": record.id, "file_kind": record.kind, "decision": outcome.action},
+            file_action={"incoming": "retained", "is_primary": record.is_primary})
     return _TargetResolution(
         paper=paper,
         object_key=record.object_key,

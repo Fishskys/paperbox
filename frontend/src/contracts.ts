@@ -102,6 +102,12 @@ export type Job = {
   paper_id?: string | null;
   stage: string;
   progress: number;
+  duplicate?: boolean;
+  deduplication_audit?: {
+    event_id: string; created_at: string; actor: string; request_id?: string | null;
+    kind: string; rule: string; target_paper_id: string;
+    evidence: Record<string, unknown>; file_action: Record<string, unknown>;
+  }[];
   error_code?: string | null;
   error_message?: string | null;
   created_at?: string | null;

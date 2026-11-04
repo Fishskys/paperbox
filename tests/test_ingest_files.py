@@ -287,6 +287,10 @@ def test_duplicate_job_is_already_completed(client, factory, storage):  # noqa: 
         assert job.stage == "COMPLETED"
         assert job.finished_at is not None
         assert (job.payload or {}).get("duplicate") is True
+        audit = job.payload["deduplication_audit"]
+        assert audit[0]["kind"] == "byte_duplicate"
+        assert audit[0]["evidence"]["incoming_sha256"] == digest
+        assert audit[-1]["file_action"]["staged_object"] == "deleted"
     finally:
         session.close()
 

@@ -45,6 +45,7 @@ from app.schemas.ingestion import (
     IngestRequest,
 )
 from app.services import ingestion_service as ingest
+from app.services import ingestion_audit
 from app.services import net_guard
 from app.services import (
     archive_service,
@@ -193,7 +194,7 @@ async def stage_and_queue(
                 content_type=content_type,
                 size_bytes=size,
             )
-            ingest.resolve_duplicate(session, existing, job)
+            ingest.resolve_duplicate(session, existing, job, incoming_sha256=digest)
             session.commit()
             return (
                 IngestFileResult(
@@ -230,7 +231,12 @@ async def stage_and_queue(
     if duplicate is not None:
         # Same content was already in the library: the staged copy has served
         # its only purpose (hashing) and goes away immediately.
-        await run_in_threadpool(_discard_staging, staging_key)
+        cleaned = await run_in_threadpool(_discard_staging, staging_key)
+        def audit_cleanup():
+            ingestion_audit.record(job, kind="temporary_cleanup", rule="staging_cleanup", target_paper_id=job.paper_id,
+                evidence={}, file_action={"staged_object": "deleted" if cleaned else "cleanup_failed"})
+            session.commit()
+        await run_in_threadpool(audit_cleanup)
         return duplicate
 
     await run_in_threadpool(
@@ -245,12 +251,14 @@ async def stage_and_queue(
     )
 
 
-def _discard_staging(staging_key: str) -> None:
+def _discard_staging(staging_key: str) -> bool:
     """Best-effort removal of a staging object (the GC is the safety net)."""
     try:
         object_storage.delete_object(staging_key)
+        return True
     except Exception:  # noqa: BLE001 - the GC retries, the request is fine
         logger.warning("could not delete staging object %s", staging_key)
+        return False
 
 
 def summarize(
@@ -453,12 +461,20 @@ def ingest_dir(
 
         existing = ingest.find_existing_paper(session, item.sha256 or "")
         if existing is not None:
+            duplicate_job = None
+            if not payload.dry_run:
+                duplicate_job = ingest.create_job(session, source_type=ingest.SOURCE_TYPE_LOCAL,
+                    filename=item.path.name, payload={"local_path": str(item.path)})
+                ingest.resolve_duplicate(session, existing, duplicate_job, incoming_sha256=item.sha256,
+                    file_action={"incoming_local_file": "retained", "target": "retained"})
+                session.commit()
             entries.append(
                 IngestDirJob(
                     filename=item.path.name,
                     relative=item.relative,
                     path=str(item.path),
                     status=STATUS_DUPLICATE,
+                    job_id=duplicate_job.id if duplicate_job else None,
                     paper_id=existing.id,
                     size_bytes=item.size_bytes,
                 )
@@ -788,12 +804,20 @@ async def _register_extracted(
         if existing is not None:
             # Same content is already in the library: the extracted copy is
             # deleted right away, and the extraction dir with it when it empties.
-            archive_service.remove_file(entry.path)
+            job = ingest.create_job(session, source_type=ingest.SOURCE_TYPE_LOCAL, filename=filename,
+                size_bytes=entry.size_bytes, payload={"local_path": str(entry.path), "cleanup_after": True})
+            ingest.resolve_duplicate(session, existing, job, incoming_sha256=digest)
+            session.commit()
+            cleaned = archive_service.remove_file(entry.path)
             archive_service.prune_tree(entry.path.parent)
+            ingestion_audit.record(job, kind="temporary_cleanup", rule="archive_cleanup", target_paper_id=existing.id,
+                evidence={}, file_action={"extracted_file": "deleted" if cleaned else "cleanup_failed"})
+            session.commit()
             return IngestFileResult(
                 filename=filename,
                 entry=entry.name,
                 status=STATUS_DUPLICATE,
+                job_id=job.id,
                 paper_id=existing.id,
                 size_bytes=entry.size_bytes,
             )

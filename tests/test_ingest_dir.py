@@ -232,7 +232,14 @@ def test_content_already_in_the_library_is_reported_as_duplicate(
     item = body["jobs"][0]
     assert item["status"] == "duplicate"
     assert item["paper_id"] == existing_id
-    assert item["job_id"] is None  # no job is created for a duplicate
+    assert item["job_id"]  # completed audit job; no pipeline is queued
+    with factory() as session:
+        from app.db.models import IngestionJob
+        job = session.get(IngestionJob, item["job_id"])
+        assert job.stage == "COMPLETED"
+        evidence = job.payload["deduplication_audit"][0]
+        assert evidence["evidence"]["incoming_sha256"] == digest
+        assert evidence["file_action"]["incoming_local_file"] == "retained"
     assert queued.submitted == []
 
 

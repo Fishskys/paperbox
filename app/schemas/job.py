@@ -3,8 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class DeduplicationAuditOut(BaseModel):
+    event_id: str
+    created_at: str
+    actor: str
+    request_id: str | None = None
+    kind: str
+    rule: str
+    target_paper_id: str
+    evidence: dict[str, Any]
+    file_action: dict[str, Any]
 
 
 class JobOut(BaseModel):
@@ -18,6 +31,7 @@ class JobOut(BaseModel):
     stage: str
     progress: float = 0.0
     duplicate: bool = False
+    deduplication_audit: list[DeduplicationAuditOut] = Field(default_factory=list)
     #: Structured failure reason (SPEC-P1 A2); one of ``app.core.errors`` codes,
     #: or ``None`` when the job has not failed.
     error_code: str | None = None

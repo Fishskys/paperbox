@@ -21,3 +21,17 @@ test("task diagnostics show queue state, filter by paper, and preserve the error
   await expect(drawer.getByRole("link", { name: "打开论文", exact: true })).toHaveCount(0);
   expect(requests.every((url) => url.searchParams.get("paper_id") === paperId && url.searchParams.get("stage") === "FAILED")).toBe(true);
 });
+
+test("duplicate diagnostics show evidence and file outcomes", async ({ page }) => {
+  const job = { job_id: "audit-job", kind: "ingest", stage: "COMPLETED", progress: 100, duplicate: true, paper_id: "target",
+    deduplication_audit: [{ event_id: "event", created_at: "2026-11-04T08:00:00Z", actor: "write-test", kind: "byte_duplicate", rule: "sha256", target_paper_id: "target",
+      evidence: { incoming_sha256: "known-digest", target: { title: "Target paper" } }, file_action: { incoming: "not_stored", target: "retained" } }] };
+  await page.route("**/api/jobs/audit-job", route => route.fulfill({ json: job }));
+  await page.route("**/api/jobs?*", route => route.fulfill({ json: { total: 1, jobs: [job] } }));
+  await page.goto("/manage/jobs?job=audit-job");
+  const drawer = page.getByRole("dialog", { name: "任务详情", exact: true });
+  await drawer.getByText("字节重复 · sha256", { exact: true }).click();
+  await expect(drawer.getByText(/known-digest/)).toBeVisible();
+  await expect(drawer.getByText(/not_stored/)).toBeVisible();
+  await expect(drawer.getByRole("link", { name: "目标论文 target", exact: true })).toHaveAttribute("href", "/manage/library?paper=target");
+});

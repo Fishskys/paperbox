@@ -1,4 +1,4 @@
-import { Alert, App, Button, Drawer, Input, Progress, Select, Table, Tooltip } from "antd";
+import { Alert, App, Button, Collapse, Drawer, Input, Progress, Select, Table, Tooltip } from "antd";
 import { ArrowUpRight, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -313,6 +313,21 @@ export default function Jobs() {
             <p>{formatTime(detail.data.finished_at)}</p>
             <h3>总耗时（含排队）</h3>
             <p>{jobDuration(detail.data)}</p>
+            {!!detail.data.deduplication_audit?.length && <>
+              <h3>判重与文件处置</h3>
+              <Collapse items={detail.data.deduplication_audit.map(event => ({
+                key: event.event_id,
+                label: `${({ byte_duplicate: "字节重复", identity_match: "身份匹配", version_selection: "版本关联", fingerprint_conflict: "指纹冲突", temporary_cleanup: "临时文件清理" } as Record<string, string>)[event.kind] || event.kind} · ${event.rule}`,
+                children: <>
+                  <p>{formatTime(event.created_at)} · {event.actor}</p>
+                  <Link to={`/manage/library?paper=${encodeURIComponent(event.target_paper_id)}`}>目标论文 {event.target_paper_id}</Link>
+                  {event.request_id && <p>请求 {event.request_id}</p>}
+                  <h4>比较证据</h4><pre className="report-value">{JSON.stringify(event.evidence, null, 2)}</pre>
+                  <h4>文件处置</h4><pre className="report-value">{JSON.stringify(event.file_action, null, 2)}</pre>
+                </>,
+              }))} />
+            </>}
+            {detail.data.duplicate && !detail.data.deduplication_audit?.length && <p>此历史任务未记录详细判重依据。</p>}
             {detail.data.error_code && <p>错误码：<code>{detail.data.error_code}</code></p>}
             {detail.data.error_message && (
               <Failure message={detail.data.error_message} />
