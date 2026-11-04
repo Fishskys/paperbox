@@ -46,6 +46,16 @@ def test_journal_running_header_is_not_title_even_with_larger_font():
     assert detect_title(pages, [SizedLine(text=header, size=18), SizedLine(text=title, size=16)]) == title
 
 
+def test_missing_text_title_does_not_turn_byline_or_affiliation_into_identity():
+    lines = ["Dieter Genschow, Johannes Kloas", "IHP, Im Technologieark 25, Frankfurt, Germany", "Abstract—This paper evaluates a radar interface"]
+    pages = [PageText(page=1, text="\n".join(lines))]
+    assert detect_title(pages) is None
+    assert detect_title(pages, [SizedLine(text=line, size=11) for line in lines]) is None
+    title = "Low Power Circuits, Accurate Digital Timing"
+    assert detect_title([PageText(page=1, text=title + "\n" + "\n".join(lines))]) == title
+    assert detect_title([PageText(page=1, text="Noise Shaping and Timing Conversion\n" + "\n".join(lines))]) == "Noise Shaping and Timing Conversion"
+
+
 @pytest.mark.parametrize(("raw", "expected"), [
     ('A <inline-formula> <tex-math notation="LaTeX">$16\\times8$ </tex-math></inline-formula> Digital-SiPM Array', 'A 16×8 Digital-SiPM Array'),
     ('A 40-<inline-formula><tex-math>$\\mu$</tex-math></inline-formula>m Circuit', 'A 40-μm Circuit'),

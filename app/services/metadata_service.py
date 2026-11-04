@@ -151,6 +151,13 @@ def _looks_like_title(line: str) -> bool:
     return letters >= len(line) * 0.5
 
 
+def _explicit_byline(line: str) -> bool:
+    if not re.search(r"[,;]", line):
+        return False
+    names = parse_authors(line)
+    return len(names) > 1 and all(2 <= len(name.split()) <= 4 and _plausible_author(name) for name in names)
+
+
 def _is_boilerplate(line: str) -> bool:
     if _TITLE_BOILERPLATE.search(line) or _RUNNING_HEADER.search(line) or _DELIVERY_STAMP.search(line):
         return True
@@ -164,6 +171,8 @@ def _title_candidates(pages: Sequence[PageText], limit: int = 30) -> list[str]:
     lines = _candidate_lines(pages, limit=1)[:limit]
     candidates: list[str] = []
     for line in lines:
+        if _explicit_byline(line) or _ABSTRACT_MARKER.match(line):
+            break
         if _is_boilerplate(line):
             continue
         candidates.append(line)
@@ -182,11 +191,13 @@ def detect_title(
     """
 
     if sized_lines:
-        usable = [
-            line
-            for line in sized_lines[:40]
-            if line.text.strip() and not _is_boilerplate(line.text)
-        ]
+        usable = []
+        for line in sized_lines[:40]:
+            text = line.text.strip()
+            if _explicit_byline(text) or _ABSTRACT_MARKER.match(text):
+                break
+            if text and not _is_boilerplate(text):
+                usable.append(line)
         if usable:
             biggest = max(line.size for line in usable)
             if biggest > 0:
