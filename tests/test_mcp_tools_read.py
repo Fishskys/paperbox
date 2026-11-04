@@ -457,8 +457,9 @@ def test_context_with_a_tiny_budget_still_answers_about_the_target(
 # --------------------------------------------------------------------------- #
 # paper_get_file (the public file route)
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("api_key", ["", "unit-test-only-credential"])
 def test_get_file_returns_the_public_file_url(
-    mcp_client, session_factory, monkeypatch
+    mcp_client, session_factory, monkeypatch, api_key
 ) -> None:
     """2026-10-12: no signature at all -- the same route (and mechanism) REST uses."""
     paper_id = make_paper(session_factory, chunks=2)
@@ -467,6 +468,7 @@ def test_get_file_returns_the_public_file_url(
         tools_read.paper_service, "original_file", lambda paper: record
     )
     monkeypatch.setattr(settings, "mcp_public_base_url", "http://paperbox.lan:8077")
+    monkeypatch.setattr(settings, "paper_api_key", api_key)
 
     envelope = call(mcp_client, "paper_get_file", {"paper_id": paper_id})
     data = envelope["data"]
@@ -476,7 +478,8 @@ def test_get_file_returns_the_public_file_url(
     assert data["download_url"] == f"http://testserver/api/papers/{paper_id}/file"
     # Neither a credential nor a signature: it is the plain read route.
     assert "sig=" not in data["download_url"] and "exp=" not in data["download_url"]
-    assert settings.paper_api_key not in data["download_url"]
+    if api_key:
+        assert api_key not in data["download_url"]
     assert "expires_at" not in data
     assert data["bytes"] == 1234
     assert data["page_count"] == 2

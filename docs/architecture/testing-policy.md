@@ -27,8 +27,9 @@
 普通路由测试不进入生产应用 lifespan。确需验证启动行为时，替换 bootstrap、维度检查、
 队列恢复和 housekeeping 等外部边界；健康探针使用本地 transport 替身。
 SQLite、内存对象存储和可控的向量替身用于保持测试结果可重复。
+凭证相关测试显式使用空值或固定假凭证，不读取本机真实 key 作为断言预期；公共下载链接须在两种配置下都保持相同路径且不携带凭证。
 
-完整单元测试使用 `uv run python scripts/test_unit.py`，在导入应用前禁止 IPv4/IPv6 TCP 连接，保留异步运行所需的本机 Unix socket。真实 PostgreSQL、OpenSearch、MinIO 与推理服务的验收放在
+完整单元测试使用 `uv run python scripts/test_unit.py`，在导入应用前禁止 IPv4/IPv6 TCP 连接，并在 SQLAlchemy 调用驱动之前拒绝非 SQLite 数据库连接，覆盖 libpq 绕过 Python socket 的路径；保留异步运行所需的本机 Unix socket。鉴权中间件测试也须显式替换自己的会话工厂，不能只替换 HTTP 路由的数据库依赖。真实 PostgreSQL、OpenSearch、MinIO 与推理服务的验收放在
 `scripts/`，不混入默认 `tests/` 套件。模型声明检查不能代替真实数据库迁移验收，
 模拟请求体检查也不能证明真实检索引擎或推理模型可用。
 

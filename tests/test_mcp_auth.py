@@ -105,8 +105,9 @@ def _call(client: TestClient, tool: str, arguments: dict, token: str | None = No
 
 
 @pytest.fixture()
-def mcp_http(keys) -> TestClient:
+def mcp_http(keys, monkeypatch, session_factory) -> TestClient:
     """The production composition: auth middleware outermost, MCP mounted at /mcp."""
+    monkeypatch.setattr(auth, "SessionLocal", session_factory)
     server = build_server()
     app = FastAPI()
 

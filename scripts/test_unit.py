@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Run isolated unit tests with TCP connections blocked before application import."""
+"""Run unit tests with TCP and external SQL connections blocked before app import."""
 
+from contextlib import contextmanager
 from pathlib import Path
 import socket
 import sys
@@ -9,8 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def main() -> int:
-    import pytest
+@contextmanager
+def isolated_io():
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
 
     connect = socket.socket.connect
     connect_ex = socket.socket.connect_ex
@@ -24,11 +27,26 @@ def main() -> int:
 
     socket.socket.connect = block(connect)
     socket.socket.connect_ex = block(connect_ex)
+
+    def block_database(dialect, connection_record, args, kwargs):
+        if dialect.name != "sqlite":
+            raise RuntimeError("Unit tests cannot connect to external databases; use SQLite or a stub")
+
+    # libpq connects below Python's socket API, so guard before driver dispatch.
+    event.listen(Engine, "do_connect", block_database)
     try:
-        return pytest.main(sys.argv[1:] or ["tests", "--tb=short"])
+        yield
     finally:
+        event.remove(Engine, "do_connect", block_database)
         socket.socket.connect = connect
         socket.socket.connect_ex = connect_ex
+
+
+def main() -> int:
+    import pytest
+
+    with isolated_io():
+        return pytest.main(sys.argv[1:] or ["tests", "--tb=short"])
 
 
 if __name__ == "__main__":
