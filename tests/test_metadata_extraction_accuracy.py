@@ -51,6 +51,7 @@ def test_journal_running_header_is_not_title_even_with_larger_font():
     ('A 40-<inline-formula><tex-math>$\\mu$</tex-math></inline-formula>m Circuit', 'A 40-μm Circuit'),
     ('A <inline-formula><tex-math>$V$</tex-math></inline-formula><sub>MAX</sub>-Compliant Circuit', 'A VMAX-Compliant Circuit'),
     ('Signals &amp; Noise in <i>CMOS</i>', 'Signals & Noise in CMOS'),
+    ('An <italic xmlns:x="urn:x">italic</italic> N', 'An italic N'),
     (r'An Unknown $\custom{x}$ Circuit', r'An Unknown $\custom{x}$ Circuit'),
 ])
 def test_presentation_cleanup_preserves_unknown_math(raw, expected):

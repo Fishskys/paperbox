@@ -14,7 +14,7 @@ _AUTHOR_FRONT_MATTER = re.compile(r"\b(?:e-?mails?|copyright|received|revised|ac
 _PUBLICATION = re.compile(r"^.+;\s*(?:19|20)\d{2}\s*;[^;]*;[^;]*(?:;.*)?$", re.S)
 _TEMPLATE = re.compile(r"^(?:instructions? for (?:paper|authors?)|paper preparation|session\b|PRIME \d{4} proceedings|(?:NSS-MIC|PPC) \d{4} (?:paper|manuscript)\b|https?://\S+$|www\.\S+$)", re.I)
 
-_TITLE_TAG = re.compile(r"</?(?:inline-formula|tex-math|sup|sub|i|b|em|strong)(?:\s[^>]*)?>", re.I)
+_TITLE_TAG = re.compile(r"</?(?:inline-formula|tex-math|sup|sub|inf|italic|italics|i|b|bold|em|strong)(?:\s[^<>]*?)?\s*/?>", re.I)
 _MATH_SYMBOLS = {"mu": "μ", "times": "×", "Delta": "Δ", "sigma": "σ", "Omega": "Ω"}
 
 
