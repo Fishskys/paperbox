@@ -14,7 +14,6 @@ export function PageHeader({
   return (
     <header className="page-header">
       <div>
-        <div className="eyebrow">PAPERBOX WORKSPACE</div>
         <h1>{title}</h1>
         {description && <p>{description}</p>}
       </div>

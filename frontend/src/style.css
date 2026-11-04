@@ -6,20 +6,32 @@
   --surface: #fff;
   --bg: #f6f8f9;
   --text: #243136;
-  --muted: #6a797f;
+  --muted: #536269;
   --border: #e3e9eb;
-  --accent: #147d73;
+  --accent: #116e65;
   --accent-soft: #e9f5f1;
+  --on-accent: #fff;
+  --success: #286238;
+  --danger: #a12b32;
+  --warning: #795015;
+  --info: #235b96;
+  --control-border: #7b8b91;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --surface: #202526;
   --bg: #171c1d;
   --text: #e1e8e7;
-  --muted: #9cadaa;
+  --muted: #b4c2bf;
   --border: #374240;
   --accent: #67c5b0;
   --accent-soft: #263c36;
+  --on-accent: #172724;
+  --success: #9ed8a9;
+  --danger: #ffb4b0;
+  --warning: #f1cb7b;
+  --info: #a4ceff;
+  --control-border: #839792;
 }
 * {
   box-sizing: border-box;
@@ -68,7 +80,7 @@ button:focus-visible {
 }
 .brand-icon {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   width: 36px;
   height: 36px;
   border-radius: 7px;
@@ -77,6 +89,7 @@ button:focus-visible {
   flex-shrink: 0;
 }
 .brand-copy {
+  color: var(--text);
   font-size: 20px;
   font-weight: 650;
   line-height: 1.3;
@@ -155,13 +168,13 @@ button:focus-visible {
   white-space: nowrap;
 }
 .connection-online {
-  color: #23946b;
+  color: var(--success);
 }
 .connection-offline {
-  color: #c44c4c;
+  color: var(--danger);
 }
 .connection-unknown {
-  color: #91a0a5;
+  color: var(--muted);
 }
 .workspace-main {
   min-width: 0;
@@ -181,7 +194,7 @@ button:focus-visible {
 }
 .breadcrumb span {
   margin: 0 9px;
-  color: #a5b2b5;
+  color: var(--muted);
 }
 .breadcrumb strong {
   color: var(--text);
@@ -207,12 +220,6 @@ button:focus-visible {
   gap: 16px;
   margin-bottom: 28px;
 }
-.eyebrow {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 9px;
-}
 h1 {
   font-size: 23px;
   line-height: 1.3;
@@ -235,6 +242,9 @@ h1 {
 }
 .muted {
   color: var(--muted);
+}
+.ant-app .ant-tag.ant-tag-blue:not(.ant-tag-disabled).ant-tag-filled {
+  color: var(--info);
 }
 .blank {
   padding: 55px 12px;
@@ -585,7 +595,7 @@ h1 {
 }
 .upload-error {
   font-size: 12px;
-  color: #ba4b45;
+  color: var(--danger);
   margin-top: 7px;
 }
 .url-import {

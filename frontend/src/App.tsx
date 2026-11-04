@@ -236,11 +236,41 @@ function Workspace() {
       theme={{
         algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
-          colorPrimary: "#147d73",
+          colorPrimary: dark ? "#67c5b0" : "#116e65",
+          colorLink: dark ? "#67c5b0" : "#116e65",
+          colorText: dark ? "#e1e8e7" : "#243136",
+          colorTextSecondary: dark ? "#b4c2bf" : "#536269",
+          colorTextTertiary: dark ? "#b4c2bf" : "#536269",
+          colorTextQuaternary: dark ? "#b4c2bf" : "#536269",
+          colorTextPlaceholder: dark ? "#b4c2bf" : "#536269",
+          colorBorder: dark ? "#839792" : "#7b8b91",
+          colorBgContainer: dark ? "#202526" : "#ffffff",
+          colorBgElevated: dark ? "#202526" : "#ffffff",
+          colorBgLayout: dark ? "#171c1d" : "#f6f8f9",
+          colorPrimaryHover: dark ? "#83d5c3" : "#0d6159",
+          colorPrimaryActive: dark ? "#55b5a0" : "#09574f",
+          colorPrimaryText: dark ? "#67c5b0" : "#116e65",
+          colorPrimaryTextHover: dark ? "#83d5c3" : "#0d6159",
+          colorPrimaryTextActive: dark ? "#55b5a0" : "#09574f",
+          colorTextLightSolid: dark ? "#172724" : "#ffffff",
+          colorSuccessText: dark ? "#9ed8a9" : "#286238",
+          colorWarningText: dark ? "#f1cb7b" : "#795015",
+          colorErrorText: dark ? "#ffb4b0" : "#a12b32",
+          colorInfoText: dark ? "#a4ceff" : "#235b96",
           borderRadius: 6,
           fontSize: 14,
           fontFamily:
             'Inter, system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif',
+        },
+        components: {
+          Tag: {
+            colorSuccess: dark ? "#9ed8a9" : "#286238",
+            colorWarning: dark ? "#f1cb7b" : "#795015",
+            colorError: dark ? "#ffb4b0" : "#a12b32",
+            colorInfo: dark ? "#a4ceff" : "#235b96",
+          },
+          // Tooltip surfaces remain dark in either appearance.
+          Tooltip: { colorTextLightSolid: "#ffffff" },
         },
       }}
     >
