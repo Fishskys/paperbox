@@ -31,6 +31,7 @@ import { positivePage } from "../search-model";
 import PdfPages from "../PdfPages";
 import PdfNavigation from "../PdfNavigation";
 import CitationActions from "../CitationActions";
+import PaperInformation from "../PaperInformation";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -194,7 +195,7 @@ export default function Reader() {
             />
           </Tooltip>
         </div>
-        <div className="inline">
+        <div className="inline reader-actions">
           <Tooltip title="目录、缩略图与文内查找"><Button aria-label="阅读导航" icon={<ListTree size={16} />} disabled={!pdf} onClick={() => setNavigation(true)} /></Tooltip>
           {paper && <CitationActions paperId={paperId} />}
           <Tooltip title="论文信息">
@@ -256,18 +257,8 @@ export default function Reader() {
       <Drawer title="阅读导航" open={navigation} onClose={() => setNavigation(false)} size={380}>
         {pdf && <PdfNavigation key={`${paperId}-${revision}-${reload}`} pdf={pdf} paperId={paperId} page={page} go={go} onQuery={setQuery} />}
       </Drawer>
-      <Drawer title="论文信息" open={info} onClose={() => setInfo(false)}>
-        {paper && (
-          <div className="paper-info">
-            <h2>{paper.title}</h2>
-            <p>{paper.authors.join(", ")}</p>
-            <p>{[paper.year, paper.venue].filter(Boolean).join(" · ")}</p>
-            <h3>摘要</h3>
-            <p>{paper.abstract || "暂无摘要"}</p>
-            <h3>DOI</h3>
-            <p>{paper.doi || "未标注"}</p>
-          </div>
-        )}
+      <Drawer title="论文信息" size={560} styles={{ wrapper: { maxWidth: "100vw" } }} open={info} onClose={() => setInfo(false)}>
+        {paper && <PaperInformation paper={paper} />}
       </Drawer>
     </div>
   );

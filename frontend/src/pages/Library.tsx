@@ -7,7 +7,7 @@ import { errorMessage } from "../api";
 import { Failure, PageHeader, Stage } from "../components";
 import type { Paper, PaperList } from "../contracts";
 import { downloadPaper, hasOriginal } from "../files";
-import CitationActions from "../CitationActions";
+import PaperInformation from "../PaperInformation";
 import { useResource } from "../hooks";
 import { positivePage, readerPath } from "../search-model";
 import { remember } from "../history";
@@ -259,21 +259,13 @@ export default function Library({
       />
       <Drawer
         title="论文信息"
+        size={560}
+        styles={{ wrapper: { maxWidth: "100vw" } }}
         open={!!selected}
         onClose={() => setSelected(null)}
       >
         {selected && (
-          <div className="paper-info">
-            <h2>{selected.title}</h2>
-            <p>{selected.authors.join(", ")}</p>
-            {!onManage && <CitationActions paperId={selected.paper_id} />}
-            <Tag>{selected.year || "年份未知"}</Tag>
-            <p>{selected.venue}</p>
-            <h3>摘要</h3>
-            <p>{selected.abstract || "暂无摘要"}</p>
-            <h3>DOI</h3>
-            <p>{selected.doi || "未标注"}</p>
-            {hasOriginal(selected) ? (
+          <PaperInformation paper={selected} actions={hasOriginal(selected) ? (
               <Link
                 to={readerPath(selected.paper_id)}
                 state={{ from: location.pathname + location.search }}
@@ -282,8 +274,7 @@ export default function Library({
               </Link>
             ) : (
               <p className="muted">待补充 PDF 原文</p>
-            )}
-          </div>
+            )} />
         )}
       </Drawer>
     </>

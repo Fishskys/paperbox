@@ -497,16 +497,64 @@ h1 {
   overflow-wrap: anywhere;
 }
 .paper-info h2 {
-  font-size: 18px;
-  line-height: 1.7;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.55;
+  margin: 0 0 20px;
 }
 .paper-info h3 {
-  font-size: 13px;
-  margin-top: 26px;
-  color: var(--muted);
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0 0 16px;
+  color: var(--text);
 }
 .paper-info p {
-  line-height: 1.9;
+  line-height: 1.85;
+  margin: 0;
+  white-space: pre-line;
+}
+.paper-info section,
+.paper-info-actions {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  margin-top: 22px;
+}
+.paper-info dl,
+.paper-info dd {
+  margin: 0;
+}
+.paper-info dt {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.paper-info dd {
+  font-size: 14px;
+  line-height: 1.75;
+}
+.paper-info-authors ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.paper-info-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 24px;
+}
+.paper-info-wide {
+  grid-column: 1 / -1;
+}
+.citation-actions,
+.reader-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
 }
 .history-row {
   display: flex;

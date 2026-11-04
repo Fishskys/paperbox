@@ -1,4 +1,4 @@
-import { App, Button, Dropdown, Tooltip } from "antd";
+import { App, Button, Dropdown } from "antd";
 import { Copy, Download } from "lucide-react";
 import { useRef, useState } from "react";
 import { authHeaders, checkResponse, errorMessage } from "./api";
@@ -46,10 +46,10 @@ export default function CitationActions({ paperId }: { paperId: string }) {
     } catch (error) { void message.error(`引用操作失败：${errorMessage(error)}`); }
     finally { guard.current = false; setBusy(false); }
   }
-  return <div className="inline">
-    <Tooltip title="复制引用"><Button aria-label="复制引用" icon={<Copy size={16} />} loading={busy} onClick={() => void citation("text")} /></Tooltip>
+  return <div className="citation-actions" role="group" aria-label="引用操作">
+    <Button icon={<Copy size={16} />} loading={busy} onClick={() => void citation("text")}>复制引用</Button>
     <Dropdown menu={{ items: [{ key: "bibtex", label: "BibTeX (.bib)" }, { key: "ris", label: "RIS (.ris)" }], onClick: ({ key }) => void citation(key as "bibtex" | "ris") }} trigger={["click"]} disabled={busy}>
-      <Tooltip title="导出引用"><Button aria-label="导出引用" icon={<Download size={16} />} disabled={busy} /></Tooltip>
+      <Button icon={<Download size={16} />} disabled={busy}>导出引用</Button>
     </Dropdown>
   </div>;
 }
