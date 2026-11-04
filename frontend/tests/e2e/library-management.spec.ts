@@ -129,6 +129,26 @@ test("management prioritizes every state and locates papers by DOI without catal
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test("immediate search preserves the newly selected field", async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route("**/api/papers?*", route => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({ json: { total: 0, papers: [] } });
+  });
+  await page.goto("/manage/library");
+  await page.getByRole("combobox", { name: "定位字段" }).click();
+  await expect(page.locator('.ant-select-item-option[title="DOI"]')).toBeVisible();
+  // Deliver both interactions in one turn so a deferred navigation cannot hide the race.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('.ant-select-item-option[title="DOI"]')!.click();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="快速定位论文"]')!;
+    input.value = "10.1234/clock";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+  });
+  await expect.poll(() => requests.filter(url => url.searchParams.get("q"))).not.toHaveLength(0);
+  expect(requests.filter(url => url.searchParams.get("q")).map(url => url.searchParams.get("scope"))).toEqual(["doi"]);
+});
+
 test("library management edits only changed fields and previews destructive actions", async ({
   page,
 }) => {

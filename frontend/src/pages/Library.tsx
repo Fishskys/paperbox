@@ -70,7 +70,8 @@ export default function Library({
     });
   }, [conventional, data, encoded]);
   function filter(key: string, value: string) {
-    const next = new URLSearchParams(params);
+    // The URL can commit before a router transition renders the new params.
+    const next = new URLSearchParams(window.location.search);
     if (value) next.set(key, value);
     else next.delete(key);
     next.delete("page");
