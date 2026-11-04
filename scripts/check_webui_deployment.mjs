@@ -10,8 +10,11 @@ if (!key) throw new Error("Use scripts/check_webui_deployment.py for a temporary
 const output = resolve(import.meta.dirname, "../logs/codex");
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch();
+let page;
+const errors = [];
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page.setDefaultTimeout(20000);
   await page.route("**/api/maintenance/jobs", route => {
     const body = route.request().postDataJSON();
     if (body.dry_run === false) return route.fulfill({ status: 409, json: { detail: "Deployment acceptance only previews maintenance" } });
@@ -23,7 +26,6 @@ try {
     if (new URL(request.url()).pathname.endsWith("/rematch") && request.postDataJSON()?.apply === false) return route.continue();
     return route.fulfill({ status: 409, json: { detail: "Deployment acceptance only previews source attribution" } });
   });
-  const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${origin}/library`);
   const localIndex = await readFile(resolve(import.meta.dirname, "../frontend/dist/index.html"), "utf8");
@@ -98,6 +100,7 @@ try {
   const papers = await page.evaluate(async () => (await (await fetch("/api/papers?limit=1")).json()).papers);
   await page.getByLabel("维护论文 ID").fill(papers[0].paper_id);
   const indexPreview = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/papers/reindex", { timeout: 180000 });
+  void indexPreview.catch(() => {});
   await page.getByRole("button", { name: "预览维护" }).click();
   const indexReport = await (await indexPreview).json();
   if (!indexReport.dry_run || indexReport.queued !== 0 || indexReport.selected !== 1) throw new Error("Invalid index preview");
@@ -112,8 +115,18 @@ try {
   const audit = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/consistency/doi");
   await page.getByRole("button", { name: "检查标识" }).click();
   if (!(await audit).ok()) throw new Error("Identifier audit failed");
-  const consistency = page.waitForResponse((response) => /\/api\/maintenance\/jobs\/[^/]+\/report$/.test(new URL(response.url()).pathname), { timeout: 180000 });
+  const consistency = page.waitForResponse((response) => /\/api\/maintenance\/jobs\/[^/]+\/report$/.test(new URL(response.url()).pathname), { timeout: 600000 });
+  void consistency.catch(() => {});
   await page.getByRole("button", { name: "开始检查" }).click();
+  await expect(page).toHaveURL(/\/system\/data\?task=[a-f0-9-]+/);
+  const consistencyTask = new URL(page.url()).searchParams.get("task");
+  await page.reload();
+  await page.getByRole("button", { name: "连接与外观设置" }).click();
+  await page.getByLabel("API key", { exact: true }).fill(key);
+  await page.getByRole("button", { name: /^应\s*用$/ }).click();
+  await expect(page.locator(".sidebar .nav-group-title")).toHaveCount(5);
+  await page.getByRole("link", { name: "数据检查", exact: true }).click();
+  await expect(page.getByText(new RegExp(`任务 ${consistencyTask}`))).toBeVisible();
   const consistencyResponse = await consistency;
   if (!consistencyResponse.ok()) throw new Error(`Consistency check failed: ${consistencyResponse.status()}`);
   const consistencyReport = await consistencyResponse.json();
@@ -170,9 +183,13 @@ try {
   if (JSON.stringify(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).includes(key)) throw new Error("Credential persisted");
   if (errors.length) throw new Error(errors.join("\n"));
   process.stdout.write(JSON.stringify({ origin, bundle: servedBundle, status: "passed", papers: total, indexPreview: indexReport.selected, metadataPreview: metadataReport.papers,
-    consistency: { consistent: consistencyReport.consistent, problems: consistencyReport.totals.problems, errors: consistencyReport.errors }, nativeFigures: !!figurePaper, output }) + "\n");
+    consistency: { consistent: consistencyReport.consistent, problems: consistencyReport.totals.problems, errors: consistencyReport.errors, restoredAfterReload: true }, nativeFigures: !!figurePaper, output }) + "\n");
   }
 } catch (error) {
+  if (page && !page.isClosed()) {
+    await page.screenshot({ path: resolve(output, "webui-deployment-failure.png"), fullPage: true }).catch(() => {});
+    process.stderr.write(JSON.stringify({ url: page.url(), pageErrors: errors, alerts: await page.getByRole("alert").allTextContents().catch(() => []) }).replaceAll(key, "[redacted]") + "\n");
+  }
   process.stderr.write(String(error).replaceAll(key, "[redacted]") + "\n");
   process.exitCode = 1;
 } finally { await browser.close(); }

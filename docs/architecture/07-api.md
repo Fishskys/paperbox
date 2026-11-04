@@ -14,7 +14,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 依据 commit 54048a3 的工作树实测（2026-09-22） |
+| 状态 | 当前 HTTP 契约；字段与类型以应用 OpenAPI 为准，行为由隔离测试及验收脚本覆盖 |
 | 关键文件 | `app/main.py`、`app/api/{health,ingestion,jobs,metadata,papers,search,search_logs}.py`、`app/core/{security,errors,config,logging}.py`、`app/schemas/*.py`、`app/workers/{queue,housekeeping}.py`、`app/db/session.py` |
 | 相关文档 | `docs/architecture/MVP-SPEC.md` [#0](MVP-SPEC.md#0-全局约定)/[#2](MVP-SPEC.md#2-api-一览实测-openapijson)/[#3](MVP-SPEC.md#3-响应错误约定)、`README.md` 第 3.4 节/[#4](../../README.md#4-目录结构)/第 7 节（各篇冲突处以代码为准，见 [#5](#5-不变量与踩过的坑)、[#8](#8-未做--已知缺口)） |
 

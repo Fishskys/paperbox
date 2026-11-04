@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -40,7 +41,7 @@ def main() -> None:
     try:
         subprocess.run(["node", str(ROOT / "scripts/check_webui_deployment.mjs")], cwd=ROOT,
                        env={**os.environ, "PAPERBOX_UI_TEST_KEY": credential,
-                            "PAPERBOX_UI_FIGURE_PAPER": figure_paper or ""}, check=True, timeout=360)
+                            "PAPERBOX_UI_FIGURE_PAPER": figure_paper or ""}, check=True, timeout=900)
     finally:
         with SessionLocal() as session:
             keys.revoke_key(session, prefix)
@@ -52,6 +53,11 @@ def main() -> None:
                 jobs = session.scalars(select(IngestionJob).where(IngestionJob.kind == "maintenance",
                     IngestionJob.payload["actor"].as_string() == prefix)).all()
                 if all(job.stage in ("COMPLETED", "FAILED") for job in jobs):
+                    reports = ROOT / "logs" / "eval"
+                    reports.mkdir(parents=True, exist_ok=True)
+                    for job in jobs:
+                        if "report" in (job.payload or {}):
+                            (reports / f"{prefix}-{job.id}.json").write_text(json.dumps(job.payload["report"], ensure_ascii=False, indent=2), encoding="utf-8")
                     for job in jobs:
                         session.delete(job)
                     session.commit()

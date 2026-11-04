@@ -36,6 +36,6 @@ SQLite、内存对象存储和可控的向量替身用于保持测试结果可�
 
 GitHub workflow `Verify` 对每个 PR 和 main 推送运行 `backend`、`frontend`、`contracts`、`migrations`，没有按目录跳过检查。`merge-gate` 只有在四项全部成功时通过；取消、跳过或失败均失败。仓库分支保护应要求 `merge-gate`，工作流文件本身不会修改远端分支保护设置。
 
-前端检查包含 lint、类型、单元、生产构建和全部使用替身的 Playwright 流程；失败保留浏览器 trace。`npm run check:contracts` 从不执行 lifespan 的 OpenAPI 导出中读取结构，使用已安装的 TypeScript 编译器检查 WebUI 使用的 Paper、Job、队列、身份、重提取及维护任务响应字段名称和非空值类型，以及维护请求形状。客户端可只声明实际消费的字段；此检查不代替 HTTP 状态码、空值行为与业务测试。
+前端检查包含 lint、类型、单元、生产构建和全部使用替身的 Playwright 流程；失败保留浏览器 trace。`npm run check:contracts` 从不执行 lifespan 的 OpenAPI 导出中读取结构，使用已安装的 TypeScript 编译器检查 WebUI 使用的 Paper、Job、队列、身份、重提取、维护任务及批量报告响应字段名称和非空值类型，以及维护请求形状。客户端可只声明实际消费的字段；此检查不代替 HTTP 状态码、空值行为与业务测试。
 
 迁移检查使用独立 PostgreSQL 测试服务。`scripts/check_migrations.py` 只接受显式环境变量 `PAPERBOX_MIGRATION_TEST_DSN`，拒绝已包含应用表的数据库，在独立 schema 和版本表中执行 `base -> head -> base -> head`，核对模型表及列，最终清除 schema。不要将该变量设为部署数据库；真实业务验收脚本与默认单元测试分开执行。
