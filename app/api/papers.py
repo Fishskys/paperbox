@@ -45,6 +45,7 @@ from app.schemas.metadata import (
 from app.search import opensearch
 from app.search.opensearch import SearchIndexError
 from app.services import chunk_service
+from app.services import citation_service
 from app.services import degradation_service
 from app.services import ingestion_service as ingest
 from app.services import metadata_clear
@@ -203,6 +204,19 @@ def stream_original(record) -> StreamingResponse:
                 yield chunk
 
     return StreamingResponse(_iterate(), media_type=media_type, headers=headers)
+
+
+@router.get("/{paper_id}/citation", response_class=Response, responses={200: {"content": {
+    "text/plain": {"schema": {"type": "string"}},
+    "application/x-bibtex": {"schema": {"type": "string"}},
+    "application/x-research-info-systems": {"schema": {"type": "string"}},
+}}})
+def get_citation(paper_id: str, format: Literal["text", "bibtex", "ris"] = "text", session: Session = Depends(get_db)):
+    try:
+        content, media_type, extension = citation_service.export(session, paper_id, format)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="paper-{quote(paper_id, safe="")}.{extension}"'})
 
 
 @router.get("/{paper_id}/file")

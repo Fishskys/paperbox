@@ -23,6 +23,8 @@ dependencies = [
 dev = [
     "pytest==9.1.1",
     "pypdf==6.18.0",
+    "bibtexparser==2.1.0",
+    "rispy==0.10.0",
 ]
 
 [tool.uv]

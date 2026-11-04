@@ -30,6 +30,7 @@ import { useResource } from "../hooks";
 import { positivePage } from "../search-model";
 import PdfPages from "../PdfPages";
 import PdfNavigation from "../PdfNavigation";
+import CitationActions from "../CitationActions";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -195,6 +196,7 @@ export default function Reader() {
         </div>
         <div className="inline">
           <Tooltip title="目录、缩略图与文内查找"><Button aria-label="阅读导航" icon={<ListTree size={16} />} disabled={!pdf} onClick={() => setNavigation(true)} /></Tooltip>
+          {paper && <CitationActions paperId={paperId} />}
           <Tooltip title="论文信息">
             <Button
               aria-label="论文信息"

@@ -1,5 +1,9 @@
 # HTTP API 层
 
+## 引用导出
+
+`GET /api/papers/{paper_id}/citation?format=text|bibtex|ris` 使用 read 权限，从 PostgreSQL 当前元数据生成纯文本引用或下载 `.bib`/`.ris`。响应分别为 `text/plain`、`application/x-bibtex`、`application/x-research-info-systems`，包含附件文件名；无论文返回 404，不支持的格式返回 422。保留作者顺序和 DOI，缺项省略，未知文献类型输出通用类型；不猜测作者、年份或刊会。BibTeX 转义展示文本并保护标题大小写，DOI/URL 保持可解析形式，RIS 每个作者单独一行并阻止字段换行变成额外记录。此接口不写数据库或索引。
+
 `JobOut.deduplication_audit` 是追加事件数组，包含 `event_id`、`created_at`、`actor`、`request_id`、`kind`、`rule`、`target_paper_id`、`evidence` 和 `file_action`。`GET /api/jobs/{job_id}` 及任务列表返回该字段；旧任务为空数组。目录和 ZIP 实际导入命中重复时返回已完成的 `job_id`，目录预览仍不写任务。
 
 ## 后台维护任务

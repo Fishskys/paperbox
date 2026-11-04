@@ -6,6 +6,7 @@ import { errorMessage } from "../api";
 import { Failure, PageHeader, Stage } from "../components";
 import type { Paper, PaperList } from "../contracts";
 import { downloadPaper, hasOriginal } from "../files";
+import CitationActions from "../CitationActions";
 import { useResource } from "../hooks";
 import { positivePage, readerPath } from "../search-model";
 import { remember } from "../history";
@@ -251,6 +252,7 @@ export default function Library({
           <div className="paper-info">
             <h2>{selected.title}</h2>
             <p>{selected.authors.join(", ")}</p>
+            {!onManage && <CitationActions paperId={selected.paper_id} />}
             <Tag>{selected.year || "年份未知"}</Tag>
             <p>{selected.venue}</p>
             <h3>摘要</h3>
