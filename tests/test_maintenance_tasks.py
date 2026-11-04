@@ -68,6 +68,7 @@ def test_restart_retains_partial_report_without_replaying_apply(db_session):
     assert interrupted == [job.id]
     assert service.serialize(job)["report_available"]
     assert job.error_code == "INTERRUPTED"
+    assert "new preview" in job.error_message
     service.execute(db_session, job.id)
     assert job.stage == "FAILED"
     assert queue.kind_for_payload(job.payload) == "maintenance"
@@ -123,3 +124,42 @@ def test_task_and_report_endpoints_require_admin(key_material, role):
     for path in (f"/api/maintenance/jobs/{uuid4()}", f"/api/maintenance/jobs/{uuid4()}/report"):
         assert client.get(path, headers=headers).status_code == 403
     assert client.post("/api/maintenance/jobs", headers=headers, json={"request_id": str(uuid4()), "operation": "metadata"}).status_code == 403
+
+
+def test_bounded_reindex_reports_every_item_and_enqueues_only_eligible_papers(db_session):
+    from tests.test_primary_version import add_file
+    ready = make_paper(db_session, title="Ready paper")
+    shell = make_paper(db_session, title="Without PDF", status="AWAITING_FILE")
+    active = make_paper(db_session, title="Busy paper")
+    add_file(db_session, ready)
+    add_file(db_session, active)
+    busy = ingest.create_job(db_session, source_type="file")
+    busy.paper_id = active.id
+    busy.stage = "PARSING"
+    db_session.commit()
+    ids = [ready.id, shell.id, active.id, str(uuid4())]
+    preview = service.submit(db_session, MaintenanceIn(request_id=uuid4(), operation="reindex", paper_ids=ids), actor="admin")
+    service.execute(db_session, preview.id)
+    report = preview.payload["report"]
+    assert report["papers"] == 4
+    assert [item["status"] for item in report["items"]] == ["ready", "skipped_no_file", "skipped_active_job", "failed"]
+    request = MaintenanceIn(request_id=uuid4(), operation="reindex", paper_ids=ids, dry_run=False, preview_job_id=preview.id)
+    apply = service.submit(db_session, request, actor="admin")
+    service.execute(db_session, apply.id)
+    report = apply.payload["report"]
+    assert report["queued"] == 1 and report["papers"] == 4 and report["failed"] == 1
+    child = db_session.get(IngestionJob, report["items"][0]["job_id"])
+    assert child.paper_id == ready.id and child.kind == "reindex" and child.stage == "QUEUED"
+    assert child.payload["maintenance_job_id"] == apply.id
+    assert service.submit(db_session, request, actor="admin").id == apply.id
+    assert db_session.scalar(select(func.count()).select_from(IngestionJob).where(IngestionJob.kind == "reindex")) == 1
+
+
+def test_batch_rejects_unbounded_ambiguous_and_duplicate_selection():
+    from pydantic import ValidationError
+    for values in ({"paper_ids": []}, {"paper_ids": [uuid4() for _ in range(101)]},
+                   {"paper_ids": [str(uuid4())], "paper_id": str(uuid4())}):
+        with pytest.raises(ValidationError): body(**values)
+    duplicate = uuid4()
+    with pytest.raises(ValidationError): body(paper_ids=[duplicate, duplicate])
+    with pytest.raises(ValidationError): MaintenanceIn(request_id=uuid4(), operation="reindex")

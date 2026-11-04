@@ -62,8 +62,12 @@ test("full data checks may finish beyond the default request timeout", async ({ 
 
 test("an ambiguous submission is recovered by request number without repeating the write", async ({ page }) => {
   let writes = 0;
+  await page.addInitScript(() => Object.defineProperty(Crypto.prototype, "randomUUID", { value: undefined, configurable: true }));
   await page.route("**/api/maintenance/jobs**", async route => {
-    if (route.request().method() === "POST") { writes++; await route.abort("failed"); return; }
+    if (route.request().method() === "POST") {
+      expect(route.request().postDataJSON().request_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      writes++; await route.abort("failed"); return;
+    }
     if (route.request().url().endsWith("/report")) return route.fulfill({ json: { consistent: true, errors: [], problems: [], totals: {} } });
     return route.fulfill({ json: { job_id: "accepted-without-response", operation: "consistency", dry_run: true, stage: "COMPLETED", progress: 100, report_available: true } });
   });
@@ -73,4 +77,18 @@ test("an ambiguous submission is recovered by request number without repeating t
   await page.reload();
   await expect(page.getByText("数据一致", { exact: true })).toBeVisible();
   expect(writes).toBe(1);
+});
+
+test("an unavailable saved task can be cleared without starting a replacement", async ({ page }) => {
+  let writes = 0;
+  await page.route("**/api/maintenance/jobs**", route => {
+    if (route.request().method() === "POST") writes++;
+    return route.fulfill({ status: 404, json: { detail: "maintenance job not found" } });
+  });
+  await page.goto("/system/data?task=removed-task");
+  await expect(page.getByRole("button", { name: /开始检查/ })).toBeDisabled();
+  await page.getByRole("button", { name: "清除失效任务", exact: true }).click();
+  await expect(page.getByRole("button", { name: "开始检查", exact: true })).toBeEnabled();
+  expect(new URL(page.url()).searchParams.has("task")).toBe(false);
+  expect(writes).toBe(0);
 });

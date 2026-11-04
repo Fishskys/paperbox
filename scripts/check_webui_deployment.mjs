@@ -12,6 +12,11 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.route("**/api/maintenance/jobs", route => {
+    const body = route.request().postDataJSON();
+    if (body.dry_run === false) return route.fulfill({ status: 409, json: { detail: "Deployment acceptance only previews maintenance" } });
+    return route.continue();
+  });
   await page.route("**/api/metadata/sources/**", (route) => {
     const request = route.request();
     if (request.method() === "GET") return route.continue();

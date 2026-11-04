@@ -25,6 +25,7 @@ export default function DataCheck() {
             type="primary"
             icon={<ScanLine size={16} />}
             loading={loading}
+            disabled={loading}
             onClick={() => void task.submit({ operation: "consistency", limit: 100 })}
           >
             开始检查

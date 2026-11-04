@@ -3,10 +3,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useBeforeUnload, useBlocker, useSearchParams } from "react-router-dom";
 import Library from "./Library";
 import PaperManagement from "../PaperManagement";
+import BatchMaintenance from "../BatchMaintenance";
+import type { Paper } from "../contracts";
+import { useAccess } from "../access";
 
 export default function LibraryManagement() {
   const [params, setParams] = useSearchParams();
   const [revision, setRevision] = useState(0);
+  const [selection, setSelection] = useState<Paper[]>([]);
+  const { can } = useAccess();
   const dirty = useRef(false);
   const { modal } = App.useApp();
   const blocker = useBlocker(() => dirty.current);
@@ -36,6 +41,8 @@ export default function LibraryManagement() {
       <Library
         title="论文库管理"
         revision={revision}
+        {...(can("admin") ? { selection, onSelectionChange: setSelection,
+          managementActions: <BatchMaintenance papers={selection} onClear={() => setSelection([])} /> } : {})}
         onManage={(paper) => {
           const next = new URLSearchParams(params);
           next.set("paper", paper.paper_id);

@@ -4,7 +4,7 @@
 uv run python scripts/acceptance_pdf_metadata_quality.py --report logs/eval/pdf-quality-acceptance.json
 
 No library rows, original PDFs or production search documents are modified.
-Temporary schema/index cleanup runs even on failure; this never calls embeddings.
+Temporary schema/index/object cleanup runs even on failure; this never calls embeddings.
 """
 
 from __future__ import annotations
@@ -36,6 +36,111 @@ from app.parsing.pdf import extract_pages  # noqa: E402
 from app.search import opensearch  # noqa: E402
 from app.services import metadata_index_sync, metadata_manual, metadata_reextract, paper_service  # noqa: E402
 from app.services import metadata_history, metadata_import, metadata_merge, metadata_source_review, metadata_sources, provenance_service  # noqa: E402
+
+
+def check_follow_up(session: Session) -> dict:
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api import ingestion, jobs, maintenance, papers
+    from app.core.security import require_admin, require_read, require_write
+    from app.db.session import get_db
+    from app.services import ingestion_service, maintenance_service, object_storage
+    from app.workers import queue
+    import bibtexparser
+    import rispy
+
+    title = f"Synthetic Follow Up Converter {uuid4().hex[:8]}"
+    paper = Paper(id=new_uuid(), title=title, fingerprint=new_uuid(), status="PENDING")
+    shell = Paper(id=new_uuid(), title="Synthetic shell", fingerprint=new_uuid(), status="AWAITING_FILE")
+    with pymupdf.open() as document:
+        page = document.new_page()
+        page.insert_text((50, 50), title, fontsize=20)
+        page.insert_text((50, 90), "Alice Acceptance and Bob Example", fontsize=12)
+        page.insert_text((50, 115), "Department of Electronics", fontsize=10)
+        page.insert_text((50, 150), "Abstract", fontsize=12)
+        page.insert_text((50, 170), "We present a compact converter and measure its precision.", fontsize=10)
+        page.insert_text((50, 210), "Copyright 2015 IEEE", fontsize=10)
+        page.insert_text((50, 240), "Downloaded on November 04,2026 from IEEE Xplore", fontsize=8)
+        pdf = document.tobytes()
+    created = {object_storage.build_object_key(paper.id)}
+    key = next(iter(created))
+    original_staging_key = object_storage.build_staging_key
+    try:
+        stored = object_storage.upload_bytes(key, pdf)
+        session.add_all([paper, shell])
+        session.flush()
+        paper_service.register_original_file(session, paper, object_key=key, bucket=stored.bucket,
+            filename="acceptance.pdf", sha256=hashlib.sha256(pdf).hexdigest(), size_bytes=len(pdf), content_type="application/pdf")
+        metadata_manual.patch_metadata(session, paper, {"authors": ["Manual Acceptance"]})
+        session.commit()
+        scoped = session.get_bind()
+        local = FastAPI()
+        for router in (ingestion.router, jobs.router, maintenance.router, papers.router):
+            local.include_router(router)
+        def db():
+            with Session(scoped, expire_on_commit=False, autoflush=False) as connection:
+                yield connection
+        local.dependency_overrides[get_db] = db
+        for gate in (require_read, require_write, require_admin):
+            local.dependency_overrides[gate] = lambda: SimpleNamespace(prefix="acceptance")
+        def accepted(connection, job_id, kind, priority=0):
+            return ingestion_service.mark_queued(connection, job_id)
+        def staging(*args, **kwargs):
+            value = original_staging_key(*args, **kwargs)
+            created.add(value)
+            return value
+        def execute(job_id):
+            with Session(scoped, expire_on_commit=False, autoflush=False) as worker:
+                maintenance_service.execute(worker, job_id)
+        with patch.object(queue, "submit", accepted), patch.object(object_storage, "build_staging_key", staging):
+            api = TestClient(local)
+            body = {"operation": "metadata", "paper_ids": [paper.id, shell.id], "refresh_index": False, "dry_run": True}
+            body["request_id"] = str(uuid4())
+            response = api.post("/api/maintenance/jobs", json=body)
+            assert response.status_code == 202, response.text
+            preview_id = response.json()["job_id"]
+            assert api.post("/api/maintenance/jobs", json=body).json()["job_id"] == preview_id
+            execute(preview_id)
+            preview = api.get(f"/api/maintenance/jobs/{preview_id}/report").json()
+            assert preview["papers"] == 2 and preview["skipped_no_file"] == 1 and preview["failed"] == 0
+            session.expire_all()
+            assert session.get(Paper, paper.id).year is None
+            body.update(request_id=str(uuid4()), dry_run=False, preview_job_id=preview_id)
+            apply_id = api.post("/api/maintenance/jobs", json=body).json()["job_id"]
+            execute(apply_id)
+            actual = api.get(f"/api/maintenance/jobs/{apply_id}/report").json()
+            assert actual["failed"] == 0
+            session.expire_all()
+            assert session.get(Paper, paper.id).year == 2015
+            assert paper_service.paper_author_names(session.get(Paper, paper.id)) == ["Manual Acceptance"]
+            bib = api.get(f"/api/papers/{paper.id}/citation?format=bibtex")
+            assert bib.status_code == 200 and len(bibtexparser.parse_string(bib.text).entries) == 1
+            ris = api.get(f"/api/papers/{paper.id}/citation?format=ris")
+            assert ris.status_code == 200 and rispy.loads(ris.text)[0]["authors"] == ["Manual Acceptance"]
+            duplicate = api.post("/api/papers/ingest/files", files={"files": ("copy.pdf", pdf, "application/pdf")})
+            assert duplicate.status_code == 202 and duplicate.json()["duplicate"] == 1
+            job_id = duplicate.json()["results"][0]["job_id"]
+            detail = api.get(f"/api/jobs/{job_id}")
+            assert detail.status_code == 200
+            audit = detail.json()["deduplication_audit"]
+            assert audit[0]["kind"] == "byte_duplicate" and audit[-1]["file_action"]["staged_object"] == "deleted"
+            body = {"request_id": str(uuid4()), "operation": "reindex", "paper_ids": [paper.id, shell.id]}
+            reindex_preview = api.post("/api/maintenance/jobs", json=body).json()["job_id"]
+            execute(reindex_preview)
+            body.update(request_id=str(uuid4()), dry_run=False, preview_job_id=reindex_preview)
+            reindex_apply = api.post("/api/maintenance/jobs", json=body).json()["job_id"]
+            execute(reindex_apply)
+            report = api.get(f"/api/maintenance/jobs/{reindex_apply}/report").json()
+            assert report["queued"] == 1 and report["skipped_no_file"] == 1
+            assert report["items"][0]["job_id"]
+    finally:
+        for object_key in created:
+            object_storage.delete_object(object_key)
+        assert all(not object_storage.object_exists(object_key) for object_key in created)
+    return {"durable_task_preview_apply": True, "watermark_year_and_manual_protection": True,
+            "citation_parser_roundtrip": True, "real_upload_dedup_audit": True,
+            "batch_child_task_report": True, "temporary_objects_cleaned": True}
 
 
 def check_source_review(session: Session) -> dict:
@@ -233,7 +338,7 @@ def run(session: Session, client, index: str) -> dict:
     assert not metadata_merge.merge_values(session, paper, {"title": clean_title}, source_type="import_file",
                                            source_id=title_source.id).applied
     assert session.get(MetadataIndexUpdate, paper.id) is None
-    return {**check_source_review(session), **check_external_import(session), "dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
+    return {**check_source_review(session), **check_external_import(session), **check_follow_up(session), "dry_run_rollback": True, "pdf_semantics": True, "reimport_idempotent": True,
             "manual_protected": True, "repeated_authors": True, "metadata_only_index_sync": True,
             "historical_evidence": True, "corroborated_initials": True, "invalid_author_history_retained": True,
             "equivalent_title_cleanup": True}

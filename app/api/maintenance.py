@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import require_admin
 from app.db.session import get_db
-from app.schemas.maintenance import MaintenanceIn, MaintenanceOut
+from app.schemas.maintenance import MaintenanceIn, MaintenanceOut, MaintenanceReportOut
+from app.schemas.consistency import ConsistencyOut
 from app.services import maintenance_service as service
 from app.services.api_key_service import AuthIdentity
 
@@ -36,7 +37,7 @@ def by_request(request_id: UUID, session: Session = Depends(get_db), identity: A
     return service.serialize(_call(service.get, session, service.request_job_id(identity.prefix, request_id)))
 
 
-@router.get("/{job_id}/report")
+@router.get("/{job_id}/report", response_model=MaintenanceReportOut | ConsistencyOut)
 def report(job_id: str, session: Session = Depends(get_db)):
     job = _call(service.get, session, job_id)
     if "report" not in (job.payload or {}):

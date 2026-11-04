@@ -8,7 +8,7 @@
 
 ## 后台维护任务
 
-`POST /api/maintenance/jobs`（admin，202）接收 `request_id` UUID、`operation=metadata|consistency`、`dry_run`、`paper_id`、`limit`（1–2000）、`refresh_index`、`parser_papers`。元数据应用须携带已完成且参数相符的 `preview_job_id`；预览冻结论文 ID 与字段/来源版本，变更论文逐项报错，不扩大处理范围。同一身份和请求编号重复提交返回同一任务，参数不同返回 409。
+`POST /api/maintenance/jobs`（admin，202）接收 `request_id` UUID、`operation=metadata|consistency|reindex`、`dry_run`、`paper_id` 或 `paper_ids`（1–100 个不重复 UUID，两者互斥）、`limit`（1–2000）、`refresh_index`、`parser_papers`。reindex 必须显式提供 `paper_ids`。元数据与重建索引应用须携带已完成且参数相符的 `preview_job_id`；预览冻结论文 ID 与字段/来源版本，变更论文逐项报错，有活动任务或无原文则跳过，不扩大处理范围。同一身份和请求编号重复提交返回同一任务，参数不同返回 409。重建子任务与父报告中的接收结果在同一事务提交，然后入队；返回子任务编号不表示解析已完成。
 
 `GET /api/maintenance/jobs/{job_id}` 返回阶段、进度与 `report_available`；`GET /api/maintenance/jobs/requests/{request_id}` 查询当前身份的提交接收结果。`GET /api/maintenance/jobs/{job_id}/report` 下载 JSON 报告，尚无报告返回 409，部分执行后中断可下载已有报告；均要求 admin。执行中断不自动重新应用，现有 `/api/jobs/{job_id}/retry` 对维护任务返回 409。原有同步元数据及对账接口保持兼容。
 

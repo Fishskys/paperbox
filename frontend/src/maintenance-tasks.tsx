@@ -1,15 +1,23 @@
 import { Alert, Button, Progress } from "antd";
-import { Download, RefreshCw } from "lucide-react";
+import { Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAccess } from "./access";
-import { errorMessage, post, request } from "./api";
+import { ApiError, errorMessage, post, request } from "./api";
 import { downloadJson } from "./files";
 import { useVisible } from "./hooks";
 import type { MaintenanceJob, MaintenanceRequest } from "./contracts";
 
 type Stored = { jobId?: string; pending?: { request_id: string; [key: string]: unknown } };
 const terminal = (job?: MaintenanceJob) => !!job && ["COMPLETED", "FAILED"].includes(job.stage);
+function requestId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 function readStored(key: string): Stored {
   try { return JSON.parse(sessionStorage.getItem(key) || "{}"); } catch { return {}; }
 }
@@ -22,11 +30,22 @@ export function useMaintenanceTask<T>(channel: string) {
   const [job, setJob] = useState<MaintenanceJob>();
   const [report, setReport] = useState<T>();
   const [error, setError] = useState("");
+  const [missing, setMissing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [retry, setRetry] = useState(0);
   const guard = useRef(false);
   const mounted = useRef(true);
+  // State changes immediately; the router may commit the replacement URL later.
+  const ignoredUrl = useRef<string | null | undefined>(undefined);
   const visible = useVisible();
+  const urlJobId = params.get("task");
+  useEffect(() => {
+    if (urlJobId === ignoredUrl.current) return;
+    ignoredUrl.current = undefined;
+    if (urlJobId && urlJobId !== jobId) {
+      setJobId(urlJobId); setJob(undefined); setReport(undefined); setError(""); setMissing(false);
+    }
+  }, [urlJobId, jobId]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (!visible) return;
@@ -39,7 +58,7 @@ export function useMaintenanceTask<T>(channel: string) {
         const endpoint = jobId || `requests/${encodeURIComponent(stored.pending!.request_id)}`;
         const value = await request<MaintenanceJob>(`/api/maintenance/jobs/${endpoint}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        setJob(value); setError("");
+        setJob(value); setError(""); setMissing(false);
         if (!jobId) {
           sessionStorage.setItem(storageKey, JSON.stringify({ jobId: value.job_id }));
           setJobId(value.job_id);
@@ -49,7 +68,10 @@ export function useMaintenanceTask<T>(channel: string) {
           if (!controller.signal.aborted) setReport(result);
         }
         if (!terminal(value)) timer = setTimeout(() => void poll(), 2000);
-      } catch (error) { if (!controller.signal.aborted) setError(`${errorMessage(error)}；可查询任务状态，写操作不会自动重发。`); }
+      } catch (error) { if (!controller.signal.aborted) {
+        setMissing(!!jobId && error instanceof ApiError && error.status === 404);
+        setError(`${errorMessage(error)}；可查询任务状态，写操作不会自动重发。`);
+      } }
     }
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
@@ -57,29 +79,39 @@ export function useMaintenanceTask<T>(channel: string) {
 
   async function submit(body: MaintenanceRequest) {
     if (guard.current) return;
-    guard.current = true; setSubmitting(true); setError(""); setReport(undefined);
+    guard.current = true; setSubmitting(true); setError(""); setMissing(false); setReport(undefined);
     const old = readStored(storageKey).pending;
     const pending = old && JSON.stringify(Object.fromEntries(Object.entries(old).filter(([key]) => key !== "request_id"))) === JSON.stringify(body)
-      ? old : { ...body, request_id: crypto.randomUUID() };
+      ? old : { ...body, request_id: requestId() };
     sessionStorage.setItem(storageKey, JSON.stringify({ pending }));
+    ignoredUrl.current = urlJobId;
     setJobId(""); setJob(undefined);
     setParams(previous => { const next = new URLSearchParams(previous); next.delete("task"); return next; }, { replace: true });
     try {
       const value = await post<MaintenanceJob>("/api/maintenance/jobs", pending);
       sessionStorage.setItem(storageKey, JSON.stringify({ jobId: value.job_id }));
       if (mounted.current) {
+        ignoredUrl.current = urlJobId;
         setJob(value); setJobId(value.job_id); setRetry(v => v + 1);
         setParams(previous => { const next = new URLSearchParams(previous); next.set("task", value.job_id); return next; }, { replace: true });
       }
     } catch (error) { if (mounted.current) setError(`${errorMessage(error)}；提交结果不明，请先查询任务状态。`); }
     finally { guard.current = false; if (mounted.current) setSubmitting(false); }
   }
-  return { job, report, error, submit, submitting, active: submitting || (!!job && !terminal(job)), recover: () => setRetry(v => v + 1) };
+  function forgetMissing() {
+    sessionStorage.removeItem(storageKey);
+    ignoredUrl.current = urlJobId;
+    setJobId(""); setJob(undefined); setReport(undefined); setError(""); setMissing(false);
+    setParams(previous => { const next = new URLSearchParams(previous); next.delete("task"); return next; }, { replace: true });
+  }
+  return { job, report, error, submit, submitting, missing, forgetMissing,
+    active: submitting || (!!jobId && !terminal(job)), recover: () => setRetry(v => v + 1) };
 }
 
 export function MaintenanceTaskStatus({ task }: { task: ReturnType<typeof useMaintenanceTask> }) {
   return <>
-    {task.error && <Alert type="error" title={task.error} action={<Button icon={<RefreshCw size={16} />} onClick={task.recover}>查询任务状态</Button>} />}
+    {task.error && <Alert type="error" title={task.error} action={<div className="inline"><Button icon={<RefreshCw size={16} />} onClick={task.recover}>查询任务状态</Button>
+      {task.missing && <Button icon={<X size={16} />} onClick={task.forgetMissing}>清除失效任务</Button>}</div>} />}
     {task.job && <div className="metadata-actions">
       <span>任务 {task.job.job_id} · {({ RECEIVED: "已接收", QUEUED: "排队中", PARSING: "执行中", COMPLETED: "已完成", FAILED: "失败" } as Record<string, string>)[task.job.stage] || task.job.stage}</span>
       <Progress percent={Math.round(task.job.progress)} status={task.job.stage === "FAILED" ? "exception" : undefined} style={{ width: 180 }} />

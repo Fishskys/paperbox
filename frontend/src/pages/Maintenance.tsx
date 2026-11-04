@@ -60,7 +60,7 @@ export default function Maintenance({ kind }: { kind: "index" | "metadata" }) {
       </>}
     </Form>
     <div className="metadata-actions">
-      <Button icon={<ScanLine size={16} />} loading={busy || (!index && task.active)} onClick={() => void submit(true)}>预览维护</Button>
+      <Button icon={<ScanLine size={16} />} disabled={!index && task.active} loading={busy || (!index && task.active)} onClick={() => void submit(true)}>预览维护</Button>
       <Button type="primary" icon={<Play size={16} />} disabled={busy || (!index && (task.active || !previewValid)) || !report?.dry_run || !count || (!index && ids.trim().split(/[\s,]+/).filter(Boolean).length > 1)} onClick={() => setConfirm(true)}>执行维护</Button>
       <Button icon={<Download size={16} />} disabled={!report || busy} onClick={() => report && downloadJson(report, `paperbox-${kind}-maintenance-${Date.now()}.json`)}>下载报告</Button>
     </div>

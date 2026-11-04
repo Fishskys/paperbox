@@ -18,7 +18,7 @@ function type(schema, response = true) {
   }
   return ({ string: "string", number: "number", integer: "number", boolean: "boolean", null: "null" })[schema.type] || "unknown";
 }
-const pairs = { Paper: "PaperOut", Job: "JobOut", JobList: "JobListOut", QueueSnapshot: "QueueOut", AuthContext: "AuthContextOut", ReextractReport: "ReextractOut", MaintenanceJob: "MaintenanceOut" };
+const pairs = { Paper: "PaperOut", Job: "JobOut", JobList: "JobListOut", QueueSnapshot: "QueueOut", AuthContext: "AuthContextOut", ReextractReport: "ReextractOut", MaintenanceJob: "MaintenanceOut", BatchMaintenanceReport: "MaintenanceReportOut" };
 let source = 'import type * as Contracts from "./src/contracts";\ntype Assert<T extends true> = T;\n';
 source += Object.entries(schemas).map(([name, schema]) => `type Api_${name} = ${type(schema)};`).join("\n");
 for (const [client, server] of Object.entries(pairs)) {

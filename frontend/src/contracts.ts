@@ -5,8 +5,14 @@ export type MaintenanceJob = {
   report_available: boolean; error_code?: string | null; error_message?: string | null;
 };
 export type MaintenanceRequest = {
-  operation: "metadata" | "consistency"; dry_run?: boolean; paper_id?: string;
+  operation: "metadata" | "consistency" | "reindex"; dry_run?: boolean; paper_id?: string; paper_ids?: string[];
   limit?: number; refresh_index?: boolean; parser_papers?: boolean; preview_job_id?: string;
+};
+export type BatchMaintenanceReport = {
+  dry_run: boolean; papers: number; failed: number; queued: number; skipped_no_file: number; skipped_active: number;
+  changed_papers: number;
+  items: { paper_id: string; title?: string | null; status: string; error?: string | null; job_id?: string | null }[];
+  changes: { paper_id: string; field: string; old: unknown; new: unknown; action: string }[];
 };
 export type AuthContext = {
   prefix: string;

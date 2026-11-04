@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import uuid
 
 from sqlalchemy import select, func
@@ -15,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.session import SessionLocal  # noqa: E402
-from app.db.models import FigureExtractionRun, Paper, PaperFigure, PaperSource, MetadataSourceReviewEvent  # noqa: E402
+from app.db.models import FigureExtractionRun, IngestionJob, Paper, PaperFigure, PaperSource, MetadataSourceReviewEvent  # noqa: E402
 from app.services import api_key_service as keys  # noqa: E402
 
 
@@ -45,7 +46,20 @@ def main() -> None:
             keys.revoke_key(session, prefix)
             session.commit()
             assert source_snapshot(session) == before, "Source preview changed data or review history"
-        print("Temporary deployment credential removed.")
+        deadline = time.monotonic() + 120
+        while True:
+            with SessionLocal() as session:
+                jobs = session.scalars(select(IngestionJob).where(IngestionJob.kind == "maintenance",
+                    IngestionJob.payload["actor"].as_string() == prefix)).all()
+                if all(job.stage in ("COMPLETED", "FAILED") for job in jobs):
+                    for job in jobs:
+                        session.delete(job)
+                    session.commit()
+                    break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("temporary maintenance tasks are still running; credential removed, tasks retained for inspection")
+            time.sleep(0.5)
+        print("Temporary deployment credential and read-only test tasks removed.")
 
 
 if __name__ == "__main__":

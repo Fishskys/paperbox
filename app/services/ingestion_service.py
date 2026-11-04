@@ -541,7 +541,8 @@ def recover_jobs(
             mark_failed(
                 session,
                 job,
-                "interrupted by a process restart; retry the job to resume",
+                "maintenance interrupted by a process restart; inspect the report and create a new preview"
+                if job.kind == "maintenance" else "interrupted by a process restart; retry the job to resume",
                 code="INTERRUPTED",
             )
             interrupted.append(job.id)
@@ -553,15 +554,8 @@ def recover_jobs(
 # --------------------------------------------------------------------------- #
 # payload acquisition
 # --------------------------------------------------------------------------- #
-def create_reindex_job(session: Session, paper, record) -> IngestionJob:
-    """Queue a re-parse/re-chunk/re-embed/re-index of one paper.
-
-    Shared by ``POST /api/papers/{id}/reindex`` and the MCP ``paper_reindex`` tool,
-    so "reindex" means one thing. ``record`` is the paper's original file row (the
-    caller checks it exists first -- a paper without bytes cannot be reindexed).
-    """
-    from app.workers import queue as job_queue
-
+def prepare_reindex_job(session: Session, paper, record) -> IngestionJob:
+    """Prepare without committing, so batch reports and accepted jobs commit together."""
     job = create_job(
         session,
         source_type="reindex",
@@ -571,6 +565,15 @@ def create_reindex_job(session: Session, paper, record) -> IngestionJob:
         size_bytes=record.size_bytes,
     )
     job.paper_id = paper.id
+    job.kind = "reindex"
+    return job
+
+
+def create_reindex_job(session: Session, paper, record) -> IngestionJob:
+    """Commit and enqueue the shared REST/MCP single-paper reindex workflow."""
+    from app.workers import queue as job_queue
+
+    job = prepare_reindex_job(session, paper, record)
     session.commit()
     return job_queue.submit(session, job.id, job_queue.KIND_REINDEX) or job
 

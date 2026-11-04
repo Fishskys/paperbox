@@ -61,10 +61,16 @@ def submit(session: Session, body: MaintenanceIn, *, actor: str) -> IngestionJob
             queue.submit(session, existing.id, "maintenance", queue.PRIORITY_BATCH)
         return existing
     payload = {"source_type": "maintenance", "request": request, "actor": actor}
-    if body.operation == "metadata":
+    if body.operation in ("metadata", "reindex"):
         if body.dry_run:
-            papers = metadata_reextract.select_live_papers(session, paper_id=str(body.paper_id) if body.paper_id else None, limit=body.limit)
-            payload["scope"] = {p.id: revision(session, p) for p in papers}
+            if body.paper_ids:
+                ids = [str(value) for value in body.paper_ids]
+                papers = session.scalars(select(Paper).where(Paper.id.in_(ids), Paper.deleted_at.is_(None))).all()
+                found = {p.id: revision(session, p) for p in papers}
+                payload["scope"] = {paper_id: found.get(paper_id, "missing") for paper_id in ids}
+            else:
+                papers = metadata_reextract.select_live_papers(session, paper_id=str(body.paper_id) if body.paper_id else None, limit=body.limit)
+                payload["scope"] = {p.id: revision(session, p) for p in papers}
         else:
             preview = get(session, str(body.preview_job_id))
             previous = (preview.payload or {}).get("request", {})
@@ -112,26 +118,59 @@ def execute(session: Session, job_id: str) -> None:
         return
     report = metadata_reextract.ReextractSummary(dry_run=request["dry_run"]).as_api_dict()
     report["items"] = []
+    report["queued"] = 0
+    report["skipped_active"] = 0
     scope = payload.get("scope") or {}
-    for index, (paper_id, expected_revision) in enumerate(scope.items()):
+    ordered = [(paper_id, scope[paper_id]) for paper_id in request["paper_ids"]] if request.get("paper_ids") else list(scope.items())
+    for index, (paper_id, expected_revision) in enumerate(ordered):
+        report["papers"] += 1
         try:
+            session.expire_all()
             paper = session.get(Paper, paper_id)
             if paper is None or paper.deleted_at or revision(session, paper) != expected_revision:
                 raise MaintenanceError("paper changed since preview; preview again")
+            if ingest.count_running_jobs(session, paper_id):
+                report["skipped_active"] += 1
+                report["items"].append({"paper_id": paper_id, "title": paper.title, "status": "skipped_active_job"})
+                persist(session, job_id, progress=5 + 90 * (index + 1) / len(scope), report=report)
+                continue
+            if request["operation"] == "reindex":
+                record = paper_service.original_file(paper)
+                item = {"paper_id": paper_id, "title": paper.title, "status": "ready" if request["dry_run"] else "queued"}
+                if record is None:
+                    report["skipped_no_file"] += 1
+                    item["status"] = "skipped_no_file"
+                elif not request["dry_run"]:
+                    child = ingest.prepare_reindex_job(session, paper, record)
+                    child.payload = {**child.payload, "maintenance_job_id": job_id, "ingest_actor": payload["actor"]}
+                    item["job_id"] = child.id
+                    item["status"] = "accepted"
+                report["items"].append(item)
+                persist(session, job_id, progress=5 + 90 * (index + 1) / len(scope), report=report)
+                if item["status"] == "accepted":
+                    from app.workers import queue
+                    queue.submit(session, item["job_id"], queue.KIND_REINDEX, queue.PRIORITY_BATCH)
+                    item["status"] = "queued"
+                    report["queued"] += 1
+                    persist(session, job_id, progress=5 + 90 * (index + 1) / len(scope), report=report)
+                continue
             one = metadata_reextract.reextract_one(session, paper, apply=not request["dry_run"],
                 refresh_index=request["refresh_index"], detail=True).as_api_dict()
-            for key in ("papers", "changed_papers", "skipped_no_file", "failed", "index_documents", "index_pending"):
+            for key in ("changed_papers", "skipped_no_file", "failed", "index_documents", "index_pending"):
                 report[key] += one[key]
             for key in ("added_fields", "added_identifiers", "quality_counts"):
                 for name, count in one[key].items():
                     report[key][name] = report[key].get(name, 0) + count
             report["changes"].extend(one["changes"])
-            report["items"].append({"paper_id": paper_id, "status": "skipped_no_file" if one["skipped_no_file"] else "completed"})
+            report["items"].append({"paper_id": paper_id, "title": paper.title,
+                "status": "skipped_no_file" if one["skipped_no_file"] else "ready" if request["dry_run"] and one["changed_papers"] else "unchanged" if not one["changed_papers"] else "completed"})
         except Exception as exc:
             session.rollback()
-            report["papers"] += 1
             report["failed"] += 1
             report["errors"].append({"paper_id": paper_id, "error": str(exc)})
-            report["items"].append({"paper_id": paper_id, "status": "failed", "error": str(exc)})
+            if report["items"] and report["items"][-1]["paper_id"] == paper_id:
+                report["items"][-1]["error"] = str(exc)
+            else:
+                report["items"].append({"paper_id": paper_id, "status": "failed", "error": str(exc)})
         persist(session, job_id, progress=5 + 90 * (index + 1) / len(scope), report=report)
     persist(session, job_id, progress=100, report=report, finished=True)

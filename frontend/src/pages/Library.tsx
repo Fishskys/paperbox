@@ -1,6 +1,7 @@
 import { App, Button, Drawer, Input, InputNumber, Select, Table, Tabs, Tag, Tooltip } from "antd";
 import { ArrowUpRight, Download, Info, Pencil, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { errorMessage } from "../api";
 import { Failure, PageHeader, Stage } from "../components";
@@ -26,11 +27,17 @@ export default function Library({
   onManage,
   revision = 0,
   conventional = false,
+  selection,
+  onSelectionChange,
+  managementActions,
 }: {
   title?: string;
   onManage?: (paper: Paper) => void;
   revision?: number;
   conventional?: boolean;
+  selection?: Paper[];
+  onSelectionChange?: (papers: Paper[]) => void;
+  managementActions?: ReactNode;
 }) {
   const [params, setParams] = useSearchParams();
   const [refresh, setRefresh] = useState(0);
@@ -130,12 +137,19 @@ export default function Library({
           value={params.get("year_to") ? Number(params.get("year_to")) : null} onChange={(value) => filter("year_to", value ? String(value) : "")} />
         </div>
       </div>}
+      {managementActions}
       {error && (
         <Failure message={error} retry={() => setRefresh((v) => v + 1)} />
       )}
       <Table<Paper>
         className={`data-table${conventional ? " catalog-table" : ""}`}
         rowKey="paper_id"
+        rowSelection={selection && onSelectionChange ? {
+          selectedRowKeys: selection.map(paper => paper.paper_id),
+          preserveSelectedRowKeys: true,
+          onChange: (_, rows) => onSelectionChange(rows.slice(0, 100)),
+          getCheckboxProps: paper => ({ "aria-label": `选择论文 ${paper.title}`, disabled: selection.length >= 100 && !selection.some(selected => selected.paper_id === paper.paper_id) }),
+        } : undefined}
         loading={loading}
         dataSource={data?.papers || []}
         scroll={{ x: 720 }}
