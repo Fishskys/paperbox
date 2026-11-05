@@ -28,7 +28,11 @@ from app.db.models import (
     new_uuid,
 )
 from scripts import purge_deleted
-from tests.test_job_progress import factory  # noqa: F401 - fixture
+
+
+@pytest.fixture
+def factory(session_factory):
+    return session_factory
 
 #: Every table ``--hard`` has to clean, keyed by model.
 HARD_TABLES = purge_deleted.HARD_PURGE_MODELS
@@ -78,8 +82,8 @@ def make_deleted_paper(session_factory) -> str:
                     id=new_uuid(),
                     paper_id=paper.id,
                     scheme="doi",
-                    value="10.1/x",
-                    normalized_value="10.1/x",
+                    value=f"10.1/{paper.id}",
+                    normalized_value=f"10.1/{paper.id}",
                 ),
                 PaperFieldProvenance(
                     id=new_uuid(),
@@ -94,7 +98,7 @@ def make_deleted_paper(session_factory) -> str:
                     id=new_uuid(),
                     paper_id=paper.id,
                     source_type="import_file",
-                    source_ref="rec-1",
+                    source_ref=f"rec:{paper.id}",
                     raw={},
                     match_status="matched",
                 ),
@@ -224,10 +228,10 @@ def test_the_default_run_keeps_the_postgres_rows(monkeypatch, factory, stubbed_s
     assert counts["paper_chunks"] == 1
 
 
-def test_the_hard_run_removes_the_postgres_rows(monkeypatch, factory, stubbed_stores) -> None:  # noqa: F811
+def test_unscoped_hard_run_requires_a_saved_preview(monkeypatch, factory, stubbed_stores) -> None:  # noqa: F811
     paper_id = make_deleted_paper(factory)
-    assert run_script(monkeypatch, "--hard") == 0
-    assert set(count_rows(factory, paper_id).values()) == {0}
+    assert run_script(monkeypatch, "--hard") == 2
+    assert count_rows(factory, paper_id)["papers"] == 1
 
 
 def test_a_dry_run_changes_nothing(monkeypatch, factory, stubbed_stores) -> None:  # noqa: F811
@@ -247,5 +251,5 @@ def test_a_failing_store_does_not_delete_the_postgres_rows(
 
     monkeypatch.setattr(purge_deleted.opensearch, "delete_by_paper_id", boom)
     paper_id = make_deleted_paper(factory)
-    assert run_script(monkeypatch, "--hard") == 1
+    assert run_script(monkeypatch) == 1
     assert count_rows(factory, paper_id)["papers"] == 1

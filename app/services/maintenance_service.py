@@ -1,6 +1,6 @@
 """Durable maintenance orchestration; reports survive HTTP and process lifetimes."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from uuid import NAMESPACE_URL, uuid5
@@ -10,9 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import IngestionJob, Paper, PaperFieldProvenance
+from app.db.models import CleanupReceipt, IngestionJob, Paper, PaperFieldProvenance
 from app.schemas.maintenance import MaintenanceIn
 from app.services import ingestion_service as ingest, metadata_reextract, paper_service
+from app.services import cleanup_policy, operation_receipts
 
 
 class MaintenanceError(ValueError):
@@ -24,6 +25,9 @@ class MaintenanceError(ValueError):
 def get(session: Session, job_id: str) -> IngestionJob:
     job = ingest.get_job(session, job_id)
     if job is None or job.kind != "maintenance":
+        receipt = session.get(CleanupReceipt, job_id)
+        if receipt and receipt.kind == "maintenance":
+            raise MaintenanceError("maintenance report expired", 410)
         raise MaintenanceError("maintenance job not found", 404)
     return job
 
@@ -54,6 +58,11 @@ def submit(session: Session, body: MaintenanceIn, *, actor: str) -> IngestionJob
     request = body.model_dump(mode="json", exclude={"request_id"})
     job_id = request_job_id(actor, body.request_id)
     existing = session.get(IngestionJob, job_id)
+    receipt = session.get(CleanupReceipt, job_id)
+    if receipt and receipt.request_hash != cleanup_policy.digest(request):
+        raise MaintenanceError("request_id was already used for different parameters")
+    if receipt and existing is None:
+        raise MaintenanceError("maintenance task expired; this request cannot be replayed", 410)
     if existing:
         if (existing.payload or {}).get("request") != request:
             raise MaintenanceError("request_id was already used for different parameters")
@@ -73,6 +82,8 @@ def submit(session: Session, body: MaintenanceIn, *, actor: str) -> IngestionJob
                 payload["scope"] = {p.id: revision(session, p) for p in papers}
         else:
             preview = get(session, str(body.preview_job_id))
+            if cleanup_policy.aware(preview.created_at) + timedelta(hours=cleanup_policy.policy()["preview_hours"]) <= cleanup_policy.now():
+                raise MaintenanceError("preview expired; preview again")
             previous = (preview.payload or {}).get("request", {})
             expected = {**request, "dry_run": True, "preview_job_id": None}
             if preview.stage != ingest.STAGE_COMPLETED or previous != expected or not previous.get("dry_run"):
@@ -82,6 +93,8 @@ def submit(session: Session, body: MaintenanceIn, *, actor: str) -> IngestionJob
                 raise MaintenanceError("preview scope is empty")
     job = IngestionJob(id=job_id, kind="maintenance", stage=ingest.STAGE_RECEIVED, progress=0, payload=payload)
     session.add(job)
+    session.flush()
+    operation_receipts.remember(session, job)
     try:
         session.commit()
     except IntegrityError:

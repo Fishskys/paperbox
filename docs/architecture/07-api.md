@@ -68,6 +68,7 @@
 | GET | `/api/papers/{paper_id}` | 单篇元数据 | read | — | `app/api/papers.py` 的 `list_papers()` |
 | GET | `/api/papers/{paper_id}/file` | 原文流式下载（attachment） | read | — | `app/api/papers.py` 的 `get_paper()` |
 | GET / POST / DELETE | `/api/papers/{paper_id}/figures` 下的图片接口 | 列表、详情、预览/下载、后台提取/重提取、删除；[完整契约](12-paper-figures.md#接口) | 读为 read，写为 write；ZIP 首次触发提取也须 write | generation 分页、variant、part、force、dry_run；ZIP 可返回 202 JSON 任务信息 | `app/api/figures.py`、`app/schemas/figure.py` |
+| GET / POST | `/api/admin/cleanup/**` | 策略、固定预览、执行、恢复、报告与索引归属；[完整契约](14-system-cleanup.md#管理接口) | admin | `CleanupIn` 限定分类与显式范围，执行引用有效预览；报告裁剪后为 410 | `app/api/cleanup.py`、`app/schemas/cleanup.py` |
 | GET | `/api/papers/{paper_id}/chunks` | chunk 分页列表 | read | `limit`、`offset`（夹取 1..200） | `app/api/papers.py`, `papers.py` |
 | GET | `/api/papers/{paper_id}/degradations` | 降级账本：该论文各阶段「能用但更薄」的原因 | read | `include_resolved`（默认 false，只列仍未消解的） | `app/api/papers.py` |
 | GET | `/api/papers/{paper_id}/metadata` | 当前值 + 每字段溯源 | read | — | `app/api/papers.py` 的 `dismiss_paper_conflict()` |

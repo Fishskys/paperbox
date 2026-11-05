@@ -65,7 +65,7 @@
 | `app/services/degradation_service.py` | `record` / `resolve_stage` / `Recorder` | **降级账本**：各阶段「能用但更薄」的结果落 `paper_degradations`（`(stage, code, detail)`）；`Recorder` 是绑定 `(session, paper, job)` 的 sink |
 | 同上 | `_record_failure` | 回滚后用新事务做 `FAILED` 记账，并把论文状态置 `FAILED` |
 | `workers/queue.py` | `PRIORITY_INTERACTIVE` / `PRIORITY_BATCH` | 优先级类，数值小者先出队（0 / 1） |
-| 同上 | `kind_for_payload` | 恢复时按 `payload.source_type` 区分 reindex、figures 与普通导入；图片的发布与清理见[论文图片](12-paper-figures.md) |
+| 同上 | `kind_for_payload` | 恢复时按 `payload.source_type` 区分 reindex、figures、maintenance、cleanup 与普通导入；图片发布见[论文图片](12-paper-figures.md)，清理任务保护及恢复见[系统清理](14-system-cleanup.md) |
 | 同上 | `IngestQueue.enqueue` | 幂等入队；队列未启动则内联执行并返回 `False` |
 | 同上 | `IngestQueue.submit` | 先 `mark_queued`（提交 `QUEUED`）再入队；不可排队时返回 `None` |
 | 同上 | `IngestQueue.recover` | 调 `recover_jobs`，把 `requeue` 列表按 kind 重新入队 |

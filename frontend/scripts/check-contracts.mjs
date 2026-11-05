@@ -19,13 +19,15 @@ function type(schema, response = true) {
   return ({ string: "string", number: "number", integer: "number", boolean: "boolean", null: "null" })[schema.type] || "unknown";
 }
 const pairs = { Paper: "PaperOut", Job: "JobOut", JobList: "JobListOut", QueueSnapshot: "QueueOut", AuthContext: "AuthContextOut", ReextractReport: "ReextractOut", MaintenanceJob: "MaintenanceOut", BatchMaintenanceReport: "MaintenanceReportOut" };
-let source = 'import type * as Contracts from "./src/contracts";\ntype Assert<T extends true> = T;\n';
+let source = 'import type * as Contracts from "./src/contracts";\nimport type * as Cleanup from "./src/cleanup-contracts";\ntype Assert<T extends true> = T;\n';
 source += Object.entries(schemas).map(([name, schema]) => `type Api_${name} = ${type(schema)};`).join("\n");
 for (const [client, server] of Object.entries(pairs)) {
   if (!schemas[server]) throw new Error(`Missing OpenAPI schema ${server}`);
   source += `\ntype Check_${client} = Assert<{ [K in keyof Contracts.${client}]-?: K extends keyof Api_${server} ? NonNullable<Api_${server}[K]> extends NonNullable<Contracts.${client}[K]> ? true : false : false }[keyof Contracts.${client}] extends true ? true : false>;`;
 }
 source += `\ntype RequestShape = ${type(schemas.MaintenanceIn, false)};\nconst request: Omit<RequestShape, "request_id"> = {} as Contracts.MaintenanceRequest;\nvoid request;`;
+source += `\ntype CleanupShape = ${type(schemas.CleanupIn, false)};\nconst cleanupRequest: Omit<CleanupShape, "request_id"> = {} as Cleanup.CleanupRequest;\nvoid cleanupRequest;
+type CleanupResponse = Assert<{ [K in keyof Cleanup.CleanupReport]-?: K extends keyof Api_CleanupReportOut ? NonNullable<Api_CleanupReportOut[K]> extends NonNullable<Cleanup.CleanupReport[K]> ? true : false : false }[keyof Cleanup.CleanupReport] extends true ? true : false>;`;
 const virtual = resolve(root, "contract-check.ts");
 const options = { strict: true, noEmit: true, skipLibCheck: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler };
 const host = ts.createCompilerHost(options);
@@ -36,4 +38,4 @@ const errors = ts.getPreEmitDiagnostics(program);
 if (errors.length) {
   process.stderr.write(ts.formatDiagnosticsWithColorAndContext(errors, { getCanonicalFileName: value => value, getCurrentDirectory: () => root, getNewLine: () => "\n" }));
   process.exitCode = 1;
-} else console.info(`WebUI contracts passed (${Object.keys(pairs).length} responses and maintenance request).`);
+} else console.info(`WebUI contracts passed (${Object.keys(pairs).length + 1} responses, maintenance and cleanup requests).`);

@@ -14,6 +14,8 @@ npm run dev
 
 浏览器访问 `http://localhost:5173`，默认代理至 `http://127.0.0.1:8077`。
 Node.js 版本、页面范围与验证方式见 [WebUI](docs/architecture/13-webui.md)。只运行 API 无需 Node.js。
+
+历史记录与缓存的保留策略、软删论文永久删除和历史索引归属管理见 [系统清理](docs/architecture/14-system-cleanup.md)。新增历史自动清理默认关闭。
 生产部署使用独立 Nginx 容器：在仓库根执行 `docker compose --profile webui up -d --build --force-recreate webui`，访问 `http://localhost:8089`。
 API 在宿主机运行时设置 `WEBUI_API_UPSTREAM=http://host.docker.internal:8077`；容器部署通过页面连接设置提供 API Key，不继承 Vite 的本机代理凭证。
 

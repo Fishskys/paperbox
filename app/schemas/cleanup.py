@@ -5,15 +5,16 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.schemas.maintenance import MaintenanceOut
 
-Category = Literal["app_logs", "search_logs", "jobs", "parse_cache", "figure_history", "orphan_objects", "deleted_papers", "indices"]
+Category = Literal["app_logs", "search_logs", "jobs", "parse_cache", "figure_history", "orphan_objects", "orphan_records", "deleted_papers", "indices"]
 
 
 class CleanupIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
     operation: Literal["inventory", "cleanup"] = "cleanup"
-    categories: list[Category] = Field(min_length=1, max_length=8)
+    categories: list[Category] = Field(min_length=1, max_length=9)
     dry_run: bool = True
     paper_ids: list[UUID] = Field(default_factory=list, max_length=100)
     indices: list[str] = Field(default_factory=list, max_length=20)
@@ -94,3 +95,7 @@ class CleanupReportOut(BaseModel):
 class CleanupListOut(BaseModel):
     total: int
     jobs: list[dict]
+
+
+class CleanupJobOut(MaintenanceOut):
+    request: dict

@@ -11,6 +11,7 @@ from app.core.security import require_read, require_write
 from app.db.session import get_db
 from app.schemas.job import JobListOut, JobOut, QueueOut
 from app.services import ingestion_service
+from app.services.api_key_service import AuthIdentity, ROLE_ADMIN
 from app.workers import queue as job_queue
 
 # Read door (plan D2): the three GETs are reads; POST /{job_id}/retry keeps its
@@ -35,10 +36,10 @@ def get_queue() -> QueueOut:
 
 
 @router.get("/{job_id}", response_model=JobOut)
-def get_job(job_id: str, session: Session = Depends(get_db)) -> JobOut:
+def get_job(job_id: str, session: Session = Depends(get_db), identity: AuthIdentity = Depends(require_read)) -> JobOut:
     """Return the current stage/progress of one ingestion job."""
     job = ingestion_service.get_job(session, job_id)
-    if job is None:
+    if job is None or (job.kind == "cleanup" and identity.role != ROLE_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="job not found"
         )
@@ -68,7 +69,7 @@ def retry_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="job not found"
         )
-    if existing.kind == "maintenance":
+    if existing.kind in ("maintenance", "cleanup"):
         raise HTTPException(status_code=409, detail="maintenance tasks require inspection and a new preview; automatic retry is not supported")
     if existing.kind == "figures":
         from app.services.figure_service import request_extraction, FigureError
@@ -96,6 +97,7 @@ def list_jobs(
     ),
     paper_id: UUID | None = Query(default=None),
     session: Session = Depends(get_db),
+    identity: AuthIdentity = Depends(require_read),
 ) -> JobListOut:
     """List recent jobs newest first, pageable and filterable (2026-09-23).
 
@@ -115,6 +117,7 @@ def list_jobs(
     rows, total = ingestion_service.list_jobs(
         session, limit=limit, offset=offset, stage=stage,
         paper_id=str(paper_id) if paper_id else None,
+        exclude_kinds=("cleanup",) if identity.role != ROLE_ADMIN else (),
     )
     return JobListOut(
         total=total,

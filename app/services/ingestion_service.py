@@ -305,6 +305,7 @@ def list_jobs(
     offset: int = 0,
     stage: str | None = None,
     paper_id: str | None = None,
+    exclude_kinds: tuple[str, ...] = (),
 ) -> tuple[list[IngestionJob], int]:
     """Return ``(jobs, total)`` newest first, optionally filtered.
 
@@ -315,6 +316,8 @@ def list_jobs(
     from sqlalchemy import func, select as _select
 
     statement = _select(IngestionJob)
+    if exclude_kinds:
+        statement = statement.where(IngestionJob.kind.not_in(exclude_kinds))
     if paper_id:
         statement = statement.where(IngestionJob.paper_id == paper_id)
     if stage:
@@ -542,10 +545,13 @@ def recover_jobs(
                 session,
                 job,
                 "maintenance interrupted by a process restart; inspect the report and create a new preview"
-                if job.kind == "maintenance" else "interrupted by a process restart; retry the job to resume",
+                if job.kind == "maintenance" else "cleanup interrupted; inspect the cleanup report and resume failed resources"
+                if job.kind == "cleanup" else "interrupted by a process restart; retry the job to resume",
                 code="INTERRUPTED",
             )
             interrupted.append(job.id)
+            if job.kind == "cleanup":
+                job.payload = {**job.payload, "report_available": True}
     if interrupted:
         session.commit()
     return requeue, interrupted

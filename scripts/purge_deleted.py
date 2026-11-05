@@ -3,7 +3,8 @@
 
     uv run python scripts/purge_deleted.py --dry-run
     uv run python scripts/purge_deleted.py
-    uv run python scripts/purge_deleted.py --hard
+    uv run python scripts/cleanup.py --paper-id UUID
+    uv run python scripts/cleanup.py --apply-preview JOB_ID
 
 ``DELETE /api/papers/{id}`` now cleans OpenSearch and MinIO before marking a row
 deleted (plan section 23). Papers deleted **before** that behaviour existed still
@@ -14,11 +15,10 @@ touches papers with ``deleted_at`` set.
 By default the ``paper_chunks`` rows in PostgreSQL are intentionally kept (soft
 delete, plan section 23), so the purge is limited to OpenSearch + MinIO.
 
-``--hard`` additionally deletes the paper's PostgreSQL rows - chunks, files,
-identifiers, sources, field provenance, author/tag links, its ingestion jobs and
-finally the ``papers`` row itself. That is irreversible (the metadata layer's
-provenance history goes with it), so take a ``pg_dump`` into ``backups/`` first;
-without the flag nothing in PostgreSQL is touched.
+Permanent deletion uses ``scripts/cleanup.py`` and its persisted preview. The
+old unscoped ``--hard`` execution is rejected. ``--hard --dry-run`` remains a
+read-only legacy inventory of current-alias documents and default-bucket objects;
+it does not authorize a later permanent deletion.
 """
 from __future__ import annotations
 
@@ -86,18 +86,16 @@ def hard_delete_paper(session, paper_id: str) -> dict[str, int]:
     The child rows go first and the ``papers`` row last, so a failure half way
     through leaves a consistent soft-deleted paper instead of orphaned children.
     """
-    removed: dict[str, int] = {}
-    for model in HARD_PURGE_MODELS:
-        removed[model.__tablename__] = int(
-            session.query(model)
-            .filter(model.paper_id == paper_id)
-            .delete(synchronize_session=False)
-        )
-    removed["papers"] = int(
-        session.query(Paper)
-        .filter(Paper.id == paper_id)
-        .delete(synchronize_session=False)
-    )
+    from sqlalchemy import delete
+    from app.services.cleanup_papers import closure
+    from app.services import operation_receipts
+    for job in session.scalars(select(IngestionJob).where(IngestionJob.paper_id == paper_id)):
+        operation_receipts.remember(session, job)
+    session.flush()
+    removed: dict[str, int] = {model.__tablename__: 0 for model in HARD_PURGE_MODELS}
+    removed["papers"] = 0
+    for table, condition, _ in reversed(closure(session, paper_id)):
+        removed[table.name] = session.execute(delete(table).where(condition)).rowcount
     return removed
 
 
@@ -117,6 +115,9 @@ def main() -> int:
         help="also delete the paper's PostgreSQL rows (irreversible)",
     )
     args = parser.parse_args()
+    if args.hard and not args.dry_run:
+        print("Permanent deletion requires a bounded saved preview. Use scripts/cleanup.py --paper-id UUID, then --apply-preview JOB_ID.", file=sys.stderr)
+        return 2
 
     session = SessionLocal()
     failures = 0

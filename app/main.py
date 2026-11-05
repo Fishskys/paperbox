@@ -27,6 +27,7 @@ from app.api import health as health_api
 from app.api import consistency as consistency_api
 from app.api import metadata as metadata_api
 from app.api import maintenance as maintenance_api
+from app.api import cleanup as cleanup_api
 from app.api import papers as papers_api
 from app.api import search as search_api
 from app.api import search_logs as search_logs_api
@@ -44,6 +45,7 @@ from app.services import embedding_service
 from app.services import health_service
 from app.services.api_key_service import AuthIdentity
 from app.workers import housekeeping
+from app.workers import cleanup_scheduler
 from app.workers import metadata_sync
 from mcp.server import MCPServer
 
@@ -110,6 +112,7 @@ async def lifespan(_: FastAPI):
     # Housekeeping runs once right after recovery (it cleans the debris of the
     # process that died) and then on its own interval.
     housekeeping.start()
+    cleanup_scheduler.start()
     metadata_sync.start()
     if mcp_server is not None:
         # The MCP session manager has to be entered by the *host* app: a mounted
@@ -120,6 +123,7 @@ async def lifespan(_: FastAPI):
     else:
         yield
     await metadata_sync.stop()
+    await cleanup_scheduler.stop()
     await housekeeping.stop()
     await job_queue.stop()
     logger.info("paperbox stopping")
@@ -314,6 +318,7 @@ app.include_router(figures_api.router)
 app.include_router(papers_api.router)
 app.include_router(metadata_api.router)
 app.include_router(maintenance_api.router)
+app.include_router(cleanup_api.router)
 app.include_router(search_api.router)
 app.include_router(search_logs_api.router)
 

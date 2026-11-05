@@ -17,6 +17,11 @@ services:
     build: ./frontend
     image: paperbox/webui:0.9.1
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     ports:
       - "${WEBUI_PORT:-8089}:80"
     extra_hosts:
@@ -30,6 +35,11 @@ services:
     image: paperbox/api:0.9.1
     container_name: paperbox-api
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     env_file:
       - .env
     extra_hosts:

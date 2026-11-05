@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 from contextvars import ContextVar
 from typing import Any
@@ -128,7 +129,21 @@ def configure_logging(level: str | None = None, *, json_output: bool = False) ->
     root = logging.getLogger()
     for existing in list(root.handlers):
         root.removeHandler(existing)
+        if isinstance(existing, RotatingFileHandler):
+            existing.close()
     root.addHandler(handler)
+    if settings.log_file:
+        from app.core.config import REPO_ROOT
+        path = REPO_ROOT / settings.log_file
+        log_root = REPO_ROOT / "logs" / "app"
+        if path.parent.resolve() != log_root.absolute() or path.is_symlink():
+            raise ValueError("LOG_FILE must name a regular file directly under logs/app")
+        log_root.mkdir(parents=True, exist_ok=True)
+        rotating = RotatingFileHandler(path, maxBytes=settings.log_max_bytes,
+            backupCount=settings.log_backup_count, encoding="utf-8")
+        rotating.addFilter(RequestIdFilter())
+        rotating.setFormatter(handler.formatter)
+        root.addHandler(rotating)
     root.setLevel(resolved_level)
 
     # uvicorn installs its own handlers; route them through ours instead.

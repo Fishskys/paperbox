@@ -276,16 +276,21 @@ def main(argv: list[str] | None = None) -> int:
     client = get_client()
     print(f"OpenSearch: {settings.opensearch_url}")
 
-    if args.migrate_from:
-        return migrate(
-            client,
-            old_index=args.migrate_from,
-            new_index=index,
-            alias=alias,
-            poll_interval=args.poll_interval,
-            timeout=args.task_timeout,
-        )
-    return verify(client, index=index, alias=alias)
+    from app.db.session import SessionLocal
+    from app.services.cleanup_indices import IndexRegistry, exclusive
+    with SessionLocal() as session, exclusive(session):
+        registry = IndexRegistry(session, client)
+        if args.migrate_from:
+            code = migrate(client, old_index=args.migrate_from, new_index=index, alias=alias,
+                poll_interval=args.poll_interval, timeout=args.task_timeout)
+            if code == 0:
+                registry.claim(args.migrate_from, actor="create_index", rollback=True)
+        else:
+            code = verify(client, index=index, alias=alias)
+        if code == 0:
+            registry.claim(index, actor="create_index")
+            session.commit()
+        return code
 
 
 if __name__ == "__main__":

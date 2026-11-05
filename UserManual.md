@@ -385,7 +385,8 @@ cd infra && docker compose --profile local-docling up -d docling
 | `POST /api/papers/{paper_id}/reindex` | 重建某篇论文的切块与向量（较慢） |
 | `uv run python scripts/check_consistency.py` | 三端（数据库/对象存储/索引）只读对账 |
 | `uv run python scripts/setup_snapshots.py` | 建/核对快照仓库与定时快照策略；`--restore-check` 做恢复演练 |
-| `uv run python scripts/purge_deleted.py --hard` | 清理已删论文的索引文档、对象与数据库行（不可逆） |
+| `uv run python scripts/cleanup.py --paper-id UUID` | 为指定软删论文生成永久删除预览；也可用 `--deleted-before ISO时间` 选择不超过 100 篇 |
+| `uv run python scripts/cleanup.py --apply-preview JOB_ID` | 执行固定预览；覆盖关联行、记录过的对象桶和已登记索引文档，失败后用 `--retry-job JOB_ID` |
 | `uv run python scripts/eval.py` | 对运行中的服务跑定标集评测（检索质量） |
 | `uv run python scripts/bulk_ingest_dir.py <目录>` | 批量导入一个目录（同机零传输） |
 | `uv run python scripts/acceptance_mcp.py [--with-writes]` | MCP 端点一键验收：传输/鉴权/十工具/异常路径，**自带清理**（只读模式 38 项；`--with-writes` 多一节写工具验收，需要 `MCP_WRITE_ENABLED=true` 才有内容） |
@@ -799,7 +800,7 @@ WSL2 里的依赖端口要在 WSL 的防火墙里放行：`wsl -e -u root bash -
 **Q18 怎么确认 MCP 是好的？会不会把我库里的论文弄坏？**
 一条命令：`uv run python scripts/acceptance_mcp.py [--with-writes]`（脚本见 [#1.6](#16-常用运维命令)）。
 它自带清理：导入一份**每次运行内容都不同**的合成 PDF，跑完按快照 diff 删掉**自己新建的那篇**，并断言既有论文一篇没少；探针必须落在 `INGEST_LOCAL_ROOTS` 内。
-带写模式因产品删除是软删，会留一条 `deleted` 状态的探针记录，需要时用 `scripts/purge_deleted.py --hard` 清掉。
+带写模式因产品删除是软删，会留一条 `deleted` 状态的探针记录。需要时用 `scripts/cleanup.py --paper-id UUID` 预览，再用 `--apply-preview JOB_ID` 永久删除该探针。旧 `purge_deleted.py --hard` 不再允许无预览删除全部软删论文。
 
 **Q19 启动时报 embedding 维度不一致（`RuntimeError ... EMBEDDING_DIMENSION`）？**
 应用启动时会做三方对账：容器模型的**实测输出维度** ↔ `.env` 的 `EMBEDDING_DIMENSION` ↔ 活索引

@@ -31,7 +31,7 @@ def load_job(job_id: str):
     session = SessionLocal()
     try:
         job = ingestion_service.get_job(session, job_id)
-        if job is None:
+        if job is None or job.kind == "cleanup":
             raise errors.not_found("job", job_id)
         return JobOut.model_validate(ingestion_service.serialize_job(job))
     finally:
