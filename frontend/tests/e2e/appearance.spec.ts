@@ -6,6 +6,7 @@ const paper = { paper_id: "appearance-paper", title: "A precision timing convert
 for (const appearance of ["light", "dark"]) {
   for (const width of [1440, 390]) {
     test(`${appearance} pages have readable information at ${width}px`, async ({ page }, testInfo) => {
+      test.setTimeout(90000);
       await page.setViewportSize({ width, height: 900 });
       await page.addInitScript(value => localStorage.setItem("paperbox:theme", value), appearance);
       await page.route("**/api/**", route => {
@@ -14,11 +15,14 @@ for (const appearance of ["light", "dark"]) {
         if (path === "/api/papers") return route.fulfill({ json: { total: 1, papers: [paper], facets: {} } });
         if (path === `/api/papers/${paper.paper_id}`) return route.fulfill({ json: paper });
         if (path === "/api/jobs") return route.fulfill({ json: { total: 0, jobs: [] } });
+        if (path === "/api/admin/cleanup/policy") return route.fulfill({ json: { automatic: false, interval_s: 3600, preview_hours: 24, batch_size: 100, days: { app_logs: 30 },
+          log_rotation: { enabled: false, max_bytes: 52428800, backups: 5 }, upload_gc: { interval_s: 300, archive_hours: 24, retry_hours: 72 }, manual_only: ["multipart_uploads"],
+          figure_cleanup_pending: 0, scheduler_status: { started: true, passes: 0, last: null } } });
         if (path === "/api/metadata/review") return route.fulfill({ json: { total: 0, sources: [], conflicts: [], conflicts_total: 0 } });
         return route.fulfill({ status: 503, json: { detail: "测试服务暂不可用" } });
       });
       await page.route("**/health", route => route.fulfill({ json: { version: "0.9.0", degraded: true, services: { postgres: "ok", opensearch: "error", minio: "disabled", embedding: "unknown" } } }));
-      const routes = ["/search", "/search/standard", "/search/history", "/reading/recent", `/reading/papers/${paper.paper_id}`, "/imports/new", "/imports/metadata", "/manage/library", "/manage/jobs", "/system/status", "/system/data", "/system/index", "/system/metadata"];
+      const routes = ["/search", "/search/standard", "/search/history", "/reading/recent", `/reading/papers/${paper.paper_id}`, "/imports/new", "/imports/metadata", "/manage/library", "/manage/jobs", "/system/status", "/system/data", "/system/index", "/system/metadata", "/system/cleanup"];
       const results: Record<string, string[]> = {};
       for (const path of routes) {
         await page.goto(path);

@@ -1,7 +1,7 @@
 :root {
   font-family: system-ui, sans-serif;
   color: #243136;
-  background: #f6f8f9;
+  background: var(--bg);
   font-synthesis: none;
   --surface: #fff;
   --bg: #f6f8f9;
@@ -57,6 +57,7 @@ button:focus-visible {
 }
 .workspace {
   min-height: 100dvh;
+  background: var(--bg);
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
 }

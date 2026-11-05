@@ -22,12 +22,12 @@ function readStored(key: string): Stored {
   try { return JSON.parse(sessionStorage.getItem(key) || "{}"); } catch { return {}; }
 }
 
-export function useMaintenanceTask<T>(channel: string) {
+export function useMaintenanceTask<T, R extends object = MaintenanceRequest>(channel: string, base = "/api/maintenance/jobs") {
   const { context } = useAccess();
   const storageKey = `paperbox:maintenance:${context?.prefix}:${channel}`;
   const [params, setParams] = useSearchParams();
   const [jobId, setJobId] = useState(() => params.get("task") || readStored(storageKey).jobId || "");
-  const [job, setJob] = useState<MaintenanceJob>();
+  const [job, setJob] = useState<MaintenanceJob & { request?: R }>();
   const [report, setReport] = useState<T>();
   const [error, setError] = useState("");
   const [missing, setMissing] = useState(false);
@@ -56,7 +56,7 @@ export function useMaintenanceTask<T>(channel: string) {
         const stored = readStored(storageKey);
         if (!jobId && !stored.pending) return;
         const endpoint = jobId || `requests/${encodeURIComponent(stored.pending!.request_id)}`;
-        const value = await request<MaintenanceJob>(`/api/maintenance/jobs/${endpoint}`, { signal: controller.signal });
+        const value = await request<MaintenanceJob & { request?: R }>(`${base}/${endpoint}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
         setJob(value); setError(""); setMissing(false);
         if (!jobId) {
@@ -64,20 +64,20 @@ export function useMaintenanceTask<T>(channel: string) {
           setJobId(value.job_id);
         }
         if (value.report_available && terminal(value)) {
-          const result = await request<T>(`/api/maintenance/jobs/${value.job_id}/report`, { signal: controller.signal });
+          const result = await request<T>(`${base}/${value.job_id}/report`, { signal: controller.signal });
           if (!controller.signal.aborted) setReport(result);
         }
         if (!terminal(value)) timer = setTimeout(() => void poll(), 2000);
       } catch (error) { if (!controller.signal.aborted) {
-        setMissing(!!jobId && error instanceof ApiError && error.status === 404);
+        setMissing(!!jobId && error instanceof ApiError && [404, 410].includes(error.status));
         setError(`${errorMessage(error)}；可查询任务状态，写操作不会自动重发。`);
       } }
     }
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [jobId, visible, retry, storageKey]);
+  }, [jobId, visible, retry, storageKey, base]);
 
-  async function submit(body: MaintenanceRequest) {
+  async function submit(body: R) {
     if (guard.current) return;
     guard.current = true; setSubmitting(true); setError(""); setMissing(false); setReport(undefined);
     const old = readStored(storageKey).pending;
@@ -88,7 +88,7 @@ export function useMaintenanceTask<T>(channel: string) {
     setJobId(""); setJob(undefined);
     setParams(previous => { const next = new URLSearchParams(previous); next.delete("task"); return next; }, { replace: true });
     try {
-      const value = await post<MaintenanceJob>("/api/maintenance/jobs", pending);
+      const value = await post<MaintenanceJob & { request?: R }>(base, pending);
       sessionStorage.setItem(storageKey, JSON.stringify({ jobId: value.job_id }));
       if (mounted.current) {
         ignoredUrl.current = urlJobId;
@@ -108,7 +108,7 @@ export function useMaintenanceTask<T>(channel: string) {
     active: submitting || (!!jobId && !terminal(job)), recover: () => setRetry(v => v + 1) };
 }
 
-export function MaintenanceTaskStatus({ task }: { task: ReturnType<typeof useMaintenanceTask> }) {
+export function MaintenanceTaskStatus({ task, hideDownload = false }: { task: Pick<ReturnType<typeof useMaintenanceTask>, "error" | "recover" | "missing" | "forgetMissing" | "job" | "report">; hideDownload?: boolean }) {
   return <>
     {task.error && <Alert type="error" title={task.error} action={<div className="inline"><Button icon={<RefreshCw size={16} />} onClick={task.recover}>查询任务状态</Button>
       {task.missing && <Button icon={<X size={16} />} onClick={task.forgetMissing}>清除失效任务</Button>}</div>} />}
@@ -117,7 +117,7 @@ export function MaintenanceTaskStatus({ task }: { task: ReturnType<typeof useMai
       <Progress percent={Math.round(task.job.progress)} status={task.job.stage === "FAILED" ? "exception" : undefined} style={{ width: 180 }} />
       {task.job.error_message && <Alert type="error" title={`${task.job.error_code || ""} ${task.job.error_message}`} />}
       <Button icon={<RefreshCw size={16} />} onClick={task.recover}>刷新状态</Button>
-      {task.report !== undefined && <Button icon={<Download size={16} />} onClick={() => downloadJson(task.report, `maintenance-${task.job!.job_id}.json`)}>下载任务报告</Button>}
+      {!hideDownload && task.report !== undefined && <Button icon={<Download size={16} />} onClick={() => downloadJson(task.report, `maintenance-${task.job!.job_id}.json`)}>下载任务报告</Button>}
     </div>}
   </>;
 }
