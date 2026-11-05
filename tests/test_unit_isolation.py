@@ -1,6 +1,7 @@
 """The unit entrypoint must stop libpq before it can open a real connection."""
 
 import socket
+import os
 
 import psycopg
 import pytest
@@ -33,3 +34,11 @@ def test_sqlite_remains_available_to_unit_tests():
             assert connection.scalar(text("SELECT 1")) == 1
     finally:
         engine.dispose()
+
+
+def test_file_logging_is_disabled_before_configuration_import_and_restored(monkeypatch):
+    from app.core.config import Settings
+    monkeypatch.setenv("LOG_FILE", "logs/app/production-destination.log")
+    with isolated_io():
+        assert Settings(_env_file=None).log_file == ""
+    assert os.environ["LOG_FILE"] == "logs/app/production-destination.log"

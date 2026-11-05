@@ -42,6 +42,9 @@ import os
 os.environ["MCP_ENABLED"] = "false"
 os.environ["AUTH_ENABLED"] = "false"
 os.environ["HEALTH_PROBE_ON_STARTUP"] = "false"
+# File logging and retention must not inherit production destinations/policies.
+os.environ["LOG_FILE"] = ""
+os.environ["CLEANUP_AUTO_ENABLED"] = "false"
 
 import pytest
 import sqlalchemy
@@ -194,6 +197,16 @@ def _never_touch_real_object_storage(monkeypatch):
     store = InMemoryArtifactStore()
     monkeypatch.setattr(parser_service, "_default_store", lambda: store)
     return store
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cleanup_scheduler(monkeypatch):
+    """Exercise lifecycle start/stop with an inert runner, never real stores."""
+    from app.workers import cleanup_scheduler
+    from app.workers.housekeeping import Housekeeping
+
+    replacement = Housekeeping(interval=3600, runner=cleanup_scheduler.CleanupPass)
+    monkeypatch.setattr(cleanup_scheduler, "_scheduler", replacement)
 
 
 @pytest.fixture(autouse=True)

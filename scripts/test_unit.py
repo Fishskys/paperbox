@@ -3,6 +3,7 @@
 
 from contextlib import contextmanager
 from pathlib import Path
+import os
 import socket
 import sys
 
@@ -17,6 +18,8 @@ def isolated_io():
 
     connect = socket.socket.connect
     connect_ex = socket.socket.connect_ex
+    previous_log_file = os.environ.get("LOG_FILE")
+    os.environ["LOG_FILE"] = ""
 
     def block(function):
         def guarded(sock, address):
@@ -40,6 +43,10 @@ def isolated_io():
         event.remove(Engine, "do_connect", block_database)
         socket.socket.connect = connect
         socket.socket.connect_ex = connect_ex
+        if previous_log_file is None:
+            os.environ.pop("LOG_FILE", None)
+        else:
+            os.environ["LOG_FILE"] = previous_log_file
 
 
 def main() -> int:
