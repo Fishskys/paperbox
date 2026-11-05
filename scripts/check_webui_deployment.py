@@ -10,14 +10,14 @@ import sys
 import time
 import uuid
 
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.session import SessionLocal  # noqa: E402
-from app.db.models import FigureExtractionRun, IngestionJob, Paper, PaperFigure, PaperSource, MetadataSourceReviewEvent  # noqa: E402
+from app.db.models import CleanupCandidate, CleanupReceipt, FigureExtractionRun, IngestionJob, Paper, PaperFigure, PaperSource, MetadataSourceReviewEvent  # noqa: E402
 from app.services import api_key_service as keys  # noqa: E402
 
 
@@ -39,7 +39,8 @@ def main() -> None:
         session.commit()
         before = source_snapshot(session)
     try:
-        subprocess.run(["node", str(ROOT / "scripts/check_webui_deployment.mjs")], cwd=ROOT,
+        browser_script = "check_cleanup_deployment.mjs" if os.environ.get("WEBUI_CLEANUP_ONLY") == "1" else "check_webui_deployment.mjs"
+        subprocess.run(["node", str(ROOT / "scripts" / browser_script)], cwd=ROOT,
                        env={**os.environ, "PAPERBOX_UI_TEST_KEY": credential,
                             "PAPERBOX_UI_FIGURE_PAPER": figure_paper or ""}, check=True, timeout=900)
     finally:
@@ -50,16 +51,23 @@ def main() -> None:
         deadline = time.monotonic() + 120
         while True:
             with SessionLocal() as session:
-                jobs = session.scalars(select(IngestionJob).where(IngestionJob.kind == "maintenance",
+                jobs = session.scalars(select(IngestionJob).where(IngestionJob.kind.in_(("maintenance", "cleanup")),
                     IngestionJob.payload["actor"].as_string() == prefix)).all()
                 if all(job.stage in ("COMPLETED", "FAILED") for job in jobs):
                     reports = ROOT / "logs" / "eval"
                     reports.mkdir(parents=True, exist_ok=True)
                     for job in jobs:
-                        if "report" in (job.payload or {}):
-                            (reports / f"{prefix}-{job.id}.json").write_text(json.dumps(job.payload["report"], ensure_ascii=False, indent=2), encoding="utf-8")
+                        report = (job.payload or {}).get("report")
+                        if job.kind == "cleanup":
+                            from app.services import cleanup_service
+                            report = cleanup_service.report(session, job.id, limit=10000)
+                        if report is not None:
+                            (reports / f"{prefix}-{job.id}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
                     for job in jobs:
+                        session.execute(delete(CleanupCandidate).where(CleanupCandidate.job_id == job.id))
                         session.delete(job)
+                    # These request actors are unique and have just been revoked.
+                    session.execute(delete(CleanupReceipt).where(CleanupReceipt.actor == prefix))
                     session.commit()
                     break
             if time.monotonic() >= deadline:

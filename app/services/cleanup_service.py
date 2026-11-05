@@ -6,7 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models import CleanupCandidate, CleanupReceipt, IngestionJob, Paper
+from app.db.models import CleanupCandidate, CleanupReceipt, FigureExtractionRun, IngestionJob, Paper, PaperFigure
 from app.schemas.cleanup import CleanupIn
 from app.services import cleanup_indices, cleanup_policy as policy, ingestion_service as ingest, operation_receipts
 from app.services.cleanup_resources import Resources
@@ -16,6 +16,24 @@ class CleanupError(ValueError):
     def __init__(self, message, status=409):
         super().__init__(message)
         self.status = status
+
+
+def effective_policy(session):
+    from app.workers import cleanup_scheduler, housekeeping
+    pending = sum(session.scalar(select(func.count()).select_from(model).where(model.cleanup_pending.is_(True))) or 0
+        for model in (FigureExtractionRun, PaperFigure))
+    return {**policy.policy(), "upload_gc_status": housekeeping.stats(), "scheduler_status": cleanup_scheduler.stats(), "figure_cleanup_pending": pending}
+
+
+def list_indices(session):
+    return cleanup_indices.IndexRegistry(session).list()
+
+
+def claim_index(session, body, *, actor):
+    with cleanup_indices.exclusive(session):
+        result = cleanup_indices.IndexRegistry(session).claim(body.name, actor=actor, rollback=body.is_rollback)
+        session.commit()
+    return result
 
 
 def request_job_id(actor, request_id):

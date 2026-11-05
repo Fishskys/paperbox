@@ -135,6 +135,28 @@ def test_preview_is_bounded_and_report_paged(db_session, monkeypatch):
     assert report["size_bytes"] is None
 
 
+def test_complete_download_survives_a_smaller_current_batch_policy(session_factory, monkeypatch):
+    monkeypatch.setattr(settings, "cleanup_batch_size", 300)
+    with session_factory() as session:
+        for _ in range(200):
+            query(session)
+        preview = submit(session)
+        service.execute(session, preview.id)
+        identifier = preview.id
+    monkeypatch.setattr(settings, "cleanup_batch_size", 1)
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[require_admin] = lambda: AuthIdentity(prefix="admin", role="admin", source="test")
+    def database():
+        with session_factory() as session:
+            yield session
+    app.dependency_overrides[get_db] = database
+    with TestClient(app) as client:
+        response = client.get(f"/api/admin/cleanup/jobs/{identifier}/download")
+        assert response.status_code == 200
+        assert len(response.json()["items"]) == response.json()["total"] == 200
+
+
 class Store:
     def __init__(self):
         self.objects = {}

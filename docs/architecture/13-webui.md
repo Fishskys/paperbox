@@ -182,6 +182,8 @@ API 域名在请求时解析，因此 API 尚未启动时页面仍可打开，�
 `WEBUI_URL=http://127.0.0.1:8089 uv run python scripts/check_webui_permissions.py` 使用临时 read/write/admin 密钥验证部署后的权限分区，结束后清理密钥。
 
 `WEBUI_SOURCE_ONLY=1 uv run python scripts/check_webui_deployment.py` 仅验收元数据导入与来源复核：核对构建哈希、桌面及移动抽屉边界、无原因确认框，以及最多 50 条来源的跨页选择与批量匹配预览。真实来源的写操作被拦截，结束后比较来源快照与审计数量，确认未处理队列；独立入库、拒绝、恢复与失败重试由浏览器模拟接口回归及临时数据库验收覆盖。
+
+`WEBUI_CLEANUP_ONLY=1 uv run python scripts/check_webui_deployment.py` 验收系统清理的实际构建哈希、管理员策略、后台预览、刷新重新鉴权、报告恢复与桌面/移动布局。浏览器拦截所有非预览清理写入；结束后撤销专用密钥，导出验收报告到 `logs/eval/`，清除专用任务、候选与回执。回执清除仅用于已撤销且不会复用的验收身份，不适用于普通业务请求。默认访问生产端口，可用 `WEBUI_URL` 指定验收地址；开发 Vite 页面可显式使用 `WEBUI_SKIP_BUNDLE_CHECK=1` 跳过生产构建哈希比较。
 `uv run python scripts/check_import_archive.py` 创建临时 PDF，验证 ZIP 条目处置、真实解析索引与原文下载，并清理本次生成的数据；未配置目录白名单时同时核对目录导入保持禁用。
 
 在仓库根执行 `node scripts/check_webui.mjs` 可对已运行服务执行只读浏览器验收，

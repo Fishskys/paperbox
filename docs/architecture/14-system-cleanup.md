@@ -12,6 +12,8 @@
 
 ## 管理接口
 
+路由只处理鉴权、参数与响应，策略盘点和索引认领的事务由 `cleanup_service.effective_policy`、`cleanup_service.claim_index` 等服务入口统一处理。完整报告按创建时已经固定的候选账本导出，不因之后调小批次配置而截断。
+
 所有 `/api/admin/cleanup/**` 路径要求管理员权限。`GET /policy` 返回当前配置、上传 GC 和清理调度器状态；`GET /deleted-papers` 分页列出软删论文；`GET /indices` 列出论文索引的归属、别名与回滚保护，`POST /indices/claim` 明确登记物理索引身份。
 
 `POST /jobs` 使用客户端 `request_id` 幂等提交后台任务。`operation=inventory` 始终只读；`operation=cleanup,dry_run=true` 生成固定预览。执行请求使用相同范围、`dry_run=false` 与 `preview_job_id`。预览默认有效 24 小时，配置变化使预览失效。永久删除和索引淘汰不能与其它类别混合。一般任务接口不向非管理员展示清理任务，MCP 的普通任务查询不承载清理报告。

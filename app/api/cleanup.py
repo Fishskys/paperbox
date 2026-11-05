@@ -6,13 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select
 
 from app.core.security import require_admin
 from app.db.session import get_db
-from app.db.models import FigureExtractionRun, PaperFigure
 from app.schemas.cleanup import CleanupIn, CleanupJobOut, CleanupListOut, CleanupReportOut, IndexClaimIn
-from app.services import cleanup_indices, cleanup_policy, cleanup_service as service
+from app.services import cleanup_service as service
 from app.services.api_key_service import AuthIdentity
 
 router = APIRouter(prefix="/api/admin/cleanup", tags=["cleanup"], dependencies=[Depends(require_admin)])
@@ -29,10 +27,7 @@ def call(function, *args, **kwargs):
 
 @router.get("/policy")
 def policy(session: Session = Depends(get_db)):
-    from app.workers import cleanup_scheduler, housekeeping
-    pending = sum(session.scalar(select(func.count()).select_from(model).where(model.cleanup_pending.is_(True))) or 0
-        for model in (FigureExtractionRun, PaperFigure))
-    return {**cleanup_policy.policy(), "upload_gc_status": housekeeping.stats(), "scheduler_status": cleanup_scheduler.stats(), "figure_cleanup_pending": pending}
+    return call(service.effective_policy, session)
 
 
 @router.get("/deleted-papers")
@@ -42,15 +37,12 @@ def deleted_papers(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le
 
 @router.get("/indices")
 def indices(session: Session = Depends(get_db)):
-    return call(cleanup_indices.IndexRegistry(session).list)
+    return call(service.list_indices, session)
 
 
 @router.post("/indices/claim")
 def claim(body: IndexClaimIn, session: Session = Depends(get_db), identity: AuthIdentity = Depends(require_admin)):
-    with cleanup_indices.exclusive(session):
-        result = call(cleanup_indices.IndexRegistry(session).claim, body.name, actor=identity.prefix, rollback=body.is_rollback)
-        session.commit()
-    return result
+    return call(service.claim_index, session, body, actor=identity.prefix)
 
 
 @router.post("/jobs", response_model=CleanupJobOut, status_code=202)
@@ -80,6 +72,6 @@ def report(job_id: UUID, offset: int = Query(0, ge=0), limit: int = Query(100, g
 
 @router.get("/jobs/{job_id}/download")
 def download(job_id: UUID, session: Session = Depends(get_db)):
-    # At most nine categories * configured batch_size; no unbounded report body.
-    result = call(service.report, session, str(job_id), limit=9 * (cleanup_policy.policy()["batch_size"] + 20))
+    # The ledger was bounded at creation; later policy changes must not truncate it.
+    result = call(service.report, session, str(job_id), limit=None)
     return JSONResponse(jsonable_encoder(result), headers={"Content-Disposition": f'attachment; filename="cleanup-{job_id}.json"'})

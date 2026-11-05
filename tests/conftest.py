@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 
-# The unit suite must not inherit the developer's ``.env``. Two switches matter:
+# The unit suite must not inherit the developer's runtime switches or log paths:
 #
 # * ``MCP_ENABLED=true`` makes the app lifespan enter the SDK session manager, and
 #   that manager "can only be called once per instance" -- the second ``TestClient``
