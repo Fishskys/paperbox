@@ -9,6 +9,10 @@ from app.core.config import settings
 SAFE_CATEGORIES = ("app_logs", "search_logs", "jobs", "parse_cache", "figure_history", "orphan_objects", "orphan_records")
 
 
+class ScanLimit(ValueError):
+    """The scan cannot prove that its bounded inventory is complete."""
+
+
 def now():
     return datetime.now(timezone.utc)
 

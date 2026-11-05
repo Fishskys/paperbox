@@ -19,7 +19,7 @@ def main():
     from sqlalchemy import create_engine, select, text
     from sqlalchemy.orm import Session
     from app.core.config import REPO_ROOT, settings
-    from app.db.models import CleanupReceipt, IngestionJob, MetadataSourceReviewEvent, Paper, PaperSource, SearchQuery
+    from app.db.models import Author, CleanupReceipt, IngestionJob, MetadataSourceReviewEvent, Paper, PaperAuthor, PaperSource, SearchQuery
     from app.schemas.cleanup import CleanupIn
     from app.search import opensearch
     from app.services import cleanup_indices, cleanup_policy as policy, cleanup_service as service, object_storage
@@ -70,6 +70,12 @@ def main():
             object_storage.upload_bytes(key, b"synthetic acceptance bytes", bucket=bucket)
             session.add(SearchQuery(query="synthetic acceptance", mode="keyword", top_k=10, rerank=False, returned=1,
                 results=[{"paper_id": paper.id, "title": paper.title}], created_at=policy.now() - timedelta(days=100)))
+            unused = Author(name="Synthetic unused", normalized_name=f"unused:{token}", created_at=policy.now() - timedelta(days=200))
+            used = Author(name="Synthetic used", normalized_name=f"used:{token}", created_at=policy.now() - timedelta(days=200))
+            stale = IngestionJob(kind="ingest", stage="COMPLETED", payload={}, finished_at=policy.now() - timedelta(days=200))
+            session.add_all([unused, used, stale])
+            session.flush()
+            session.add(PaperAuthor(paper_id=paper.id, author_id=used.id, author_order=0))
             session.commit()
 
             def task(body):
@@ -78,6 +84,18 @@ def main():
                 report = service.report(session, record.id)
                 assert record.stage == "COMPLETED", report
                 return record, report
+
+            categories = ["search_logs", "jobs", "orphan_records"]
+            preview, report = task(CleanupIn(request_id=uuid4(), categories=categories))
+            assert report["ready"] == 3, report
+            _, report = task(CleanupIn(request_id=uuid4(), categories=categories, dry_run=False, preview_job_id=preview.id))
+            assert report["completed"] == 3, report
+            assert session.scalar(select(Author.id).where(Author.id == unused.id)) is None
+            assert session.get(Author, used.id) and session.get(PaperSource, source.id)
+            assert session.get(CleanupReceipt, stale.id)
+            session.add(SearchQuery(query="synthetic current query", mode="keyword", top_k=10, rerank=False, returned=1,
+                results=[{"paper_id": paper.id, "title": paper.title}]))
+            session.commit()
 
             preview, report = task(CleanupIn(request_id=uuid4(), categories=["deleted_papers"], paper_ids=[paper.id]))
             assert report["ready"] == 1 and storage.stat_object(bucket, key)
@@ -96,7 +114,7 @@ def main():
             assert report["completed"] == 1 and not client.indices.exists(index=names[1])
             protected, report = task(CleanupIn(request_id=uuid4(), categories=["indices"], indices=[names[0]]))
             assert report["protected"] == 1 and client.indices.exists(index=names[0])
-        print("Cleanup acceptance passed: frozen preview, PostgreSQL foreign keys, MinIO deletion, historical index documents, index retirement and alias protection.")
+        print("Cleanup acceptance passed: operational retention, protected references, frozen preview, PostgreSQL foreign keys, MinIO deletion, historical index documents, index retirement and alias protection.")
     finally:
         settings.minio_bucket = previous_bucket
         for name, identity in owned_indices.items():

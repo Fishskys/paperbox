@@ -161,7 +161,8 @@ def execute(session, identifier, *, resources=None):
                 session.commit()
             except Exception as exc:
                 session.rollback()
-                job.payload = {**job.payload, "errors": [*job.payload.get("errors", []), f"{category}: {type(exc).__name__}: {exc}"]}
+                job.payload = {**job.payload, "limited": job.payload.get("limited", False) or isinstance(exc, policy.ScanLimit),
+                    "errors": [*job.payload.get("errors", []), f"{category}: {type(exc).__name__}: {exc}"]}
                 session.commit()
         _finish(session, job, failed=bool(job.payload.get("errors")))
         return

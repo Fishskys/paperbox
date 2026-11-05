@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from app.db.models import (Author, CleanupCandidate, FigureExtractionRun, IngestionJob, Paper,
     PaperAuthor, PaperDegradation, PaperFigure, PaperFigureAsset, PapersTag, PaperTag, SearchQuery, Venue, VenueEdition)
@@ -36,10 +36,11 @@ def active_references(session):
             for child in value:
                 visit(child)
     # A still-valid preview and an unfinished parent report are durable references.
-    query = select(IngestionJob).where(or_(IngestionJob.stage.not_in(("COMPLETED", "FAILED")), IngestionJob.kind == "cleanup"))
+    query = select(IngestionJob).where(or_(IngestionJob.stage.not_in(("COMPLETED", "FAILED")),
+        and_(IngestionJob.kind == "cleanup", IngestionJob.payload["expires_at"].as_string() > policy.now().isoformat())))
     jobs = session.scalars(query.limit(policy.policy()["scan_limit"] + 1)).all()
     if len(jobs) > policy.policy()["scan_limit"]:
-        raise ValueError("active-reference scan exceeds configured limit")
+        raise policy.ScanLimit("active-reference scan exceeds CLEANUP_SCAN_LIMIT")
     for job in jobs:
         payload = job.payload or {}
         expires = payload.get("expires_at")
@@ -66,12 +67,33 @@ def editions_revision(session, venue_id, *, lock=False):
     return policy.digest([revision(row) for row in rows])
 
 
+def bounded(session, query):
+    limit = policy.policy()["scan_limit"]
+    result = session.scalars(query.limit(limit + 1).execution_options(yield_per=100))
+    try:
+        for index, row in enumerate(result):
+            if index == limit:
+                raise policy.ScanLimit("database scan reached CLEANUP_SCAN_LIMIT; narrow the scope or increase the configured limit")
+            yield row
+    finally:
+        result.close()
+
+
+def unreferenced(query, model):
+    if model is Author:
+        return query.where(~select(PaperAuthor.id).where(PaperAuthor.author_id == Author.id).exists())
+    if model is PaperTag:
+        return query.where(~select(PapersTag.id).where(PapersTag.tag_id == PaperTag.id).exists())
+    return query.where(~select(Paper.id).where(Paper.venue_id == Venue.id).exists(),
+        ~select(Paper.id).join(VenueEdition, Paper.venue_edition_id == VenueEdition.id).where(VenueEdition.venue_id == Venue.id).exists())
+
+
 def scan(session, category, moment):
     if category == "orphan_records":
         for key in ("authors", "tags", "venues"):
             model = MODELS[key]
             query = select(model).where(model.created_at < moment - timedelta(days=policy.policy()["days"][category])).order_by(model.created_at)
-            for row in session.scalars(query.limit(policy.policy()["scan_limit"])):
+            for row in bounded(session, unreferenced(query, model)):
                 if not referenced(session, model, row.id):
                     candidate = item(category, row, key=f"{key}:{row.id}")
                     if model is Venue:
@@ -82,8 +104,10 @@ def scan(session, category, moment):
     if category == "jobs":
         refs = active_references(session)
         age = func.coalesce(model.finished_at, model.updated_at)
-        query = select(model).where(model.stage.in_(("COMPLETED", "FAILED"))).order_by(age)
-        for row in session.scalars(query.limit(policy.policy()["scan_limit"])):
+        retention = policy.policy()["days"]
+        query = select(model).where(or_(and_(model.stage == "COMPLETED", age < moment - timedelta(days=retention["jobs"])),
+            and_(model.stage == "FAILED", age < moment - timedelta(days=retention["failed_jobs"])))).order_by(age)
+        for row in bounded(session, query):
             days = policy.policy()["days"]["failed_jobs" if row.stage == "FAILED" else "jobs"]
             if policy.aware(row.finished_at or row.updated_at) < moment - timedelta(days=days):
                 yield item(category, row, reason="referenced by an active task" if row.id in refs else None)
@@ -92,7 +116,7 @@ def scan(session, category, moment):
     query = select(model).where(age < moment - timedelta(days=policy.policy()["days"][category])).order_by(age)
     if category == "figure_history":
         query = query.where(model.is_current.is_(False), model.cleanup_pending.is_(False), model.status.not_in(("queued", "running")))
-    for row in session.scalars(query.limit(policy.policy()["scan_limit"])):
+    for row in bounded(session, query):
         yield item(category, row)
 
 

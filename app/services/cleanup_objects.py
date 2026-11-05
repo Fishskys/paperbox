@@ -145,8 +145,7 @@ def scan_objects(session, store, category, moment):
             "state": "protected" if reason else "ready", "error": reason}
 
 
-class ScanLimit(ValueError):
-    pass
+ScanLimit = policy.ScanLimit
 
 
 def remove_objects(session, store, candidate):

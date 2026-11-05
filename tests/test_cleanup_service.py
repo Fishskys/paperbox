@@ -462,3 +462,50 @@ def test_configured_file_logging_rotates_and_rejects_other_directories(tmp_path,
                 handler.close()
         root.handlers = previous
         root.setLevel(level)
+
+
+def test_referenced_authors_do_not_hide_unused_authors_beyond_scan_window(db_session, monkeypatch):
+    from app.db.models import Author, PaperAuthor
+    monkeypatch.setattr(settings, "cleanup_scan_limit", 100)
+    paper = make_paper(db_session)
+    old = policy.now() - timedelta(days=200)
+    authors = [Author(name=f"Used {index}", normalized_name=f"used {index}", created_at=old) for index in range(101)]
+    db_session.add_all(authors)
+    db_session.flush()
+    db_session.add_all([PaperAuthor(paper_id=paper.id, author_id=author.id, author_order=index) for index, author in enumerate(authors)])
+    unused = Author(name="Unused", normalized_name="unused", created_at=old + timedelta(seconds=1))
+    db_session.add(unused)
+    db_session.commit()
+    preview = submit(db_session, CleanupIn(request_id=uuid4(), categories=["orphan_records"]))
+    service.execute(db_session, preview.id)
+    report = service.report(db_session, preview.id)
+    assert preview.stage == "COMPLETED" and report["ready"] == 1
+    assert report["items"][0]["resource_key"] == f"authors:{unused.id}"
+
+
+def test_scan_bound_is_reported_and_cannot_authorize_deletion(db_session):
+    class Limited:
+        def scan(self, *args):
+            yield {"category": "search_logs", "resource_key": "partial", "revision": "v1", "detail": {}, "state": "ready"}
+            raise policy.ScanLimit("scan bound reached")
+    preview = submit(db_session)
+    service.execute(db_session, preview.id, resources=Limited())
+    report = service.report(db_session, preview.id)
+    assert preview.stage == "FAILED" and report["limited"] and report["errors"]
+    assert report["total"] == 0
+    with pytest.raises(service.CleanupError, match="successful completed preview"):
+        submit(db_session, body(dry_run=False, preview_job_id=preview.id))
+
+
+def test_expired_cleanup_history_does_not_exhaust_active_reference_scan(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "cleanup_scan_limit", 100)
+    monkeypatch.setattr(settings, "cleanup_batch_size", 50)
+    old = policy.now() - timedelta(days=200)
+    for _ in range(101):
+        db_session.add(IngestionJob(kind="cleanup", stage="COMPLETED", finished_at=old,
+            payload={"expires_at": (policy.now() - timedelta(days=1)).isoformat()}))
+    db_session.commit()
+    preview = submit(db_session, CleanupIn(request_id=uuid4(), categories=["jobs"]))
+    service.execute(db_session, preview.id)
+    report = service.report(db_session, preview.id)
+    assert preview.stage == "COMPLETED" and report["limited"] and report["ready"] == 50
