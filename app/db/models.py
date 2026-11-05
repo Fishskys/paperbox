@@ -71,6 +71,44 @@ class TimestampMixin:
     )
 
 
+class CleanupReceipt(TimestampMixin, Base):
+    __tablename__ = "cleanup_receipts"
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class CleanupCandidate(Base):
+    __tablename__ = "cleanup_candidates"
+    __table_args__ = (Index("ix_cleanup_candidates_job", "job_id", "state"),)
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    job_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("ingestion_jobs.id", ondelete="CASCADE"), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_key: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class ManagedSearchIndex(Base):
+    __tablename__ = "managed_search_indices"
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    cluster_uuid: Mapped[str] = mapped_column(String(128), nullable=False)
+    index_uuid: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_rollback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    claimed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CleanupLock(Base):
+    __tablename__ = "cleanup_locks"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
 class MetadataQualityDecision(Base):
     __tablename__ = "metadata_quality_decisions"
     __table_args__ = (UniqueConstraint("fingerprint", name="uq_metadata_quality_fingerprint"),

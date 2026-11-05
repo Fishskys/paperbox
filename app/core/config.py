@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     metadata_sync_interval_s: float = Field(default=5, gt=0, alias="METADATA_SYNC_INTERVAL_S")
     metadata_sync_batch_size: int = Field(default=20, ge=1, le=200, alias="METADATA_SYNC_BATCH_SIZE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_file: str = Field(default="", alias="LOG_FILE")
+    log_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1024, alias="LOG_MAX_BYTES")
+    log_backup_count: int = Field(default=5, ge=1, le=100, alias="LOG_BACKUP_COUNT")
+    cleanup_auto_enabled: bool = Field(default=False, alias="CLEANUP_AUTO_ENABLED")
+    cleanup_interval_s: int = Field(default=3600, ge=60, alias="CLEANUP_INTERVAL_S")
+    cleanup_preview_hours: int = Field(default=24, ge=1, le=168, alias="CLEANUP_PREVIEW_HOURS")
+    cleanup_batch_size: int = Field(default=100, ge=1, le=1000, alias="CLEANUP_BATCH_SIZE")
+    cleanup_scan_limit: int = Field(default=20000, ge=100, le=1000000, alias="CLEANUP_SCAN_LIMIT")
+    cleanup_log_days: int = Field(default=30, ge=1, alias="CLEANUP_LOG_DAYS")
+    cleanup_search_days: int = Field(default=90, ge=1, alias="CLEANUP_SEARCH_DAYS")
+    cleanup_job_days: int = Field(default=90, ge=7, alias="CLEANUP_JOB_DAYS")
+    cleanup_failed_job_days: int = Field(default=180, ge=7, alias="CLEANUP_FAILED_JOB_DAYS")
+    cleanup_cache_days: int = Field(default=30, ge=1, alias="CLEANUP_CACHE_DAYS")
+    cleanup_figure_days: int = Field(default=180, ge=7, alias="CLEANUP_FIGURE_DAYS")
 
     # --- PostgreSQL (fact source for paper metadata) ---
     postgres_dsn: str = Field(
