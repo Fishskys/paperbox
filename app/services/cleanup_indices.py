@@ -63,6 +63,8 @@ class IndexRegistry:
         info = self.snapshot(name)
         if not info["compatible"]:
             raise ValueError("index mapping does not identify a paper index")
+        if rollback and info["aliases"]:
+            raise ValueError("an index with aliases cannot serve as the separate rollback copy")
         row = self.session.get(ManagedSearchIndex, name)
         if row and (row.index_uuid != info["index_uuid"] or row.cluster_uuid != info["cluster_uuid"]):
             raise ValueError("registered index identity changed; inspect ownership first")
@@ -84,6 +86,9 @@ class IndexRegistry:
         if info["is_rollback"]:
             return info, "index is protected for rollback"
         rollbacks = self.session.scalars(select(ManagedSearchIndex).where(ManagedSearchIndex.is_rollback.is_(True))).all()
-        if not any(row.name != name and self.snapshot(row.name)["owned"] for row in rollbacks):
+        def available(row):
+            snapshot = self.snapshot(row.name)
+            return row.name != name and snapshot["owned"] and not snapshot["aliases"]
+        if not any(available(row) for row in rollbacks):
             return info, "claim and protect a separate rollback index first"
         return info, None

@@ -27,7 +27,7 @@ def main():
     token = uuid4().hex
     database = f"paperbox_cleanup_accept_{token}"
     bucket = f"paperbox-cleanup-accept-{token}"
-    names = [f"paperbox-cleanup-accept-{token}-{suffix}" for suffix in ("live", "old")]
+    names = [f"paperbox-cleanup-accept-{token}-{suffix}" for suffix in ("live", "old", "rollback")]
     admin = create_engine(settings.database_url, isolation_level="AUTOCOMMIT")
     engine = None
     created_db = created_bucket = False
@@ -64,7 +64,7 @@ def main():
             job = IngestionJob(id=str(uuid4()), paper_id=paper.id, kind="ingest", stage="COMPLETED", payload={})
             session.add(job)
             for name in names:
-                cleanup_indices.IndexRegistry(session, client).claim(name, actor="acceptance", rollback=name == names[0])
+                cleanup_indices.IndexRegistry(session, client).claim(name, actor="acceptance", rollback=name == names[2])
                 client.index(index=name, id=paper.id, body={"paper_id": paper.id, "embedding": [0.0, 1.0]}, refresh=True)
             key = f"papers/{paper.id}/original.pdf"
             object_storage.upload_bytes(key, b"synthetic acceptance bytes", bucket=bucket)
@@ -114,6 +114,8 @@ def main():
             assert report["completed"] == 1 and not client.indices.exists(index=names[1])
             protected, report = task(CleanupIn(request_id=uuid4(), categories=["indices"], indices=[names[0]]))
             assert report["protected"] == 1 and client.indices.exists(index=names[0])
+            _, report = task(CleanupIn(request_id=uuid4(), categories=["indices"], indices=[names[2]]))
+            assert report["protected"] == 1 and client.indices.exists(index=names[2])
         print("Cleanup acceptance passed: operational retention, protected references, frozen preview, PostgreSQL foreign keys, MinIO deletion, historical index documents, index retirement and alias protection.")
     finally:
         settings.minio_bucket = previous_bucket

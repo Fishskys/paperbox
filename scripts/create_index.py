@@ -284,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             code = migrate(client, old_index=args.migrate_from, new_index=index, alias=alias,
                 poll_interval=args.poll_interval, timeout=args.task_timeout)
             if code == 0:
-                registry.claim(args.migrate_from, actor="create_index", rollback=True)
+                registry.claim(args.migrate_from, actor="create_index", rollback=not registry.snapshot(args.migrate_from)["aliases"])
         else:
             code = verify(client, index=index, alias=alias)
         if code == 0:

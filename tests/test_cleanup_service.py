@@ -230,6 +230,21 @@ def test_index_deletion_requires_claim_no_alias_and_other_rollback(db_session):
     assert "not claimed" in registry.deletion_guard("custom-archive")[1]
 
 
+def test_live_index_cannot_count_as_the_separate_rollback_copy(db_session):
+    client = Client()
+    client.add("old-copy")
+    client.add("live-copy", {"live-alias": {}})
+    registry = cleanup_indices.IndexRegistry(db_session, client)
+    registry.claim("old-copy", actor="admin")
+    with pytest.raises(ValueError, match="aliases cannot serve"):
+        registry.claim("live-copy", actor="admin", rollback=True)
+    registry.claim("live-copy", actor="admin")
+    # A previously protected index can later acquire an alias outside this API.
+    db_session.get(ManagedSearchIndex, "live-copy").is_rollback = True
+    db_session.flush()
+    assert "rollback" in registry.deletion_guard("old-copy")[1]
+
+
 def test_hard_purge_relational_closure_and_history_index_copies(db_session):
     paper = make_paper(db_session, deleted_at=policy.now(), status="DELETED")
     source = make_source(db_session, paper.id, "manual")
@@ -333,17 +348,18 @@ def test_cli_preview_apply_uses_saved_scope(session_factory, monkeypatch, capsys
         cli.main([])
 
 
-def test_index_cli_registers_target_and_protects_migration_source(db_session, monkeypatch):
+@pytest.mark.parametrize("remaining_aliases", [{}, {"other-consumer": {}}])
+def test_index_cli_registers_target_and_protects_migration_source(db_session, monkeypatch, remaining_aliases):
     from scripts import create_index as cli
     from app.db import session as database
     client = Client()
     for name in ("old-name", "new-name"):
-        client.add(name)
+        client.add(name, remaining_aliases if name == "old-name" else None)
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(cli, "get_client", lambda: client)
     monkeypatch.setattr(cli, "migrate", lambda *args, **kwargs: 0)
     assert cli.main(["--index", "new-name", "--migrate-from", "old-name"]) == 0
-    assert db_session.get(ManagedSearchIndex, "old-name").is_rollback
+    assert db_session.get(ManagedSearchIndex, "old-name").is_rollback == (not remaining_aliases)
     assert not db_session.get(ManagedSearchIndex, "new-name").is_rollback
 
 
