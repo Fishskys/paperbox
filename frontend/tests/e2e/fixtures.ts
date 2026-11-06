@@ -15,6 +15,11 @@ export const identity = (role: "read" | "write" | "admin") => ({
 // Existing workflow tests run as an administrator without consulting the live API.
 export const test = base.extend({
   page: async ({ page }, use) => {
+    await page.route("**/api/admin/observability/memory", route => route.fulfill({ json: {
+      measured_at: "2026-11-06T10:00:00Z",
+      backend: { rss_bytes: 104857600, pss_bytes: 83886080, processes: 1, partial: false, source: "backend", container: null, reason: null },
+      dependencies: {},
+    } }));
     await page.route("**/api/jobs/queue", (route) => route.fulfill({ json: {
       started: true, concurrency: 2, running: 0, queued: 0, queued_high: 0, queued_low: 0,
     } }));

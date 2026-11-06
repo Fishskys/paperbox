@@ -27,9 +27,11 @@ for (const role of ["read", "write", "admin"] as const) {
     );
     if (role !== "admin") {
       await expect(
-        page.locator(".sidebar a[href='/system/status']"),
+        page.locator(".sidebar a[href='/system/observability']"),
       ).toHaveCount(0);
       await page.goto("/system/data");
+      await expect(page).toHaveURL(/\/search$/);
+      await page.goto("/system/observability?tab=logs");
       await expect(page).toHaveURL(/\/search$/);
       await page.goto("/system/index");
       await expect(page).toHaveURL(/\/search$/);
@@ -61,7 +63,7 @@ for (const role of ["read", "write", "admin"] as const) {
     await expect(
       page
         .getByRole("dialog")
-        .getByRole("link", { name: "运行状态", exact: true }),
+        .getByRole("link", { name: "数据与日志", exact: true }),
     ).toHaveCount(role === "admin" ? 1 : 0);
   });
 }

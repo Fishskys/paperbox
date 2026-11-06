@@ -19,10 +19,12 @@ for (const appearance of ["light", "dark"]) {
           log_rotation: { enabled: false, max_bytes: 52428800, backups: 5 }, upload_gc: { interval_s: 300, archive_hours: 24, retry_hours: 72 }, manual_only: ["multipart_uploads"],
           figure_cleanup_pending: 0, scheduler_status: { started: true, passes: 0, last: null } } });
         if (path === "/api/metadata/review") return route.fulfill({ json: { total: 0, sources: [], conflicts: [], conflicts_total: 0 } });
+        if (path === "/api/admin/observability/memory") return route.fulfill({ json: { measured_at: "2026-11-06T02:00:00Z", backend: { rss_bytes: 104857600, pss_bytes: 80000000, processes: 1, partial: false, source: "backend", container: null, reason: null }, dependencies: {} } });
+        if (path === "/api/admin/observability/logs") return route.fulfill({ json: { entries: [{ id: "1", timestamp: "2026-11-06T02:00:00Z", level: "ERROR", logger: "app.worker", message: "解析失败", request_id: "request-1", key_prefix: "admin" }], total: 1, offset: 0, limit: 50, available: true, reason: null, truncated: false, scanned_bytes: 1000, scan_limit_bytes: 8388608, measured_at: "2026-11-06T02:00:00Z" } });
         return route.fulfill({ status: 503, json: { detail: "测试服务暂不可用" } });
       });
       await page.route("**/health", route => route.fulfill({ json: { version: "0.9.0", degraded: true, services: { postgres: "ok", opensearch: "error", minio: "disabled", embedding: "unknown" } } }));
-      const routes = ["/search", "/search/standard", "/search/history", "/reading/recent", `/reading/papers/${paper.paper_id}`, "/imports/new", "/imports/metadata", "/manage/library", "/manage/jobs", "/system/status", "/system/data", "/system/index", "/system/metadata", "/system/cleanup"];
+      const routes = ["/search", "/search/standard", "/search/history", "/reading/recent", `/reading/papers/${paper.paper_id}`, "/imports/new", "/imports/metadata", "/manage/library", "/manage/jobs", "/system/observability", "/system/observability?tab=logs", "/system/data", "/system/index", "/system/metadata", "/system/cleanup"];
       const results: Record<string, string[]> = {};
       for (const path of routes) {
         await page.goto(path);

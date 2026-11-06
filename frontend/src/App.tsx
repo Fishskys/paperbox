@@ -37,7 +37,7 @@ import {
 } from "react-router-dom";
 import { setCredential, useConnection, useCredentialRevision } from "./api";
 import { AccessProvider, RequireAccess, useAccess } from "./access";
-import Status from "./pages/Status";
+import Observability from "./pages/Observability";
 import { SidebarContext } from "./workspace-context";
 import { UploadProvider } from "./upload-context";
 
@@ -95,7 +95,7 @@ const groups = [
     capability: "admin" as const,
     icon: ShieldCheck,
     items: [
-      { label: "运行状态", path: "/system/status" },
+      { label: "数据与日志", path: "/system/observability" },
       { label: "数据检查", path: "/system/data" },
       { label: "索引维护", path: "/system/index" },
       { label: "元数据维护", path: "/system/metadata" },
@@ -186,7 +186,7 @@ function Workspace() {
         {can("admin") ? (
           <Link
             className="connection"
-            to="/system/status"
+            to="/system/observability"
             onClick={() => setMobile(false)}
           >
             <Circle
@@ -364,7 +364,8 @@ function Workspace() {
                         <Route path="/system/index" element={<MaintenancePage key="index" kind="index" />} />
                         <Route path="/system/metadata" element={<MaintenancePage key="metadata" kind="metadata" />} />
                         <Route path="/system/cleanup" element={<CleanupPage />} />
-                        <Route path="/system/status" element={<Status />} />
+                        <Route path="/system/observability" element={<Observability />} />
+                        <Route path="/system/status" element={<LegacyRoute to="/system/observability" />} />
                         <Route
                           path="/system/data"
                           element={<DataCheckPage />}
