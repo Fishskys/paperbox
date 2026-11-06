@@ -60,6 +60,7 @@ button:focus-visible {
   background: var(--bg);
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
+  transition: grid-template-columns 240ms ease;
 }
 .sidebar {
   position: sticky;
@@ -78,6 +79,7 @@ button:focus-visible {
   color: var(--text);
   padding: 27px 22px 28px;
   flex-shrink: 0;
+  transition: padding 240ms ease;
 }
 .brand-icon {
   background: var(--accent);
@@ -129,11 +131,28 @@ button:focus-visible {
 }
 .nav-group-title:hover { background: var(--bg); color: var(--text); }
 .nav-group-title > svg { flex-shrink: 0; }
-.nav-group-label { flex: 1; }
-.nav-group-chevron { transition: transform 120ms ease; }
+.nav-group-label { flex: 1; white-space: nowrap; }
+.nav-group-chevron { transition: transform 220ms ease; }
 .nav-group-chevron.is-open { transform: rotate(180deg); }
-.nav-group-items { margin: 4px 0 10px 18px; padding-left: 5px; border-left: 1px solid var(--border); }
-.nav-group-items[hidden] { display: none; }
+.nav-group-items {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin: 0 0 0 18px;
+  padding-left: 5px;
+  border-left: 1px solid var(--border);
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 220ms ease, margin 220ms ease, opacity 180ms ease, visibility 0s 220ms;
+}
+.nav-group-items.is-open {
+  grid-template-rows: 1fr;
+  margin-top: 4px;
+  margin-bottom: 10px;
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+.nav-group-links { min-height: 0; overflow: hidden; }
 .nav-item {
   min-height: 37px;
   display: flex;
@@ -144,6 +163,7 @@ button:focus-visible {
   border-radius: 5px;
   color: var(--muted);
   font-size: 13px;
+  white-space: nowrap;
 }
 .nav-item:hover {
   background: var(--bg);
@@ -153,16 +173,6 @@ button:focus-visible {
   color: var(--accent);
   background: var(--accent-soft);
   font-weight: 600;
-}
-.nav-dot {
-  width: 5px;
-  height: 5px;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.nav-item.active .nav-dot {
-  background: currentColor;
 }
 .nav-group.is-current .nav-group-title {
   color: var(--accent);
@@ -176,6 +186,7 @@ button:focus-visible {
   border-top: 1px solid var(--border);
   padding: 15px;
   gap: 4px;
+  transition: padding 240ms ease;
 }
 .connection {
   display: flex;
@@ -341,11 +352,15 @@ h1 {
   display: none;
 }
 .sidebar-collapsed .sidebar .nav-group-title {
-  padding: 0;
-  justify-content: center;
+  padding: 9px 10px;
 }
 .sidebar-collapsed .sidebar .sidebar-bottom {
   padding: 15px 16px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace, .brand, .sidebar-bottom, .nav-group-items, .nav-group-chevron {
+    transition: none;
+  }
 }
 .inline,
 .quiet-link {

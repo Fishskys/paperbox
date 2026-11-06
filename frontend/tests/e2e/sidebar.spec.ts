@@ -12,6 +12,8 @@ for (const theme of ["light", "dark"]) {
     await expect(groups).toHaveCount(5);
     expect(await groups.evaluateAll(items => items.every(item => item.getAttribute("aria-expanded") === "false"))).toBe(true);
     await expect(sidebar.locator(".nav-item:visible")).toHaveCount(0);
+    await expect(sidebar.locator(".nav-dot")).toHaveCount(0);
+    await expect(sidebar.locator(".nav-group-items").first()).toHaveAttribute("inert", "");
     await expect(page.getByText("个人研究空间", { exact: true })).toHaveCount(0);
     const settings = page.locator(".topbar").getByRole("button", { name: "连接与外观设置" });
     const connection = page.locator(".topbar .connection");
@@ -88,3 +90,25 @@ for (const theme of ["light", "dark"]) {
     await expect(page.locator(".sidebar .nav-item:visible")).toHaveCount(0);
   });
 }
+
+test("navigation animates height and width and respects reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/search");
+  const sidebar = page.locator(".sidebar");
+  await expect(sidebar.locator(".nav-group-title")).toHaveCount(5);
+  await expandNavigation(page, "检索");
+  const menu = sidebar.locator(".nav-group-items").first();
+  await expect(menu).not.toHaveAttribute("inert");
+  expect(await menu.evaluate(el => getComputedStyle(el).transitionDuration)).toContain("0.22s");
+  await sidebar.getByRole("button", { name: "收起侧栏", exact: true }).click();
+  expect(await page.locator(".workspace").evaluate(el => el.getAnimations().some(animation =>
+    animation instanceof CSSTransition && animation.transitionProperty === "grid-template-columns"))).toBe(true);
+  await expect.poll(() => sidebar.evaluate(el => el.getBoundingClientRect().width)).toBe(64);
+  await expect(menu).toHaveAttribute("inert", "");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await sidebar.getByRole("button", { name: "展开侧栏", exact: true }).click();
+  expect(await sidebar.evaluate(el => el.getBoundingClientRect().width)).toBe(224);
+  await expandNavigation(page, "检索");
+  expect(await menu.evaluate(el => getComputedStyle(el).transitionDuration)).toBe("0s");
+  await expect(sidebar.getByRole("link", { name: "常规检索", exact: true })).toBeVisible();
+});

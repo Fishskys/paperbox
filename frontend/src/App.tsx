@@ -182,7 +182,8 @@ function Workspace() {
                     <ChevronDown size={14} aria-hidden="true" className={`nav-group-chevron ${open ? "is-open" : ""}`} />
                   </button>
                 </Tooltip>
-                <div className="nav-group-items" id={id} hidden={!open}>
+                <div className={`nav-group-items ${open ? "is-open" : ""}`} id={id} aria-hidden={!open} inert={!open}>
+                  <div className="nav-group-links">
                   {group.items.map((item) => (
                   <NavLink
                     key={item.path}
@@ -191,10 +192,10 @@ function Workspace() {
                     className="nav-item"
                     onClick={() => setMobile(false)}
                   >
-                    <span className="nav-dot" />
                     <span>{item.label}</span>
                   </NavLink>
                   ))}
+                  </div>
                 </div>
               </div>
             );
