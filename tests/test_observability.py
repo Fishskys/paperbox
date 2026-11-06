@@ -1,6 +1,7 @@
 """No real runtimes, host processes, credentials or external dependencies."""
 
 from datetime import datetime, timezone
+from ipaddress import IPv4Address
 import json
 import os
 import subprocess
@@ -187,3 +188,30 @@ def test_podman_json_process_listing_avoids_broken_inspect(monkeypatch):
     monkeypatch.setenv("CONTAINER_HOST", "ssh://remote.test")
     monkeypatch.setattr(metrics, "_run", lambda _: pytest.fail("must not use remote runtimes"))
     assert metrics._containers() == {}
+
+
+def test_runtime_follows_changed_container_mapping_and_pid_but_not_arbitrary_network_addresses(tmp_path, monkeypatch):
+    monkeypatch.setattr(metrics, "_PROC", tmp_path)
+    process(tmp_path, os.getpid(), 1, 100, 90)
+    process(tmp_path, 456, 1, 300, 200)
+    monkeypatch.setattr(metrics, "_containers", lambda: {"renamed-model-server": 456})
+    monkeypatch.setattr(settings, "system_container_names", {"embedding": "renamed-model-server", "rerank": "renamed-model-server"})
+    monkeypatch.setattr(settings, "embedding_url", "http://localhost:18090")
+    monkeypatch.setattr(settings, "rerank_url", "http://127.0.0.1:18090")
+    result = metrics.snapshot()
+    assert result.dependencies["embedding"].container == "renamed-model-server"
+    assert result.dependencies["embedding"].rss_bytes == 300 * 1024
+    assert result.dependencies["rerank"] == result.dependencies["embedding"]
+    addresses = [str(IPv4Address(bytes(parts))) for parts in ((192, 0, 2, 10), (172, 18, 0, 9))]
+    for target in [*(f"http://{address}:8090" for address in addresses), "http://embedding:8090"]:
+        monkeypatch.setattr(settings, "embedding_url", target)
+        assert metrics.snapshot().dependencies["embedding"].source == "unavailable"
+
+
+def test_runtime_without_local_engine_still_measures_backend(tmp_path, monkeypatch):
+    monkeypatch.setattr(metrics, "_PROC", tmp_path)
+    process(tmp_path, os.getpid(), 1, 100, 90)
+    monkeypatch.setattr(metrics.shutil, "which", lambda _: None)
+    result = metrics.snapshot()
+    assert result.backend.rss_bytes == 100 * 1024
+    assert all(value.source == "unavailable" and value.rss_bytes is None for value in result.dependencies.values())

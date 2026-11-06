@@ -10,6 +10,22 @@ RSS 是驻留物理内存，进程合计可能重复计算共享页；仅当所�
 
 `SYSTEM_CONTAINER_RUNTIME` 可选 `auto`、`podman`、`docker`、`disabled`；`SYSTEM_CONTAINER_NAMES` 用 JSON 映射依赖名到本地容器名，默认与基础设施 compose 一致。每条容器命令受 `SYSTEM_METRICS_TIMEOUT_S` 限制。API 部署在无法访问宿主机进程或容器运行时的容器中时，依赖内存会显示不可用。
 
+### 部署边界
+
+| 场景 | 当前采集行为 |
+| --- | --- |
+| 换到另一台 Linux 主机，保持本地连接与容器名 | 每次重新发现 PID，无本机 PID 或主机绝对路径绑定；仍需本地运行时和进程读取权限 |
+| 修改本地回环地址上的端口 | 仍按配置的容器名采集，不依据端口反查；地址与容器名称映射需要运维方保持一致 |
+| 修改容器名称 | 同步修改 `SYSTEM_CONTAINER_NAMES` 的 JSON 映射 |
+| 地址使用 `localhost`、回环 IP、`host.docker.internal` 或 `host.containers.internal` | 允许尝试本地容器采集，不代表该地址对应容器已被自动验证 |
+| 地址改为主机局域网 IP、容器网桥 IP、自定义主机名或 Compose 服务名 | 当前保守判为远程，返回不可用；未实现 IP、DNS、端口与容器身份的自动关联 |
+| 依赖在远程主机 | 不跨机器读取，也不连接远程 Docker/Podman 引擎 |
+| 前端使用 Nginx 容器 | 不影响，采集由后端执行 |
+| 后端使用默认 API 容器镜像 | Linux `/proc` 可采集后端自身；镜像无容器 CLI，也未挂载宿主机进程和引擎访问资源，依赖内存不可用 |
+| 非 Linux 原生后端 | 无 `/proc` 时自身和依赖内存均不可用 |
+
+因此本功能是受限的本机采集，不能视为跨主机或任意容器拓扑的监控自动发现。仅将 CLI 安装到后端容器内也不充分：还需要可用的引擎权限和一致的 PID 命名空间，否则宿主机 PID 不能直接解释为容器内 `/proc` PID。默认 compose 不为内存展示扩大这些权限。
+
 ## 日志查询与导出
 
 `GET /api/admin/observability/logs` 返回最近日志中的筛选结果；`GET /api/admin/observability/logs/export` 导出同一筛选条件下整个扫描窗口内的 JSON 报告，而非仅当前页。两者均需要 admin，支持：
