@@ -28,6 +28,7 @@ from app.api import consistency as consistency_api
 from app.api import metadata as metadata_api
 from app.api import maintenance as maintenance_api
 from app.api import cleanup as cleanup_api
+from app.api import observability as observability_api
 from app.api import papers as papers_api
 from app.api import search as search_api
 from app.api import search_logs as search_logs_api
@@ -319,6 +320,7 @@ app.include_router(papers_api.router)
 app.include_router(metadata_api.router)
 app.include_router(maintenance_api.router)
 app.include_router(cleanup_api.router)
+app.include_router(observability_api.router)
 app.include_router(search_api.router)
 app.include_router(search_logs_api.router)
 

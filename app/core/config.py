@@ -89,6 +89,14 @@ class Settings(BaseSettings):
     log_file: str = Field(default="", alias="LOG_FILE")
     log_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1024, alias="LOG_MAX_BYTES")
     log_backup_count: int = Field(default=5, ge=1, le=100, alias="LOG_BACKUP_COUNT")
+    system_container_runtime: str = Field(default="auto", pattern="^(auto|podman|docker|disabled)$", alias="SYSTEM_CONTAINER_RUNTIME")
+    system_container_names: dict[str, str] = Field(default_factory=lambda: {
+        "postgres": "paperbox-postgres", "opensearch": "paperbox-opensearch",
+        "minio": "paperbox-minio", "embedding": "paperbox-embedding",
+        "rerank": "paperbox-embedding", "docling": "paperbox-docling",
+    }, alias="SYSTEM_CONTAINER_NAMES")
+    system_metrics_timeout_s: float = Field(default=3, ge=0.1, le=10, alias="SYSTEM_METRICS_TIMEOUT_S")
+    system_log_scan_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024, alias="SYSTEM_LOG_SCAN_BYTES")
     cleanup_auto_enabled: bool = Field(default=False, alias="CLEANUP_AUTO_ENABLED")
     cleanup_interval_s: int = Field(default=3600, ge=60, alias="CLEANUP_INTERVAL_S")
     cleanup_preview_hours: int = Field(default=24, ge=1, le=168, alias="CLEANUP_PREVIEW_HOURS")
