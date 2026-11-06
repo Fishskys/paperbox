@@ -58,8 +58,10 @@ export default function SystemLogsPage() {
     {result.data?.reason && <Alert type={result.data.available ? "warning" : "info"} showIcon title={result.data.reason} />}
     {result.data?.truncated && <Alert type="warning" showIcon title={`当前仅扫描最近 ${(result.data.scan_limit_bytes / 1024 / 1024).toFixed(1)} MiB 日志，筛选和导出均限于此范围，未覆盖全部历史。`} />}
     {exportNotice && <Alert type="success" showIcon title={exportNotice} />}
-    <Table<SystemLogEntry> className="system-log-table" rowKey="id" loading={result.loading} dataSource={result.data?.entries || []} scroll={{ x: 1000 }}
-      pagination={{ current: page, pageSize: 50, total: result.data?.total || 0, showSizeChanger: false, onChange: setPage }}
+    <Table<SystemLogEntry> className="data-table system-log-table" rowKey="id" loading={result.loading} dataSource={result.data?.entries || []} scroll={{ x: 1000 }}
+      pagination={{ placement: ["topEnd", "bottomEnd"], current: page, pageSize: 50, total: result.data?.total || 0,
+        showSizeChanger: false, showQuickJumper: true, responsive: true, showLessItems: true,
+        showTotal: (total, range) => `${range[0]}–${range[1]} / ${total} 条`, onChange: setPage }}
       expandable={{ expandedRowRender: entry => <div className="system-log-detail"><p>模块：{entry.logger} · 请求 ID：{entry.request_id || "—"} · 身份：{entry.key_prefix || "—"}</p><pre>{entry.message}</pre></div> }}
       columns={[
         { title: "时间", dataIndex: "timestamp", width: 185, render: value => new Date(value).toLocaleString("zh-CN") },

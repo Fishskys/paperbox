@@ -289,6 +289,7 @@ h1 {
 .system-memory-meta { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; margin-top: 5px; }
 .system-card-detail { font-size: 13px; overflow-wrap: anywhere; margin: 12px 0 6px; }
 .system-card-detail p { margin: 5px 0; }
+.system-service-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
 .system-view-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .system-view-toolbar h2 { font-size: 16px; margin: 0; }
 .system-measured-at { font-size: 12px; margin-top: 16px; }

@@ -11,11 +11,14 @@ for (const width of [1440, 390]) {
     let probes = 0;
     await page.route("**/health", route => {
       probes++;
-      return route.fulfill({ json: { version: "test", degraded: false, services: { postgres: "ok", opensearch: "ok", embedding: "ok", rerank: "ok", minio: "ok", docling: "disabled" }, dependencies: {} } });
+      return route.fulfill({ json: { version: "test", degraded: false, services: { postgres: "ok", opensearch: "ok", embedding: "ok", rerank: "error", minio: "ok", docling: "disabled" },
+        dependencies: { rerank: { required: false, reason: "重排服务故障" } } } });
     });
     await page.route("**/api/admin/observability/memory", route => route.fulfill({ json: {
       measured_at: "2026-11-06T02:00:00Z", backend: { ...sample, source: "backend", container: null },
-      dependencies: { postgres: sample, opensearch: { ...sample, partial: true }, embedding: { ...sample, rss_bytes: null, reason: "远程依赖，未采集本地内存" } },
+      dependencies: { postgres: sample, opensearch: { ...sample, container: "paperbox-opensearch", partial: true },
+        embedding: { ...sample, container: "custom-shared-embedding" }, rerank: { ...sample, container: "custom-shared-embedding" },
+        minio: { ...sample, source: "unavailable", container: null, rss_bytes: null, reason: "远程依赖，未采集本地内存" } },
     } }));
     const calls: URL[] = [];
     await page.route("**/api/admin/observability/logs**", route => {
@@ -29,7 +32,14 @@ for (const width of [1440, 390]) {
     await page.goto("/system/status");
     await expect(page).toHaveURL(/\/system\/observability$/);
     await expect(page.getByRole("heading", { name: "数据与日志" })).toBeVisible();
-    await expect(page.locator(".system-metric-card")).toHaveCount(7);
+    await expect(page.locator(".system-metric-card")).toHaveCount(6);
+    await expect(page.locator(".ant-card-head-title", { hasText: "Embedding" })).toHaveCount(1);
+    await expect(page.locator(".ant-card-head-title", { hasText: "Docling" })).toBeVisible();
+    const embedding = page.locator(".system-metric-card").filter({ has: page.locator(".ant-card-head-title", { hasText: "Embedding" }) });
+    await expect(embedding.getByText("向量", { exact: true })).toBeVisible();
+    await expect(embedding.getByText("重排", { exact: true })).toBeVisible();
+    await expect(embedding.getByText("重排服务故障", { exact: true })).toBeVisible();
+    await expect(embedding.locator(".system-memory-value")).toHaveCount(1);
     await expect(page.getByText("部分进程未采集")).toBeVisible();
     await expect(page.getByText("远程依赖，未采集本地内存")).toBeVisible();
     const columns = await page.locator(".system-status-grid").evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length);
@@ -40,7 +50,16 @@ for (const width of [1440, 390]) {
     await page.getByRole("tab", { name: "日志", exact: true }).click();
     await expect(page).toHaveURL(/tab=logs/);
     await expect(page.getByText(/未覆盖全部历史/)).toBeVisible();
-    await page.getByRole("listitem", { name: "2", exact: true }).click();
+    const pagers = page.locator(".system-log-table .ant-pagination");
+    await expect(pagers).toHaveCount(2);
+    await pagers.first().getByRole("listitem", { name: "2", exact: true }).click();
+    await expect.poll(() => calls.at(-1)?.searchParams.get("offset")).toBe("50");
+    await expect(page.locator(".system-log-table .ant-pagination-item-active")).toHaveText(["2", "2"]);
+    const jump = pagers.first().locator(".ant-pagination-options-quick-jumper input");
+    await jump.fill("1"); await jump.press("Enter");
+    await expect.poll(() => calls.at(-1)?.searchParams.get("offset")).toBe("0");
+    await expect(page.locator(".system-log-table .ant-pagination-item-active")).toHaveText(["1", "1"]);
+    await pagers.last().getByRole("listitem", { name: "2", exact: true }).click();
     await expect.poll(() => calls.at(-1)?.searchParams.get("offset")).toBe("50");
     await page.getByLabel("关键词", { exact: true }).fill("failed");
     await page.getByLabel("模块", { exact: true }).fill("app.worker");

@@ -4,14 +4,14 @@ import { useState } from "react";
 import { Failure } from "../components";
 import { useResource } from "../hooks";
 import type { ProcessMemory, RuntimeMemory } from "../observability-contracts";
+import { groupDependencies, serviceNames, type Dependency } from "../system-status";
 
-type Dependency = { reason?: string; latency_ms?: number; checked_at?: string; cached?: boolean; required?: boolean };
 type Health = { version: string; degraded: boolean; services: Record<string, string>; dependencies?: Record<string, Dependency> };
 const states: Record<string, { text: string; color: string }> = {
   ok: { text: "正常", color: "success" }, error: { text: "异常", color: "error" },
   disabled: { text: "未启用", color: "default" }, unknown: { text: "未知", color: "warning" },
+  partial: { text: "部分未启用", color: "warning" },
 };
-const names: Record<string, string> = { postgres: "PostgreSQL", opensearch: "OpenSearch", minio: "MinIO", embedding: "向量模型", rerank: "重排模型", docling: "PDF 解析" };
 function bytes(value: number | null | undefined) {
   if (value == null) return "不可用";
   return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`;
@@ -44,12 +44,19 @@ export default function Status() {
       <Card size="small" className="system-metric-card" title="Paperbox API" extra={<Tag color={data.degraded ? "warning" : "success"}>{data.degraded ? "依赖未完全就绪" : "服务已连接"}</Tag>}>
         <Memory value={memory.data?.backend} loading={memory.loading} /><p className="system-card-detail muted">v{data.version}</p>
       </Card>
-      {Object.entries(data.services).map(([name, status]) => {
-        const entry = data.dependencies?.[name]; const view = states[status] || states.unknown;
-        return <Card size="small" className="system-metric-card" key={name} title={names[name] || name} extra={<Tag color={view.color}>{view.text}</Tag>}>
-          <Memory value={memory.data?.dependencies[name]} loading={memory.loading} />
-          <div className="system-card-detail">{entry?.latency_ms != null && <span>{Math.round(entry.latency_ms)} ms · </span>}<span>{entry?.required === false ? "可选依赖" : "必需依赖"}</span>{entry?.reason && <p>{entry.reason}</p>}</div>
-          {entry?.checked_at && <small className="muted">{new Date(entry.checked_at).toLocaleString("zh-CN")}{entry.cached ? " · 缓存结果" : ""}</small>}
+      {groupDependencies(data.services, data.dependencies, memory.data?.dependencies).map(group => {
+        const view = states[group.status];
+        return <Card size="small" className="system-metric-card" key={group.key} title={group.title} extra={<Tag color={view.color}>{view.text}</Tag>}>
+          <Memory value={group.memory} loading={memory.loading} />
+          {group.services.map(service => {
+            const entry = service.detail;
+            const state = states[service.status] || states.unknown;
+            return <div className="system-card-detail" key={service.name}>
+              {group.services.length > 1 && <div className="system-service-heading"><strong>{serviceNames[service.name] || service.name}</strong><Tag color={state.color}>{state.text}</Tag></div>}
+              <div>{entry?.latency_ms != null && <span>{Math.round(entry.latency_ms)} ms · </span>}<span>{entry?.required === false ? "可选依赖" : "必需依赖"}</span>{entry?.reason && <p>{entry.reason}</p>}</div>
+              {entry?.checked_at && <small className="muted">{new Date(entry.checked_at).toLocaleString("zh-CN")}{entry.cached ? " · 缓存结果" : ""}</small>}
+            </div>;
+          })}
         </Card>;
       })}
     </div>}
