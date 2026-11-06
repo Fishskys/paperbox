@@ -1,16 +1,20 @@
 # 升级指引
 
-## 0.9.1 后的未发布变更：系统清理
+## 0.9.1 → 0.9.2
 
 本次新增迁移 `c419a74e6310`，创建清理候选、请求回执、索引归属和协调锁四张辅助表，不改写既有论文或元数据，也不要求重建或重命名索引。
 
-1. 等待运行中的任务结束后停止 API，执行 `uv sync --locked`、`uv run alembic upgrade head`，再冷启动 API。
-2. 更新前端构建或重建 WebUI 容器，管理员进入「系统管理 → 系统清理」。容器日志轮转声明只在容器重新创建后生效。
+1. 备份数据库与对象存储，等待运行中的任务结束后停止 API，执行 `uv sync --locked`、`uv run alembic upgrade head`，再冷启动 API；确认 `/health` 返回版本 `0.9.2`。
+2. 在 `frontend/` 执行 `npm ci && npm run build` 并更新静态资源，或重建 WebUI 容器，管理员进入「系统管理 → 系统清理」。API 与 WebUI 镜像标签为 `0.9.2`；容器日志轮转声明只在容器重新创建后生效。
 3. 原生文件日志可设置 `LOG_FILE=logs/app/paperbox.log`，默认单文件 50 MiB、5 份备份。旧的 stdout 重定向文件不会自动转为轮转日志，须由部署方管理。
 4. `CLEANUP_AUTO_ENABLED` 默认关闭；上传暂存 GC 继续独立运行，图片失效对象会定期重试。启用普通保留策略前先人工预览；永久删除、解析缓存、孤立对象与索引淘汰不自动执行。
 5. 论文永久删除先运行 `uv run python scripts/cleanup.py --paper-id UUID`，再用 `--apply-preview JOB_ID` 执行固定范围。旧 `purge_deleted.py --hard` 无预览执行已禁用；已有索引须明确确认归属并保留回滚副本。
 
 元数据/重索引维护和清理预览默认有效 24 小时，过期需重新预览。任务报告被保留策略裁剪后返回 410，轻量回执仍阻止旧请求重放。来源、字段历史及人工决定不按普通缓存过期。完整策略见[系统清理](docs/architecture/14-system-cleanup.md)。
+
+原「运行状态」合并到「系统管理 → 数据与日志」，旧 `/system/status` 地址兼容跳转。日志页读取 `LOG_FILE` 及其轮转文件；未配置时明确显示不可用，不自动接入容器 stdout。查询与导出默认仅扫描最近 8 MiB，超出窗口明确提示截断。
+
+内存展示由后端执行受限的本机采集。Linux 原生部署需有本地 Docker/Podman 及进程读取权限；更改容器名时同步 `SYSTEM_CONTAINER_NAMES`。默认 API 容器仅能读取自身内存，不自动获得宿主机权限；远程依赖或无法确认本地身份的地址不显示虚构数值。迁机与容器部署边界见[数据与日志](docs/architecture/15-data-and-logs.md)。
 
 ## 0.9.0 → 0.9.1
 

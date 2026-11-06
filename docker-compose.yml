@@ -15,7 +15,7 @@ services:
   webui:
     profiles: [webui]
     build: ./frontend
-    image: paperbox/webui:0.9.1
+    image: paperbox/webui:0.9.2
     restart: unless-stopped
     logging:
       driver: json-file
@@ -32,7 +32,7 @@ services:
     # No depends_on: the static UI must start without starting the API.
   api:
     build: .
-    image: paperbox/api:0.9.1
+    image: paperbox/api:0.9.2
     container_name: paperbox-api
     restart: unless-stopped
     logging:
