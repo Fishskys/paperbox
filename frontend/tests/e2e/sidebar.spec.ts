@@ -9,6 +9,7 @@ for (const theme of ["light", "dark"]) {
     await page.goto("/search");
     const sidebar = page.locator(".sidebar");
     const groups = sidebar.locator(".nav-group-title");
+    await expect(sidebar.getByRole("link", { name: "Paperbox 首页", exact: true })).toHaveAttribute("href", "/search/standard");
     await expect(groups).toHaveCount(5);
     expect(await groups.evaluateAll(items => items.every(item => item.getAttribute("aria-expanded") === "false"))).toBe(true);
     await expect(sidebar.locator(".nav-item:visible")).toHaveCount(0);
@@ -85,6 +86,10 @@ for (const theme of ["light", "dark"]) {
     await page.screenshot({ path: testInfo.outputPath("mobile-topbar.png"), fullPage: true });
     await page.addStyleTag({ content: "*,*::before,*::after{transition:none!important;animation:none!important}" });
     expect(await contrastFailures(page)).toEqual([]);
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await drawer.getByRole("link", { name: "Paperbox 首页", exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+    await expect(page.getByRole("heading", { name: "常规检索", exact: true })).toBeVisible();
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
     await expect(page.locator(".sidebar .nav-item:visible")).toHaveCount(0);

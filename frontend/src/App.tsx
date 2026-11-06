@@ -156,7 +156,7 @@ function Workspace() {
   }
   const navigation = (compact = false, inDrawer = false) => (
     <>
-      <Link to="/" className="brand" aria-label="Paperbox 首页" onClick={() => setMobile(false)}>
+      <Link to="/search/standard" className="brand" aria-label="Paperbox 首页" onClick={() => setMobile(false)}>
         <span className="brand-icon">
           <BookOpen size={23} />
         </span>
