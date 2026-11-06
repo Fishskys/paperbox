@@ -46,7 +46,6 @@ for (const appearance of ["light", "dark"]) {
           results[`${path}/info`] = await contrastFailures(page);
         }
       }
-      if (width === 390) await page.getByRole("button", { name: "打开导航" }).click();
       await page.getByRole("button", { name: "连接与外观设置" }).click();
       await expect(page.getByRole("dialog", { name: "连接与外观", exact: true })).toBeVisible();
       results.settings = await contrastFailures(page);

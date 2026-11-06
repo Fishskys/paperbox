@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { identity } from "./fixtures";
+import { expandNavigation, identity } from "./fixtures";
 
 for (const role of ["read", "write", "admin"] as const) {
   test(`${role} sees only its permitted modules and reading stays read-only`, async ({
@@ -55,6 +55,9 @@ for (const role of ["read", "write", "admin"] as const) {
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "打开导航" }).click();
+    const navigation = page.getByRole("dialog", { name: "Paperbox", exact: true });
+    if (role !== "read") await expandNavigation(page, "导入", navigation);
+    if (role === "admin") await expandNavigation(page, "系统管理", navigation);
     await expect(
       page
         .getByRole("dialog")
@@ -107,6 +110,7 @@ test("credential downgrade exits protected pages and clearing it restores the pr
     "论文管理",
     "系统管理",
   ]);
+  await expandNavigation(page, "导入");
   await page.getByRole("link", { name: "元数据导入", exact: true }).click();
   await expect(
     page.getByText("尚未选择元数据文件", { exact: true }),

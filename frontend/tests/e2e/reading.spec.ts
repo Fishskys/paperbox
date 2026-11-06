@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expandNavigation, expect, test } from "./fixtures";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -109,6 +109,7 @@ test("search evidence opens a real rendered PDF page and returns to the query", 
   await page.goForward();
   await expect(page).toHaveURL(/reading\/papers\/paper-1\?page=3/);
   await page.getByRole("button", { name: "返回来源页面" }).click();
+  await expandNavigation(page, "阅读");
   await page.getByRole("link", { name: "最近阅读", exact: true }).click();
   await expect(page.getByRole("link", { name: paper.title })).toHaveAttribute(
     "href",
@@ -200,6 +201,7 @@ test("late search responses do not overwrite the current query", async ({
       .catch(() => {});
   });
   await page.goto("/search?q=slow");
+  await expandNavigation(page, "检索");
   await page
     .getByRole("link", { name: "检索记录", exact: true })
     .first()

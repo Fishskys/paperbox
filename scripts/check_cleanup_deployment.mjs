@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { expandNavigation } from "./webui-navigation.mjs";
 
 const require = createRequire(new URL("../frontend/package.json", import.meta.url));
 const { chromium, expect } = require("@playwright/test");
@@ -31,6 +32,7 @@ try {
     await page.getByRole("button", { name: "连接与外观设置", exact: true }).click();
     await page.getByLabel("API key", { exact: true }).fill(key);
     await page.getByRole("button", { name: /^应\s*用$/ }).click();
+    await expandNavigation(page, "系统管理");
     await expect(page.getByRole("link", { name: "系统清理", exact: true })).toBeVisible();
   }
   await authenticate();

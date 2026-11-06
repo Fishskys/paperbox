@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expandNavigation, expect, test } from "./fixtures";
 
 const health = {
   version: "test",
@@ -39,6 +39,7 @@ test("status is on demand and navigation fits a mobile viewport", async ({
   await expect(page.getByText("未启用", { exact: true })).toBeVisible();
   await expect(page.getByText("未知", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "打开导航" }).click();
+  await expandNavigation(page, "系统管理", page.getByRole("dialog", { name: "Paperbox", exact: true }));
   await expect(
     page.getByRole("dialog").getByRole("link", { name: "数据与日志" }),
   ).toBeVisible();

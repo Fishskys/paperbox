@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
+import { expandNavigation } from "./webui-navigation.mjs";
 
 const require = createRequire(new URL("../frontend/package.json", import.meta.url));
 const { chromium, expect } = require("@playwright/test");
@@ -30,6 +31,7 @@ try {
     expect((await (await response).json()).role).toBe(name);
   }
   async function management() {
+    await expandNavigation(page, "论文管理");
     await page.getByRole("link", { name: "论文库管理", exact: true }).click();
     const title = `WebUI figure acceptance ${paperId}`;
     await page.getByLabel("快速定位论文", { exact: true }).fill(title);

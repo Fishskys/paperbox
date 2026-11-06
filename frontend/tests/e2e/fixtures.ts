@@ -1,6 +1,11 @@
-import { test as base } from "@playwright/test";
+import { test as base, type Locator, type Page } from "@playwright/test";
 
 export { expect } from "@playwright/test";
+
+export async function expandNavigation(page: Page, label: string, root: Locator = page.locator(".sidebar")) {
+  const group = root.getByRole("button", { name: label, exact: true });
+  if (await group.getAttribute("aria-expanded") !== "true") await group.click();
+}
 
 export const identity = (role: "read" | "write" | "admin") => ({
   prefix: `${role}-test`,

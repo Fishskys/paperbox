@@ -13,8 +13,7 @@ import {
 import zhCN from "antd/locale/zh_CN";
 import {
   BookOpen,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   Circle,
   Menu,
   Settings,
@@ -23,6 +22,7 @@ import {
   Library,
   Upload,
   Files,
+  PanelLeft,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
@@ -38,7 +38,6 @@ import {
 import { setCredential, useConnection, useCredentialRevision } from "./api";
 import { AccessProvider, RequireAccess, useAccess } from "./access";
 import Observability from "./pages/Observability";
-import { SidebarContext } from "./workspace-context";
 import { UploadProvider } from "./upload-context";
 
 const SearchPage = lazy(() => import("./pages/Search"));
@@ -118,6 +117,7 @@ function Workspace() {
   const { context, can } = useAccess();
   const revision = useCredentialRevision();
   const [collapsed, setCollapsed] = useState(false);
+  const [navigationState, setNavigationState] = useState<{ revision: number; expanded: string[] }>({ revision, expanded: [] });
   const [mobile, setMobile] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appearance, setAppearance] = useState(
@@ -140,9 +140,23 @@ function Workspace() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
   }, [dark]);
-  const navigation = (
+  const expanded = navigationState.revision === revision ? navigationState.expanded : [];
+  function toggleSidebar() {
+    setCollapsed(value => !value);
+    setNavigationState({ revision, expanded: [] });
+  }
+  function toggleGroup(label: string, compact: boolean) {
+    if (compact) {
+      setCollapsed(false);
+      setNavigationState({ revision, expanded: [label] });
+      return;
+    }
+    setNavigationState({ revision, expanded: expanded.includes(label)
+      ? expanded.filter(value => value !== label) : [...expanded, label] });
+  }
+  const navigation = (compact = false, inDrawer = false) => (
     <>
-      <Link to="/" className="brand" aria-label="Paperbox 首页">
+      <Link to="/" className="brand" aria-label="Paperbox 首页" onClick={() => setMobile(false)}>
         <span className="brand-icon">
           <BookOpen size={23} />
         </span>
@@ -153,22 +167,25 @@ function Workspace() {
       <div className="nav-groups">
         {groups
           .filter((group) => can(group.capability))
-          .map((group) => (
-            <div
-              className={`nav-group ${location.pathname.startsWith("/reading/papers/") && group.label === "阅读" ? "is-current" : ""}`}
-              key={group.label}
-            >
-              <div className="nav-group-title">
-                <group.icon size={16} />
-                <span>{group.label}</span>
-              </div>
-              {group.items.map((item) => (
-                <Tooltip
-                  title={collapsed ? item.label : ""}
-                  placement="right"
-                  key={item.path}
-                >
+          .map((group, index) => {
+            const open = !compact && expanded.includes(group.label);
+            const current = group.items.some(item => item.path === location.pathname)
+              || (location.pathname.startsWith("/reading/papers/") && group.label === "阅读");
+            const id = `${inDrawer ? "mobile" : "desktop"}-nav-${index}`;
+            return (
+              <div className={`nav-group ${current ? "is-current" : ""}`} key={group.label}>
+                <Tooltip title={compact ? group.label : ""} placement="right">
+                  <button type="button" className="nav-group-title" aria-label={group.label}
+                    aria-expanded={open} aria-controls={id} onClick={() => toggleGroup(group.label, compact)}>
+                    <group.icon size={18} aria-hidden="true" />
+                    <span className="nav-group-label">{group.label}</span>
+                    <ChevronDown size={14} aria-hidden="true" className={`nav-group-chevron ${open ? "is-open" : ""}`} />
+                  </button>
+                </Tooltip>
+                <div className="nav-group-items" id={id} hidden={!open}>
+                  {group.items.map((item) => (
                   <NavLink
+                    key={item.path}
                     to={item.path}
                     end
                     className="nav-item"
@@ -177,57 +194,22 @@ function Workspace() {
                     <span className="nav-dot" />
                     <span>{item.label}</span>
                   </NavLink>
-                </Tooltip>
-              ))}
-            </div>
-          ))}
+                  ))}
+                </div>
+              </div>
+            );
+          })}
       </div>
-      <div className="sidebar-bottom">
-        {can("admin") ? (
-          <Link
-            className="connection"
-            to="/system/observability"
-            onClick={() => setMobile(false)}
-          >
-            <Circle
-              size={9}
-              fill="currentColor"
-              className={`connection-${connection}`}
-            />
-            <span>
-              {connection === "online"
-                ? "API 已连接"
-                : connection === "offline"
-                  ? "API 不可达"
-                  : "等待连接"}
-            </span>
-          </Link>
-        ) : (
-          <span className="connection">
-            <Circle
-              size={9}
-              fill="currentColor"
-              className={`connection-${connection}`}
-            />
-            <span>
-              {connection === "online"
-                ? "API 已连接"
-                : connection === "offline"
-                  ? "API 不可达"
-                  : "等待连接"}
-            </span>
-          </span>
-        )}
-        <Button
-          aria-label="连接与外观设置"
-          title="连接与外观设置"
-          type="text"
-          icon={<Settings size={18} />}
-          onClick={() => setSettingsOpen(true)}
-        />
-      </div>
+      {!inDrawer && <div className="sidebar-bottom">
+        <Tooltip title={collapsed ? "展开侧栏" : "收起侧栏"} placement="right">
+          <Button className="desktop-toggle" aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+            aria-expanded={!collapsed} type="text" icon={<PanelLeft size={20} />} onClick={toggleSidebar} />
+        </Tooltip>
+      </div>}
     </>
   );
+  const connectionText = connection === "online" ? "API 已连接" : connection === "offline" ? "API 不可达" : "等待连接";
+  const connectionContent = <><Circle size={9} fill="currentColor" aria-hidden="true" className={`connection-${connection}`} /><span>{connectionText}</span></>;
   const current = location.pathname.startsWith("/reading/papers/")
     ? "阅读"
     : groups.flatMap((g) => g.items).find((i) => i.path === location.pathname)
@@ -277,11 +259,8 @@ function Workspace() {
       }}
     >
       <AntApp>
-        <SidebarContext.Provider
-          value={{ collapsed, toggle: () => setCollapsed((v) => !v) }}
-        >
           <div className={`workspace ${collapsed ? "sidebar-collapsed" : ""}`}>
-            <aside className="sidebar">{navigation}</aside>
+            <aside className="sidebar" aria-label="主导航">{navigation(collapsed)}</aside>
             <Drawer
               title="Paperbox"
               placement="left"
@@ -291,23 +270,10 @@ function Workspace() {
                 body: { padding: 0, display: "flex", flexDirection: "column" },
               }}
             >
-              {navigation}
+              {navigation(false, true)}
             </Drawer>
             <div className="workspace-main">
               <div className="topbar">
-                <Button
-                  className="desktop-toggle"
-                  type="text"
-                  aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
-                  icon={
-                    collapsed ? (
-                      <ChevronRight size={18} />
-                    ) : (
-                      <ChevronLeft size={18} />
-                    )
-                  }
-                  onClick={() => setCollapsed((v) => !v)}
-                />
                 <Button
                   className="mobile-toggle"
                   type="text"
@@ -316,9 +282,14 @@ function Workspace() {
                   onClick={() => setMobile(true)}
                 />
                 <span className="breadcrumb">
-                  工作台 <span>/</span> <strong>{current}</strong>
+                  <span className="breadcrumb-root">工作台 <span>/</span></span><strong>{current}</strong>
                 </span>
-                <span className="topbar-note">个人研究空间</span>
+                <div className="topbar-controls">
+                  {can("admin") ? <Link className="connection" to="/system/observability">{connectionContent}</Link>
+                    : <span className="connection" role="status">{connectionContent}</span>}
+                  <Tooltip title="连接与外观设置"><Button aria-label="连接与外观设置" type="text"
+                    icon={<Settings size={18} />} onClick={() => setSettingsOpen(true)} /></Tooltip>
+                </div>
               </div>
               <main
                 className={`page ${location.pathname.startsWith("/reading/papers/") ? "reader-page" : ""}`}
@@ -381,7 +352,6 @@ function Workspace() {
               </main>
             </div>
           </div>
-        </SidebarContext.Provider>
         <Modal
           title="连接与外观"
           open={settingsOpen}

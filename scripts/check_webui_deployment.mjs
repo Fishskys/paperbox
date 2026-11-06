@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { expandNavigation } from "./webui-navigation.mjs";
 
 const require = createRequire(new URL("../frontend/package.json", import.meta.url));
 const { chromium, expect } = require("@playwright/test");
@@ -37,10 +38,12 @@ try {
   await page.getByRole("button", { name: /^应\s*用$/ }).click();
   await expect(page.locator(".sidebar .nav-group-title")).toHaveCount(5);
   const baseline = await page.evaluate(async () => (await (await fetch("/api/papers?limit=1")).json()).total);
+  await expandNavigation(page, "检索");
   await page.getByRole("link", { name: "常规检索", exact: true }).click();
   await expect(page.getByRole("heading", { name: "常规检索", exact: true })).toBeVisible();
   await expect(page.locator(".ant-table-tbody .paper-cell a").first()).toBeVisible();
   await page.screenshot({ path: resolve(output, "webui-deployed-catalog.png") });
+  await expandNavigation(page, "导入");
   await page.getByRole("link", { name: "元数据导入", exact: true }).click();
   await page.locator("input[type=file]").setInputFiles(resolve(import.meta.dirname, "../tests/metadata/ieee_metadata_example.jsonl"));
   const preview = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/metadata/import");
@@ -96,6 +99,7 @@ try {
     if (errors.length) throw new Error(errors.join("\n"));
     process.stdout.write(JSON.stringify({ origin, bundle: servedBundle, status: "passed", sourcePreview, output }) + "\n");
   } else {
+  await expandNavigation(page, "系统管理");
   await page.getByRole("link", { name: "索引维护", exact: true }).click();
   const papers = await page.evaluate(async () => (await (await fetch("/api/papers?limit=1")).json()).papers);
   await page.getByLabel("维护论文 ID").fill(papers[0].paper_id);
@@ -125,12 +129,14 @@ try {
   await page.getByLabel("API key", { exact: true }).fill(key);
   await page.getByRole("button", { name: /^应\s*用$/ }).click();
   await expect(page.locator(".sidebar .nav-group-title")).toHaveCount(5);
+  await expandNavigation(page, "系统管理");
   await page.getByRole("link", { name: "数据检查", exact: true }).click();
   await expect(page.getByText(new RegExp(`任务 ${consistencyTask}`))).toBeVisible();
   const consistencyResponse = await consistency;
   if (!consistencyResponse.ok()) throw new Error(`Consistency check failed: ${consistencyResponse.status()}`);
   const consistencyReport = await consistencyResponse.json();
   await page.screenshot({ path: resolve(output, "webui-deployed-system.png") });
+  await expandNavigation(page, "检索");
   await page.getByRole("link", { name: "常规检索", exact: true }).click();
   await page.locator(".ant-table-tbody .paper-cell a").first().click();
   const canvas = page.locator(".pdf-sheet canvas").first();

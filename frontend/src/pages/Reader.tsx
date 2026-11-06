@@ -7,7 +7,6 @@ import {
   Info,
   Maximize,
   Minus,
-  PanelLeftClose,
   Plus,
   ListTree,
 } from "lucide-react";
@@ -21,7 +20,6 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { errorMessage, useAuthHeaders, useCredentialRevision } from "../api";
-import { useSidebar } from "../workspace-context";
 import { Blank, Failure } from "../components";
 import type { Paper } from "../contracts";
 import { downloadPaper, hasOriginal } from "../files";
@@ -52,7 +50,6 @@ export default function Reader() {
   const location = useLocation();
   const revision = useCredentialRevision();
   const headers = useAuthHeaders();
-  const { toggle } = useSidebar();
   const { message } = App.useApp();
   const {
     data: paper,
@@ -137,15 +134,6 @@ export default function Reader() {
           }}
         />
         <h1>{paper?.title || "阅读"}</h1>
-        <Tooltip title="收起 / 展开侧栏">
-          <Button
-            className="reader-sidebar-toggle"
-            type="text"
-            aria-label="切换侧栏"
-            icon={<PanelLeftClose size={18} />}
-            onClick={toggle}
-          />
-        </Tooltip>
       </div>
       <div className="reader-toolbar">
         <div className="inline">

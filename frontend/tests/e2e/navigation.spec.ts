@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expandNavigation, expect, test } from "./fixtures";
 
 test("legacy library links preserve filters, pagination and the reader return path", async ({ page }) => {
   await page.route("**/api/papers?*", (route) => route.fulfill({ json: { total: 100, papers: [
@@ -46,7 +46,9 @@ test("legacy task links resolve to paper management without losing job or filter
   expect(new URL(page.url()).search).toBe("?paper_id=p-1&stage=FAILED&page=2&job=job-1");
   expect(new URL(page.url()).hash).toBe("#details");
   await expect(page.getByRole("heading", { name: "处理任务", exact: true })).toBeVisible();
+  await page.getByRole("dialog", { name: "任务详情", exact: true }).getByRole("button", { name: "关闭", exact: true }).click();
   const management = page.locator(".sidebar .nav-group").filter({ has: page.locator(".nav-group-title", { hasText: "论文管理" }) });
+  await expandNavigation(page, "论文管理");
   await expect(management.getByRole("link", { name: "处理任务", exact: true })).toBeVisible();
   const imports = page.locator(".sidebar .nav-group").filter({ has: page.locator(".nav-group-title", { hasText: /^导入$/ }) });
   await expect(imports.getByRole("link", { name: "处理任务", exact: true })).toHaveCount(0);

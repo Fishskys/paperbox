@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expandNavigation, expect, test } from "./fixtures";
 import { readFile } from "node:fs/promises";
 
 const preview = {
@@ -96,6 +96,7 @@ test("metadata import previews before applying and shows record failures and con
     return route.fulfill({ json: { ...preview, dry_run: apply !== "true" } });
   });
   await page.goto("/imports/new");
+  await expandNavigation(page, "导入");
   await page.getByRole("link", { name: "元数据导入", exact: true }).click();
   await expect(page).toHaveURL(/imports\/metadata/);
   await expect(

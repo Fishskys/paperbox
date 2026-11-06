@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { expandNavigation } from "./webui-navigation.mjs";
 
 const require = createRequire(
   new URL("../frontend/package.json", import.meta.url),
@@ -43,6 +44,7 @@ try {
     await expect(page.locator('.sidebar a[href="/library"]')).toHaveCount(0);
     await expect(page.locator('.sidebar a[href="/imports/jobs"]')).toHaveCount(0);
     await expect(page.locator('.sidebar a[href="/manage/jobs"]')).toHaveCount(role === "read" ? 0 : 1);
+    await expandNavigation(page, "检索");
     await page.getByRole("link", { name: "常规检索", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "常规检索", exact: true }),
@@ -68,6 +70,7 @@ try {
       const listing = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/api/papers",
       );
+      await expandNavigation(page, "论文管理");
       await page.getByRole("link", { name: "论文库管理", exact: true }).click();
       if (!(await listing).ok()) throw new Error("Management list unavailable");
       await expect(
@@ -135,6 +138,7 @@ try {
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "打开导航" }).click();
+    if (role !== "read") await expandNavigation(page, "论文管理", page.getByRole("dialog", { name: "Paperbox", exact: true }));
     await expect(
       page
         .getByRole("dialog")
